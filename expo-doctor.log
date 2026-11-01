@@ -1,0 +1,18 @@
+npm warn Unknown user config "home". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown user config "ELECTRON_MIRROR". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown user config "electron_builder_binaries_mirror". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown user config "msvs_version". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+Running 18 checks on your project...
+17/18 checks passed. 1 checks failed. Possible issues detected:
+Use the --verbose flag to see more details about passed checks.
+
+✖ Validate packages against React Native Directory package metadata
+The following issues were found when validating your dependencies against React Native Directory:
+  Untested on New Architecture: @nozbe/watermelondb
+  No metadata available: @nozbe/simdjson
+Advice:
+Use libraries that are actively maintained and support the New Architecture. Find alternative libraries with https://reactnative.directory.
+Add packages to expo.doctor.reactNativeDirectoryCheck.exclude in package.json to selectively skip validations, if the warning is not relevant.
+Update React Native Directory to include metadata for unknown packages. Alternatively, set expo.doctor.reactNativeDirectoryCheck.listUnknownPackages in package.json to false to skip warnings about packages with no metadata, if the warning is not relevant.
+
+1 check failed, indicating possible issues with the project.

@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "life",
+    "slug": "life",
+    "version": "0.1.0",
+    "scheme": "life",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "bundleIdentifier": "com.vibecoding.life",
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.vibecoding.life",
+      "edgeToEdgeEnabled": true
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "@morrowdigital/watermelondb-expo-plugin",
+        {
+          "disableJsi": false
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "packagingOptions": {
+              "pickFirst": [
+                "**/libc++_shared.so"
+              ]
+            }
+          }
+        }
+      ]
+    ]
+  }
+}

@@ -1,0 +1,59 @@
+Android env preflight v2 - 2026-11-01T03:06:12
+=== java via JAVA_HOME bin ===
+&: F:\code\vibecoding\life\check-android-env2.ps1:14
+Line |
+  14 |  … og 'java via JAVA_HOME bin' { & "$env:JAVA_HOME\bin\java.exe" -versio …
+     |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     | The term 'C:\code\runtime\java\jdk\jdk-17.0.8.1-full\bin\java.exe' is not recognized as a name of a cmdlet,
+     | function, script file, or executable program. Check the spelling of the name, or if a path was included, verify
+     | that the path is correct and try again.
+
+=== java via PATH shim ===
+Set-PSReadLineOption: C:\Users\randomtree\Documents\PowerShell\Microsoft.PowerShell_profile.ps1:23
+Line |
+  23 |  Set-PSReadLineOption -PredictionSource History
+     |  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     | The predictive suggestion feature cannot be enabled because the console output doesn't support virtual terminal
+     | processing or it's redirected.
+There was an error:
+C:\code\runtime\java\jdk\jdk-17.0.8.1-full
+
+=== adb version ===
+Android Debug Bridge version 1.0.41
+Version 34.0.4-10411341
+Installed as C:\software\platform-tools\adb.exe
+Running on Windows 10.0.22621
+
+=== adb devices ===
+List of devices attached
+
+=== JAVA_HOME ===
+C:\code\runtime\java\jdk\jdk-17.0.8.1-full
+
+=== ANDROID env vars ===
+ANDROID_HOME=[] ANDROID_SDK_ROOT=[]
+
+=== running emulator processes ===
+
+Name                 Id
+----                 --
+MuMuNxDevice      12140
+MuMuNxMain        39960
+MuMuNxService     25572
+MuMuNxSVC         45148
+MuMuRemoteBackend  9228
+MumuRemoteHealthd  9424
+MuMuRemoteService  8228
+
+=== SDK candidate dirs ===
+missing: C:\Users\randomtree\AppData\Local\Android\Sdk
+missing: C:\Android\Sdk
+missing: D:\Android\Sdk
+missing: D:\codeproject\Android\Sdk
+missing: C:\Users\randomtree\AppData\Local\Android\Sdk
+
+=== Android Studio install dirs ===
+missing: C:\Users\randomtree\AppData\Local\Programs\Android Studio
+missing: C:\Program Files\Android\Android Studio
+missing: D:\Android Studio
+

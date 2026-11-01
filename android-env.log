@@ -1,0 +1,38 @@
+**********************
+PowerShell transcript start
+Start time: 20261101030430
+Username: DESKTOP-EMU7G44\randomtree
+RunAs User: DESKTOP-EMU7G44\randomtree
+Configuration Name: 
+Machine: DESKTOP-EMU7G44 (Microsoft Windows NT 10.0.22621.0)
+Host Application: C:\Program Files\PowerShell\7\pwsh.dll
+Process ID: 27920
+PSVersion: 7.6.4
+PSEdition: Core
+GitCommitId: 7.6.4
+OS: Microsoft Windows 10.0.22621
+Platform: Win32NT
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1, 6.0, 7.0
+PSRemotingProtocolVersion: 2.4
+SerializationVersion: 1.1.0.1
+WSManStackVersion: 3.0
+**********************
+=== java ===
+
+
+JAVA_HOME = C:\code\runtime\java\jdk\jdk-17.0.8.1-full
+=== adb ===
+Name     Source
+----     ------
+java.bat D:\codeproject\JEnv-for-Windows\java.bat
+adb.exe  C:\software\platform-tools\adb.exe
+
+
+=== env vars ===
+ANDROID_HOME =
+ANDROID_SDK_ROOT =
+=== common SDK dirs ===
+**********************
+PowerShell transcript end
+End time: 20261101030431
+**********************
