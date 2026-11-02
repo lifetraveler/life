@@ -3,6 +3,7 @@ import { children, date, readonly, text } from '@nozbe/watermelondb/decorators';
 
 import type { ItemStatus, ItemType } from '../../domain/item';
 import ItemTagModel from './ItemTagModel';
+import ReminderModel from './ReminderModel';
 
 /**
  * Item 表的 WatermelonDB model。
@@ -14,10 +15,11 @@ export default class ItemModel extends Model {
   static table = 'items';
 
   // @children 要求宿主 model 显式声明 has_many association（WatermelonDB 0.28 不自动收集）。
-  static associations = associations([
-    'item_tags',
-    { type: 'has_many', foreignKey: 'item_id' },
-  ]);
+  static associations = associations(
+    ['item_tags', { type: 'has_many', foreignKey: 'item_id' }],
+    // 切片 5（AGENTS.md §4.17）：Item 与 reminders 一对多；写路径仍只经 Repository。
+    ['reminders', { type: 'has_many', foreignKey: 'item_id' }],
+  );
 
   @text('type') type!: ItemType;
 
@@ -33,4 +35,7 @@ export default class ItemModel extends Model {
 
   // 本 Item 的全部标签关联（AGENTS.md §4.4 多对多经 item_tags 表）。
   @children('item_tags') itemTags!: Query<ItemTagModel>;
+
+  // 切片 5（AGENTS.md §4.17）：本 Item 的提醒规则；Item 侧不新增任何提醒字段。
+  @children('reminders') reminders!: Query<ReminderModel>;
 }

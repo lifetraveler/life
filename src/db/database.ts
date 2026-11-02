@@ -5,6 +5,7 @@ import SQLiteAdapter from '@nozbe/watermelondb/adapters/sqlite';
 
 import ItemModel from './models/ItemModel';
 import ItemTagModel from './models/ItemTagModel';
+import ReminderModel from './models/ReminderModel';
 import TagModel from './models/TagModel';
 import { schema } from './schema';
 import migrations from './migrations';
@@ -21,5 +22,5 @@ const adapter = new SQLiteAdapter({
 
 export const database = new Database({
   adapter,
-  modelClasses: [ItemModel, TagModel, ItemTagModel],
+  modelClasses: [ItemModel, TagModel, ItemTagModel, ReminderModel],
 });
