@@ -7,6 +7,7 @@ export default function RootLayout() {
       <StatusBar style="auto" />
       <Stack>
         <Stack.Screen name="index" options={{ title: '生活' }} />
+        <Stack.Screen name="archived" options={{ title: '已归档' }} />
       </Stack>
     </>
   );

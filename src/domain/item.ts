@@ -28,3 +28,15 @@ export interface CreateItemInput {
   title: string;
   content?: string;
 }
+
+/**
+ * 更新 Item 的输入（AGENTS.md §4.5，签名冻结）：
+ * 允许更新 title、content、type、status；不允许更新 id、createdAt。
+ * updatedAt 不在输入内——由存储层在写路径自动维护。
+ */
+export interface UpdateItemInput {
+  title?: string;
+  content?: string;
+  type?: ItemType;
+  status?: ItemStatus;
+}
