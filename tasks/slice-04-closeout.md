@@ -82,3 +82,14 @@ expo-doctor 的 2 项既有信息级失败：
 - **无真机验收**：切片 4 为纯逻辑模块，任务卡无手动步骤；未启动 Metro/未安装 build。
 - **AGENTS.md 工作流约束**：本次新增 §7.8–7.11（切片分支、commit/push、merge、closeout）并更新 §8；切片 5 起必须按此执行。
 - **分支状态**：本文件随 `task/slice-04` 提交；随后按 §7.9 push 分支、`--no-ff` 合并到 `main`、push `main`。若 push 因远端凭据失败，本地提交仍保留，需在凭据恢复后补推。
+
+## 收尾事实（2026-11-02）
+
+- 切片提交：`257660a`（`task/slice-04`，13 files changed，1188 insertions）。
+- 合并提交：`cfe75cf`（`main`，`--no-ff`）。
+- 远端已核对：`origin/main` = `cfe75cf`，`origin/task/slice-04` = `257660a`。
+- 推送异常与解法：默认 HTTPS 推送曾报 `Recv failure: Connection was reset`；使用
+  `git -c http.proxy=http://172.16.100.254:7893 -c http.version=HTTP/1.1 push ...` 成功。
+  本机全局 git 配置已有 `https.proxy=http://172.16.100.254:7893`，**HTTP/1.1 是本次成功的关键**；
+  后续 push 再遇 reset 先加 `-c http.version=HTTP/1.1`。
+- 收尾时工作区干净，`main` 与 `origin/main` 同步。
