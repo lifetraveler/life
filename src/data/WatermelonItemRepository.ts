@@ -1,17 +1,31 @@
 import { Database, Q, Query } from '@nozbe/watermelondb';
 
 import type { CreateItemInput, Item, UpdateItemInput } from '../domain/item';
+import type {
+  CreateReminderInput,
+  Reminder,
+  UpdateReminderInput,
+} from '../domain/reminder';
+import { assertValidTimeZone } from '../domain/recurrence/civilTime';
 import { escapeLikePattern, normalizeSearchKeyword } from '../domain/search';
 import { normalizeTagName } from '../domain/tag';
 import type { ItemWithTags, Tag } from '../domain/tag';
 import ItemModel from '../db/models/ItemModel';
 import ItemTagModel from '../db/models/ItemTagModel';
+import ReminderModel from '../db/models/ReminderModel';
 import TagModel from '../db/models/TagModel';
 import type { ItemRepository } from './ItemRepository';
+import {
+  normalizeReminderRuleFields,
+  normalizeStartAt,
+  parseWeekdaysJson,
+  serializeWeekdays,
+} from './reminderRuleMapping';
 
 const ITEMS_TABLE = 'items';
 const TAGS_TABLE = 'tags';
 const ITEM_TAGS_TABLE = 'item_tags';
+const REMINDERS_TABLE = 'reminders';
 
 /** §4.7 默认列表语义：未归档（含 active/done），未删除（本应用不物理删除 Item）。 */
 const NOT_ARCHIVED = Q.where('status', Q.notEq('archived'));
@@ -44,6 +58,26 @@ function toDomainTag(model: TagModel): Tag {
     id: model.id,
     name: model.name,
     createdAt: model.createdAt.getTime(),
+  };
+}
+
+/** reminders 行 → 领域 Reminder；weekdays JSON 解析失败在此抛错（不得静默，§4.18/任务卡）。 */
+function toDomainReminder(model: ReminderModel): Reminder {
+  return {
+    id: model.id,
+    itemId: model.itemId,
+    frequency: model.frequency,
+    localTimeHour: model.localTimeHour,
+    localTimeMinute: model.localTimeMinute,
+    weekdays: parseWeekdaysJson(model.weekdaysJson),
+    dayOfMonth: model.dayOfMonth,
+    tzid: model.tzid,
+    startAt: model.startAt,
+    enabled: model.enabled,
+    lastFiredOccurrenceKey: model.lastFiredOccurrenceKey,
+    lastReconciledAt: model.lastReconciledAt,
+    createdAt: model.createdAt.getTime(),
+    updatedAt: model.updatedAt.getTime(),
   };
 }
 
@@ -384,5 +418,138 @@ export class WatermelonItemRepository implements ItemRepository {
     return (): void => {
       subscription.unsubscribe();
     };
+  }
+
+  /** 契约外扩展（见接口注释）：按 id 取 Item，不存在返回 null（调度器用于完成/归档判定）。 */
+  async getItem(id: string): Promise<Item | null> {
+    const models = await this.db
+      .get<ItemModel>(ITEMS_TABLE)
+      .query(Q.where('id', id))
+      .fetch();
+    return models.length > 0 ? toDomainItem(models[0]) : null;
+  }
+
+  /**
+   * 创建 Reminder（AGENTS.md §4.17/§4.18）：
+   * - 宿主 Item 必须存在（提醒一律经 reminders 表关联，Item 上不加字段）；
+   * - tzid 经 assertValidTimeZone 校验（只读复用切片 4 的纯函数，不改 recurrence/）；
+   * - 规则字段经 normalizeReminderRuleFields 归一化校验；
+   * - lastFiredOccurrenceKey / lastReconciledAt 初始化为 null（§4.18）。
+   */
+  async createReminder(input: CreateReminderInput): Promise<Reminder> {
+    const owner = await this.getItem(input.itemId);
+    if (!owner) {
+      throw new Error(`createReminder: item not found: ${input.itemId}`);
+    }
+    assertValidTimeZone(input.tzid);
+    const startAt = normalizeStartAt(input.startAt);
+    const fields = normalizeReminderRuleFields({
+      frequency: input.frequency,
+      localTimeHour: input.localTimeHour,
+      localTimeMinute: input.localTimeMinute,
+      weekdays: input.weekdays,
+      dayOfMonth: input.dayOfMonth,
+    });
+
+    const created = await this.db.write(async () =>
+      this.db.get<ReminderModel>(REMINDERS_TABLE).create((record) => {
+        record.itemId = owner.id;
+        record.frequency = fields.frequency;
+        record.localTimeHour = fields.localTimeHour;
+        record.localTimeMinute = fields.localTimeMinute;
+        record.weekdaysJson = serializeWeekdays(fields.weekdays);
+        record.dayOfMonth = fields.dayOfMonth;
+        record.tzid = input.tzid;
+        record.startAt = startAt;
+        record.enabled = input.enabled;
+        record.lastFiredOccurrenceKey = null;
+        record.lastReconciledAt = null;
+      }),
+    );
+
+    return toDomainReminder(created);
+  }
+
+  /**
+   * 更新 Reminder：仅规则字段与 enabled；tzid / itemId / id / createdAt 不可更新
+   * （tzid 为创建时写入语义，§4.17）；lastFiredOccurrenceKey / lastReconciledAt
+   * 只经 markReminderFired / markReminderReconciled 写入。
+   */
+  async updateReminder(id: string, patch: UpdateReminderInput): Promise<Reminder> {
+    return this.db.write(async () => {
+      const record = await this.db.get<ReminderModel>(REMINDERS_TABLE).find(id);
+      const current = toDomainReminder(record);
+      // 以 patch 合并后的「最终规则」做整体归一化校验，frequency 切换时自动归零非本 frequency 字段。
+      const fields = normalizeReminderRuleFields({
+        frequency: patch.frequency ?? current.frequency,
+        localTimeHour: patch.localTimeHour ?? current.localTimeHour,
+        localTimeMinute: patch.localTimeMinute ?? current.localTimeMinute,
+        weekdays: patch.weekdays ?? current.weekdays,
+        dayOfMonth: patch.dayOfMonth ?? current.dayOfMonth,
+      });
+      const startAt =
+        patch.startAt !== undefined ? normalizeStartAt(patch.startAt) : current.startAt;
+
+      const updated = await record.update((draft) => {
+        draft.frequency = fields.frequency;
+        draft.localTimeHour = fields.localTimeHour;
+        draft.localTimeMinute = fields.localTimeMinute;
+        draft.weekdaysJson = serializeWeekdays(fields.weekdays);
+        draft.dayOfMonth = fields.dayOfMonth;
+        draft.startAt = startAt;
+        if (patch.enabled !== undefined) {
+          draft.enabled = patch.enabled;
+        }
+      });
+
+      return toDomainReminder(updated);
+    });
+  }
+
+  /**
+   * 删除 Reminder（物理删除关联行）。
+   * 已调度的系统通知不由 Repository 清理——由 ReminderScheduler.reconcile 对账取消。
+   */
+  async deleteReminder(id: string): Promise<void> {
+    await this.db.write(async () => {
+      const record = await this.db.get<ReminderModel>(REMINDERS_TABLE).find(id);
+      await record.destroyPermanently();
+    });
+  }
+
+  async listRemindersByItem(itemId: string): Promise<Reminder[]> {
+    const models = await this.db
+      .get<ReminderModel>(REMINDERS_TABLE)
+      .query(Q.where('item_id', itemId), Q.sortBy('created_at', 'asc'))
+      .fetch();
+    return models.map(toDomainReminder);
+  }
+
+  async listEnabledReminders(): Promise<Reminder[]> {
+    const models = await this.db
+      .get<ReminderModel>(REMINDERS_TABLE)
+      .query(Q.where('enabled', true), Q.sortBy('created_at', 'asc'))
+      .fetch();
+    return models.map(toDomainReminder);
+  }
+
+  /** 对账完成时间戳（§4.19 窗口起点）。 */
+  async markReminderReconciled(id: string, lastReconciledAt: number): Promise<void> {
+    await this.db.write(async () => {
+      const record = await this.db.get<ReminderModel>(REMINDERS_TABLE).find(id);
+      await record.update((draft) => {
+        draft.lastReconciledAt = lastReconciledAt;
+      });
+    });
+  }
+
+  /** missed 去重游标：推进到窗口内最后一个 missed occurrenceKey（§4.19）。 */
+  async markReminderFired(id: string, occurrenceKey: string): Promise<void> {
+    await this.db.write(async () => {
+      const record = await this.db.get<ReminderModel>(REMINDERS_TABLE).find(id);
+      await record.update((draft) => {
+        draft.lastFiredOccurrenceKey = occurrenceKey;
+      });
+    });
   }
 }

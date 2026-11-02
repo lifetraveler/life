@@ -1,4 +1,9 @@
 import type { CreateItemInput, Item, UpdateItemInput } from '../domain/item';
+import type {
+  CreateReminderInput,
+  Reminder,
+  UpdateReminderInput,
+} from '../domain/reminder';
 import type { ItemWithTags, Tag } from '../domain/tag';
 
 /**
@@ -14,6 +19,12 @@ import type { ItemWithTags, Tag } from '../domain/tag';
  *   切片 2 新增 observeItemsWithTags / observeTags，供列表即时刷新与「已有标签」复用建议；
  *   listItemsWithTags 本身仍按 §4.5 实现与保留。
  *   observeItemsWithTags 与 listItemsWithTags 同语义（默认列表），见 §4.7/§4.8。
+ * - createReminder / updateReminder / deleteReminder / listRemindersByItem /
+ *   listEnabledReminders / markReminderReconciled / markReminderFired：
+ *   切片 5（§4.18）冻结签名。lastFiredOccurrenceKey / lastReconciledAt 由
+ *   Repository 初始化为 null，仅调度器经 mark* 方法写入。
+ * - getItem：契约外显式扩展（与 observe* 同一先例）：ReminderScheduler 需要按 id
+ *   读取 Item（完成/归档判定与通知文案），Item 不存在时返回 null。
  * 观察方法的返回值均为退订函数。
  */
 export interface ItemRepository {
@@ -30,4 +41,14 @@ export interface ItemRepository {
   listArchivedItems(): Promise<ItemWithTags[]>;
   observeItemsWithTags(onNext: (items: ItemWithTags[]) => void): () => void;
   observeTags(onNext: (tags: Tag[]) => void): () => void;
+  getItem(id: string): Promise<Item | null>;
+
+  // —— 切片 5：reminders（AGENTS.md §4.18，签名冻结）——
+  createReminder(input: CreateReminderInput): Promise<Reminder>;
+  updateReminder(id: string, patch: UpdateReminderInput): Promise<Reminder>;
+  deleteReminder(id: string): Promise<void>;
+  listRemindersByItem(itemId: string): Promise<Reminder[]>;
+  listEnabledReminders(): Promise<Reminder[]>;
+  markReminderReconciled(id: string, lastReconciledAt: number): Promise<void>;
+  markReminderFired(id: string, occurrenceKey: string): Promise<void>;
 }
