@@ -87,7 +87,7 @@ expo-doctor 的 2 项既有信息级失败：
 
 - 切片提交：`257660a`（`task/slice-04`，13 files changed，1188 insertions）。
 - 合并提交：`cfe75cf`（`main`，`--no-ff`）。
-- 远端已核对：`origin/main` = `cfe75cf`，`origin/task/slice-04` = `257660a`。
+- 远端已核对：`origin/main` 包含合并提交 `cfe75cf`，`origin/task/slice-04` = `257660a`。
 - 推送异常与解法：默认 HTTPS 推送曾报 `Recv failure: Connection was reset`；使用
   `git -c http.proxy=http://172.16.100.254:7893 -c http.version=HTTP/1.1 push ...` 成功。
   本机全局 git 配置已有 `https.proxy=http://172.16.100.254:7893`，**HTTP/1.1 是本次成功的关键**；
