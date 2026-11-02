@@ -104,8 +104,7 @@
 
 ## 收尾事实（2026-11-03）
 
-- 切片提交：`<待 push 后补记>`（`task/slice-05`）。
-- 合并提交：`<待补记>`（`main`，`--no-ff`）。
-- 远端状态：`<待补记>`。
-
-（注：以上三条在 push/merge 完成后由收尾步骤回填。若读到此文件时这三行仍是占位符，说明 push 未完成——按 AGENTS.md §7.9 顺序补齐，push 遇 reset 先加 `-c http.version=HTTP/1.1`，代理不可达时先恢复网络。）
+- 切片提交：`57600a0`（`task/slice-05`，26 files changed，3331 insertions）。
+- 合并提交：`b9c8d7e`（`main`，`--no-ff`）。
+- 远端已核对：`origin/main` = `b9c8d7e`，`origin/task/slice-05` = `57600a0`；本次 fetch/push 直连成功（代理 `172.16.100.254:7893` 在本切片多数时间不可达，收尾时网络恢复，未用到 `http.version=HTTP/1.1` 变通）。
+- 收尾后工作区干净，`main` 与 `origin/main` 同步；切片分支 `task/slice-05` 保留待追溯。
