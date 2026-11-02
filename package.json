@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@date-fns/tz": "^1.5.0",
     "@morrowdigital/watermelondb-expo-plugin": "2.4.0-beta.0",
     "@nozbe/watermelondb": "0.28.0",
     "expo": "~54.0.0",
