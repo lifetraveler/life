@@ -139,3 +139,5 @@
 - 是否触碰受保护契约（应为“否”；若为“是”，附变更提案）
 - 分支名、commit hash、merge hash、远端核对结果
 - 切片 6 最终报告里给出两件事：旧数据 migration 后 Item 时间字段的实际值分布（多少条 null、多少条有值），以及通知点击三条路径中哪条最脆弱。这两项会决定切片 7 是否需要补一条“无时间 Item 是否进入今日视图”的兜底规则
+
+> 契约位置已迁移（2026-11）：AGENTS.md §4 拆分至 docs/contracts/，本文件引用的 4.1–4.22→docs/contracts/data-model.md（4.1/4.4/4.6/4.10/4.17）、repository.md（4.2/4.5/4.7–4.9/4.18）、recurrence.md（4.11–4.15）、notifications.md（4.3/4.16/4.19–4.22）；完整映射见 AGENTS.md §4 索引；本文件为历史记录，正文未改。

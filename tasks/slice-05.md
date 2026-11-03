@@ -122,3 +122,5 @@
 - 未完成项与风险（特别是通知权限被拒、通知数量上限、时区数据裁剪设备）
 - 是否触碰受保护契约（应为“否”；若为“是”，附变更提案）
 - 分支名、commit hash、merge hash、远端核对结果
+
+> 契约位置已迁移（2026-11）：AGENTS.md §4 拆分至 docs/contracts/，本文件引用的 4.16→docs/contracts/notifications.md、4.17→docs/contracts/data-model.md、4.18→docs/contracts/repository.md；完整映射见 AGENTS.md §4 索引；本文件为历史记录，正文未改。
