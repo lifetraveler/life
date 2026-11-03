@@ -17,6 +17,7 @@
     "@formatjs/intl-locale": "^5.4.2",
     "@morrowdigital/watermelondb-expo-plugin": "2.4.0-beta.0",
     "@nozbe/watermelondb": "0.28.0",
+    "@react-native-community/datetimepicker": "^8.4.4",
     "expo": "~54.0.0",
     "expo-build-properties": "~1.0.10",
     "expo-constants": "~18.0.0",

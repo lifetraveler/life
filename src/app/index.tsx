@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { Link } from 'expo-router';
+import { Link, useRouter } from 'expo-router';
 
 import { itemRepository } from '../data';
 import type { ItemType } from '../domain/item';
@@ -39,6 +39,7 @@ function collectTagNames(rawNames: readonly string[], existing: readonly string[
 }
 
 export default function IndexScreen() {
+  const router = useRouter();
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [selectedType, setSelectedType] = useState<ItemType>('note');
@@ -233,10 +234,12 @@ export default function IndexScreen() {
     const editing = editingTagsForId === item.id;
     return (
       <View style={styles.row}>
-        <Text style={styles.rowTitle}>{item.title}</Text>
-        <Text style={styles.rowMeta}>
-          {TYPE_LABELS[item.type]} · {formatTimestamp(item.createdAt)}
-        </Text>
+        <Pressable onPress={() => router.push(`/item/${item.id}`)}>
+          <Text style={styles.rowTitle}>{item.title}</Text>
+          <Text style={styles.rowMeta}>
+            {TYPE_LABELS[item.type]} · {formatTimestamp(item.createdAt)}
+          </Text>
+        </Pressable>
         <View style={styles.tagRow}>
           {item.tags.map((tag) => (
             <TagChip
@@ -297,7 +300,7 @@ export default function IndexScreen() {
       </View>
     );
   }, [editingTagsForId, handleAddTagToItem, handleArchive, handleConvertToTask, handleRemoveTag,
-    handleRowTagInputChange, rowTagInput, submitRowTag, suggestTagsFor, toggleTagEditor]);
+    handleRowTagInputChange, rowTagInput, router, submitRowTag, suggestTagsFor, toggleTagEditor]);
 
   const searching = searchInput.length > 0;
   const displayedItems = searching ? searchResults : items;

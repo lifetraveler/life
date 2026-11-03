@@ -1,5 +1,5 @@
 import { Model, Query, associations } from '@nozbe/watermelondb';
-import { children, date, readonly, text } from '@nozbe/watermelondb/decorators';
+import { children, date, field, readonly, text } from '@nozbe/watermelondb/decorators';
 
 import type { ItemStatus, ItemType } from '../../domain/item';
 import ItemTagModel from './ItemTagModel';
@@ -28,6 +28,15 @@ export default class ItemModel extends Model {
   @text('content') content!: string;
 
   @text('status') status!: ItemStatus;
+
+  // 切片 6（AGENTS.md §4.23）：绝对毫秒时间戳；null 表示未安排 / 无结束时间。
+  // migration addColumns 不回填，v4 之前创建的行读到 null。
+  @field('start_at') startAt!: number | null;
+
+  @field('end_at') endAt!: number | null;
+
+  // all_day 列 isOptional：既有行读到 null，读取层（toDomainItem）归一为 false。
+  @field('all_day') allDay!: boolean | null;
 
   @readonly @date('created_at') createdAt!: Date;
 

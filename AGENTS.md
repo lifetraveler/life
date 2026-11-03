@@ -247,6 +247,63 @@ CreateReminderInput 不含 lastFiredOccurrenceKey / lastReconciledAt，由 Repos
 - 调试页不是正式 UI，不得被正式导航入口引用；切片 6 正式 UI 完成后可保留在 dev 菜单。
 - 调试页不得绕过 Repository 直接写库。
 
+### 4.23 Item 时间字段与 schema v4（v0.6 冻结）
+- schema 版本 3→4，Item 新增字段：
+  - startAt: number | null（绝对毫秒时间戳；null 表示未安排）
+  - endAt: number | null（绝对毫秒时间戳；null 表示无结束时间）
+  - allDay: boolean（默认 false）
+- 这三个字段供切片 7 的今日/本周视图分组使用；切片 6 只做数据模型与编辑入口。
+- migration 追加 `toVersion: 4`；v3 step 不动；不得清库。
+- Item 既有字段（id/type/title/content/status/createdAt/updatedAt）不变；type 枚举不变。
+- 时间字段的时区语义：startAt/endAt 是绝对时刻；分组展示时按设备当前 IANA 时区解释（切片 7 契约）。
+- allDay=true 时 startAt 表示设备时区当天 00:00；endAt 可为 null。
+
+### 4.24 Repository 扩展（v0.6 冻结）
+新增方法，签名冻结：
+- getItemById(id: string): Promise<ItemWithTags | null>
+- updateItemTime(id: string, patch: { startAt?: number | null; endAt?: number | null; allDay?: boolean }): Promise<Item>
+
+规则：
+- 保留 v0.2/v0.3 的 updateItem 不变；时间字段只走 updateItemTime，避免与 title/content patch 混淆。
+- updateItemTime 必须同时更新 updatedAt；不得改 createdAt。
+- startAt 与 endAt 同时非 null 时，endAt 必须 >= startAt，否则抛明确错误。
+
+### 4.25 Reminder 时区白名单（v0.6 冻结）
+- 允许的 tzid 仅：`Asia/Shanghai`、`America/New_York`。
+- UI 时区选择器只展示这两个；Repository.createReminder / updateReminder 遇到白名单外 tzid 必须抛明确错误。
+- DB 中已存在白名单外 tzid 的 reminder（如切片 5 调试数据）：详情页只读展示并标注“该时区暂不支持编辑”，不得自动改写 tzid，不得删除。
+- 理由：Hermes polyfill 用 `add-golden-tz`，只含这两个时区数据；其他时区在真机未验证。
+- 扩展白名单必须先换 `add-all-tz` 并真机验证，再改本节；AI 不得自行替换 polyfill 策略。
+
+### 4.26 通知点击跳转契约（v0.6 冻结）
+- 通知 data 必须含 occurrenceKey、reminderId、itemId（切片 5 已实现）。
+- 点击通知（前台、后台、冷启动三种路径）必须导航到 Item 详情页。
+- Item 不存在时显示“条目已删除”占位页，不崩溃。
+- 通知点击不得自动标记 Item 完成，不得自动 acknowledge missed；missed 确认在后续切片。
+
+### 4.27 详情页与编辑页契约（v0.6）
+- 详情页：`src/app/item/[id].tsx`；编辑页：`src/app/item/[id]/edit.tsx`（或等价的 modal 路由，以项目现有导航为准）。
+- 详情页展示：title、type、content、tags、startAt/endAt（按设备当前 IANA 时区格式化）、allDay、reminders 列表（frequency、localTime、weekdays/dayOfMonth、tzid、enabled、lastReconciledAt）、status。
+- 编辑页可改：title、content、type、startAt/endAt/allDay、tags。
+- Reminder 的创建/编辑/删除在详情页内完成，不在编辑页；删除 reminder 必须同时 `cancelForReminder`。
+- 保存涉及 reminder 或 Item 状态变更后必须调用 `reconcile()`；reconcile 失败不得阻断保存，错误写日志并在详情页 dev 信息区可见。
+
+### 4.28 missed 正式展示推迟（v0.6 记录）
+- 切片 6 不实现 missed 的正式 UI 展示；已知缺口：用户可能错过提醒而不知道。
+- `getLastAutoReconcileResult()` 仍在 dev 调试页可见。
+- 不得在切片 6 用 AsyncStorage 临时存 missed 来“先凑合”；missed 持久化与展示必须在后续切片以 schema 变更方式正式设计，避免数据一致性债务。
+
+### 4.29 今日/本周定义（v0.6 预冻结，切片 7 实现）
+- 以设备当前 IANA 时区为准；reminder 的 tzid 不影响视图分组。
+- 今日：设备时区当天 00:00–24:00；本周：设备时区周一 00:00 至下周一 00:00。
+- 无 startAt 的 Item 不进入今日/本周；是否用 createdAt 进入“今日创建”分组在切片 7 决定。
+- “以设备时区为准”在切片 7 前不改；其余细节可在切片 7 任务卡中微调。
+
+### 4.30 依赖与 UI 库约束（v0.6）
+- 允许新增日期时间选择器依赖（如 `@react-native-community/datetimepicker`），必须说明理由，且只用于编辑页/Reminder 表单。
+- 不得引入重量级 UI 框架（如 NativeBase、Tamagui、gluestack）或图标库全家桶；优先用现有组件与 RN 内置能力。
+- 不得引入新的状态库；详情页/编辑页状态用局部 state + Repository 读取。
+
 ## 5. 构建与配置约束（不得“优化”或删除）
 
 - WatermelonDB 在 Expo 下需要 custom development client，不能用 Expo Go 完整验证。
@@ -284,5 +341,5 @@ CreateReminderInput 不含 lastFiredOccurrenceKey / lastReconciledAt，由 Repos
 
 ## 8. 当前切片
 
-切片 5 已完成并通过验收，收尾移交见 tasks/slice-05-closeout.md。
-下一片任务卡待创建；任务卡创建前不得开始切片 6 的实现。
+切片 6 已完成并通过验收，收尾移交见 tasks/slice-06-closeout.md。
+下一片任务卡待创建；任务卡创建前不得开始切片 7 的实现。

@@ -57,8 +57,9 @@ export interface CreateReminderInput {
 
 /**
  * 更新 Reminder 的输入（§4.18 updateReminder 的参数形状）：
- * 允许更新规则字段与 enabled；不允许更新 id、itemId、tzid、createdAt
- * （tzid 为创建时写入的冻结语义，§4.17）。
+ * 允许更新规则字段、enabled 与 tzid；不允许更新 id、itemId、createdAt。
+ * tzid（切片 6）：允许在两个白名单值之间显式切换（任务卡实现要求 5，§4.25）；
+ * §4.17 的“不随后续系统时区变化自动改写”仅禁止自动改写，不禁止用户显式编辑。
  * lastFiredOccurrenceKey / lastReconciledAt 不在此列——只经 mark* 方法写入。
  */
 export interface UpdateReminderInput {
@@ -69,6 +70,8 @@ export interface UpdateReminderInput {
   dayOfMonth?: number;
   startAt?: number;
   enabled?: boolean;
+  /** 仅接受时区白名单值（§4.25）；Repository 对白名单外值抛错 */
+  tzid?: string;
 }
 
 /** 对账结果（AGENTS.md §4.16）：missed 为本次新发现的错过 occurrence，不重复计入。 */
