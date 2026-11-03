@@ -15,6 +15,7 @@
 - gradle 直构：`JAVA_HOME=D:\enviroment\java\jdk\oracle-jdk-17.0.10`，`ANDROID_HOME=D:\Android\Sdk`，APK `android/app/build/outputs/apk/debug/app-debug.apk`（176,345,880 bytes）。
 - npm 装/跑一律 `--cache .npm-cache`（全局 cache 目录 EPERM）；已把 `.npm-cache/` 加入 .gitignore。
 - push 遇 Connection reset 先 `git -c http.version=HTTP/1.1 ...` 再试（代理 172.16.100.254:7893 时好时坏）。
+- **git 推送直连失败的真根因（本切片定位）**：全局 `C:/Users/randomtree/.gitconfig` 里的代理写在了 `[https] proxy = ...` 节（键 `https.proxy`）——git 的 http 机制只认 `http.proxy`/`http.<url>.proxy`，**`https.proxy` 键会被静默忽略**，于是 git 对 github.com 直连（GFW 下 timeout/reset）。`GIT_TRACE_CURL=1` 可实证（trace 显示 `Trying 20.205.243.166:443`，无 CONNECT 隧道）。修法（本切片使用，不改用户全局配置）：推送命令显式加 `-c http.proxy=http://172.16.100.254:7893`。彻底修复需把该节改为 `[http] proxy = ...`，属用户全局配置，留用户决定。
 - bash 偶发 exit 139 中断 `&&` 长链——拆短调用重试即可。
 
 ### ⏰ MuMu 时区真相（推算验收时间的唯一依据）
