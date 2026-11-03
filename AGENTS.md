@@ -31,278 +31,24 @@ AGENTS.md       本文件
 
 ## 4. 受保护契约（AI 不得自行修改；如需变更必须输出变更提案并暂停）
 
-### 4.1 数据模型：Item
+正文已拆分至 docs/contracts/（仅迁移，语义与措辞未变）。按需加载：先读本索引，再读对应契约文件全文；摘要与正文不一致时以正文为准并报告缺陷。
 
-字段：
+| 契约文件 | 覆盖原条款 |
+| --- | --- |
+| docs/contracts/data-model.md | 4.1、4.4、4.6、4.10、4.17、4.23 |
+| docs/contracts/repository.md | 4.2、4.5、4.7、4.8、4.9、4.18、4.24 |
+| docs/contracts/recurrence.md | 4.11–4.15 |
+| docs/contracts/notifications.md | 4.3、4.16、4.19–4.22、4.26 |
+| docs/contracts/ui.md | 4.25、4.27–4.29 |
+| docs/contracts/build-and-deps.md | 4.30（§5 构建配置约束仍在本文 §5，未迁移） |
 
-- id: string
-- type: 'note' | 'task' | 'event'
-- title: string
-- content: string
-- status: 'active' | 'done' | 'archived'
-- createdAt: number（毫秒时间戳）
-- updatedAt: number（毫秒时间戳）
-
-规则：
-
-- type 枚举不得随意增加或重命名。
-- 标签不存为 Item 的逗号分隔字符串；后续使用 Tag / ItemTag 关联表。
-- 修改 schema 必须提供 WatermelonDB migration，不得直接改表结构后要求用户重装。
-
-### 4.2 Repository 接口
-
-UI 和业务层只能通过 Repository 访问数据，不得直接 import WatermelonDB 的 database 或 model。
-初始接口（切片 1 实现）：
-
-- createItem(input: CreateItemInput): Promise<Item>
-- listItems(): Promise<Item[]>
-
-后续可扩展 updateItem、searchItems、archiveItem 等。接口签名变更必须走变更提案。
-
-### 4.3 ReminderScheduler 接口
-
-当前切片不实现。后续所有提醒调度必须通过该接口，UI 不得直接调用 expo-notifications。
-接口签名在切片 5 前冻结。
-
-### 4.4 数据模型：Tag / ItemTag（v0.2 新增）
-Tag 字段：
-- id: string
-- name: string（全局唯一，大小写不敏感去重）
-- createdAt: number
-
-ItemTag 字段：
-- id: string
-- itemId: string
-- tagId: string
-- createdAt: number
-
-规则：
-- 标签不得存为 Item 的逗号分隔字符串。
-- Tag.name 唯一性由 Repository 层保证；UI 不得自行拼标签字符串写库。
-- Item 与 Tag 为多对多关系，通过 ItemTag 关联。
-
-### 4.5 Repository 接口扩展（v0.2）
-在切片 1 已实现的 createItem / listItems 基础上，新增以下方法，签名冻结：
-- updateItem(id: string, patch: UpdateItemInput): Promise<Item>
-- addTagToItem(itemId: string, tagName: string): Promise<Tag>
-- removeTagFromItem(itemId: string, tagId: string): Promise<void>
-- listItemsWithTags(): Promise<ItemWithTags[]>
-
-类型约定：
-- UpdateItemInput 允许更新 title、content、type、status；不允许更新 id、createdAt。
-- ItemWithTags = Item & { tags: Tag[] }
-- 保留 listItems(): Promise<Item[]> 不变，避免破坏切片 1 验收；切片 2 的 UI 改用 listItemsWithTags。
-
-### 4.6 Schema 变更与 Migration 规则（v0.2 新增）
-- 每次 WatermelonDB schema 变更必须提升 version，并新增 migration step。
-- 不得修改已发布的 migration step；只能在末尾追加。
-- 新增表/字段必须在 migration 中显式创建，不得依赖“删库重装”。
-- 切片 2 的 schema version 从 1 升至 2，新增 tags、item_tags 表。
-- AI 不得以“开发阶段可以清库”为由跳过 migration。
-
-### 4.7 Repository 接口扩展（v0.3）
-在 v0.2 基础上新增，签名冻结：
-- searchItems(keyword: string): Promise<ItemWithTags[]>
-- archiveItem(id: string): Promise<void>
-- unarchiveItem(id: string): Promise<void>
-- listArchivedItems(): Promise<ItemWithTags[]>
-
-规则：
-- searchItems 的空字符串或纯空白输入必须返回空数组，不得返回全部数据。
-- archiveItem / unarchiveItem 只改 Item.status，不得级联删除标签关系、不得删除 Item。
-- 保留 v0.2 的 listItemsWithTags 不变，语义为“未归档 + 未删除”的默认列表。
-
-### 4.8 列表与搜索排序约定（v0.3）
-- listItemsWithTags、listArchivedItems、searchItems 均按 updatedAt 降序。
-- 搜索不做相关性排序；MVP 不引入 FTS5 或额外索引。
-- 该排序约定同时适用于切片 1/2 已有的列表；这是对既有行为的明确化，不属于破坏性变更。
-
-### 4.9 搜索语义（v0.3）
-- 搜索范围：Item.title、Item.content、关联 Tag.name。
-- 匹配方式：大小写不敏感的子串匹配。
-- LIKE 特殊字符转义：关键词中的 `%`、`_`、`\` 必须转义后再用于 Q.like；不得直接拼接原始关键词。
-- 跨表查询限制：WatermelonDB 不支持单条查询里跨表 OR。标签名匹配必须分步实现：
-  1. 查 tags 表匹配 name，得到 tagIds；
-  2. 用 tagIds 查 item_tags 得到 itemIds；
-  3. 查 title/content 命中的 itemIds；
-  4. 合并去重后按 updatedAt 降序返回。
-- UI 层不得自行拼查询；搜索只走 Repository.searchItems。
-
-### 4.10 Schema 变更（v0.3）
-- 切片 3 不需要 schema 变更。Item.status 已包含 'archived'，不得为此新增字段或表。
-- 不得新增 migration。若 AI 认为需要改 schema，必须先输出变更提案并暂停。
-
-### 4.11 重复规则模块的定位（v0.4）
-- 切片 4 新增 `src/domain/recurrence/`，为纯 TypeScript 模块，不得 import React、React Native、WatermelonDB、expo-notifications、UI 组件或任何数据库代码。
-- 该模块是后续 `ReminderScheduler`（切片 5）的唯一重复规则来源；UI 和通知层不得自行实现重复计算。
-- 不得引入 `rrule` 或任何依赖 floating-time 语义的日历库。rrule 的日期应被视为“floating times wearing UTC clothing”，其 DST 行为不可靠且上游长期未修复。
-
-### 4.12 重复规则的计算模型（v0.4）
-重复提醒的本质是“民用时间规则”，不是“固定间隔的 UTC 瞬间”。必须同时存储：
-- `localTime`：用户本地民用时间（小时、分钟）；
-- `tzid`：IANA 时区标识（如 `Asia/Shanghai`、`America/New_York`）。
-
-规则类型（MVP 冻结，不得扩展）：
-- `daily`：每天 `localTime`；
-- `weekly`：每周指定星期几（1–7）的 `localTime`；
-- `monthly`：每月指定“日”（1–31）的 `localTime`；该“日”超过当月天数时，**固定回退到当月最后一天**，不采用 RFC 5545 `SKIP=BACKWARD` 的“回退到最近有效日”语义。
-
-时间范围：
-- 以 `startAt`（绝对时刻，毫秒）作为规则生效起点；`startAt` 本身不一定是 occurrence。
-- 输出未来 N 个 occurrence，默认 N=30；不得一次性展开全年或无限展开。
-- 该模块不感知“错过补提醒”；补提醒由切片 5 的调度器基于实际触发记录判断。
-
-### 4.13 DST 处理契约（v0.4）
-- 模块内部不得使用 `new Date(y, m, d, h, min)` 这类依赖系统本地时区的构造方式；所有“民用时间 → 绝对时刻”的解析必须显式传入 IANA `tzid`。
-- 春季时钟前拨导致的 **不存在本地时间**（gap）：该 occurrence 跳过，不向前后平移。
-- 秋季时钟后拨导致的 **重复本地时间**（fold）：取较早的瞬间（第一次出现），不生成两个 occurrence。
-- 时区规则以运行时 IANA 数据库为准；不得硬编码任何时区的 DST 起止日期。
-
-### 4.14 Occurrence key 契约（v0.4）
-- 每个 occurrence 必须携带 `occurrenceKey: string`，由确定性字段拼接生成，至少包含：`scheduleId`、`localDate`（YYYY-MM-DD）、`localTime`（HH:mm）、`tzid`。
-- `occurrenceKey` 在规则编辑、DST 变化、重新展开后，对同一“民用时间 occurrence”必须保持不变。
-- 禁止用 UTC 时间戳单独作为 occurrence 的唯一标识；UTC 时间戳会随 DST 规则或时区数据更新而变化。
-
-### 4.15 测试时区约定（v0.4）
-- 该模块的单元测试必须在显式指定 IANA 时区的上下文中运行，不得依赖开发机或 CI 的默认系统时区。
-- Jest 运行该模块测试时，建议通过 `process.env.TZ` 或测试内显式 `tzid` 参数隔离时区影响；涉及 DST 的用例必须使用真实 IANA 时区标识（如 `America/New_York`），不得用固定偏移冒充时区。
-- 测试文件不得修改全局时区后不恢复；如确需修改，必须在 `afterEach` / `afterAll` 中还原。
-
-### 4.16 ReminderScheduler 接口契约（v0.5 冻结）
-新增 `src/notifications/ReminderScheduler`，接口签名冻结：
-- `scheduleForReminder(reminderId: string): Promise<void>`
-  - 读取 Reminder + Item，若 Item 已完成/已归档或 Reminder.enabled=false，等价于 cancel；
-  - 调用 `expandOccurrences({ scheduleId: reminderId, rule, startAt, tzid, count: 30 })`；
-  - 过滤 `instant > now` 且 `instant <= now + 30 天` 的 occurrence；
-  - 以 `occurrenceKey` 作为 notification identifier 调用 expo-notifications 的 `scheduleNotificationAsync`；
-  - 已存在同 identifier 的通知不重复注册。
-- `cancelForReminder(reminderId: string): Promise<void>`
-  - 取消该 reminder 名下所有已调度通知；identifier 前缀为 `recurrence:v1|<encodeURIComponent(reminderId)>|`。
-- `cancelAll(): Promise<void>`
-  - 取消本 App 调度过的所有通知；不得取消非本 App 前缀的通知。
-- `reconcile(): Promise<ReconcileResult>`
-  - 幂等；可在启动、回前台、任意时刻多次调用；
-  - 返回 `{ newlyScheduled: string[]; cancelled: string[]; missed: Occurrence[] }`；
-  - 更新每个 Reminder 的 `lastReconciledAt`。
-
-`ReconcileResult.missed` 为本次对账新发现的错过 occurrence；同一 occurrence 不得在后续对账中重复计入。
-
-### 4.17 Reminder 数据模型与 schema v3（v0.5 冻结）
-WatermelonDB schema 版本 2→3，新增 `reminders` 表：
-- id: string
-- itemId: string
-- frequency: 'daily' | 'weekly' | 'monthly'
-- localTimeHour: number（0–23）
-- localTimeMinute: number（0–59）
-- weekdays: string（JSON 数组，1–7；仅 weekly 使用，其他为空字符串）
-- dayOfMonth: number（1–31；仅 monthly 使用，其他为 0）
-- tzid: string（IANA 名称，创建时写入，不随后续系统时区变化自动改写）
-- startAt: number（绝对毫秒时间戳）
-- enabled: boolean
-- lastFiredOccurrenceKey: string | null
-- lastReconciledAt: number | null
-- createdAt: number
-- updatedAt: number
-
-规则：
-- 不得在 Item 上新增提醒字段；提醒一律通过 reminders 表关联。
-- 规则字段与切片 4 的 `RecurrenceRule` 一一映射，Repository 负责两者互转；ReminderScheduler 不得自行解析字符串化规则。
-- migration 必须为追加 step，不得修改 v2 migration；不得清库。
-- `weekdays` 用 JSON 字符串存储是冻结决定；AI 不得改为逗号分隔或其他格式。
-
-### 4.18 Repository 扩展（v0.5 冻结）
-新增方法，签名冻结：
-- `createReminder(input: CreateReminderInput): Promise<Reminder>`
-- `updateReminder(id: string, patch: UpdateReminderInput): Promise<Reminder>`
-- `deleteReminder(id: string): Promise<void>`
-- `listRemindersByItem(itemId: string): Promise<Reminder[]>`
-- `listEnabledReminders(): Promise<Reminder[]>`
-- `markReminderReconciled(id: string, lastReconciledAt: number): Promise<void>`
-- `markReminderFired(id: string, occurrenceKey: string): Promise<void>`
-
-CreateReminderInput 不含 lastFiredOccurrenceKey / lastReconciledAt，由 Repository 初始化为 null。
-
-### 4.19 对账与补提醒语义（v0.5 冻结）
-- 对账窗口：`[lastReconciledAt ?? startAt, now]`。
-- 该窗口内的 occurrence 若满足：`instant <= now` 且 `occurrenceKey > lastFiredOccurrenceKey`（按 occurrence 生成顺序比较，不按字符串字典序；实现上以“窗口内按 instant 升序取 lastFiredOccurrenceKey 之后的项”为准），计入 `missed`。
-- `missed` 去重依赖 `markReminderFired`：对账报告 missed 后必须把该 reminder 的 `lastFiredOccurrenceKey` 更新为窗口内最后一个 missed occurrenceKey；同一 occurrence 不会在下次对账重复进入 missed。
-- 系统已调度通知的 diff 以 `occurrenceKey` 集合为准；不比对通知的触发时间字段。
-- 本切片不实现“missed 聚合通知”的 UI 展示；是否弹通知由调用方决定。调试入口可在对账后立即调用 `expo-notifications.presentNotificationAsync` 发一条聚合提示，仅用于真机验收。
-
-### 4.20 expo-notifications 使用约束（v0.5 冻结）
-- 只有 `src/notifications/` 下的文件可以 import `expo-notifications`；UI、domain、data 层不得直接 import。
-- 必须在 app 入口（`app.config.*` / `app.json`）配置 expo-notifications plugin；不得依赖运行期申请权限的隐式行为。
-- Android 13+ 的 POST_NOTIFICATIONS 权限必须显式申请，拒绝后必须能降级为“无通知”而不是崩溃。
-- notification identifier 必须是 `occurrenceKey`，不得另造 ID；这样对账可以纯靠 identifier 前缀和集合 diff 完成。
-- 单条 reminder 最多调度 30 个通知；`listEnabledReminders` 规模 × 30 若超过 500，需在 reconcile 中对最远的一批跳过并记录 warning，不得静默截断。
-
-### 4.21 Hermes Intl polyfill（v0.5 必须处理）
-- 切片 4 遗留风险：`@date-fns/tz` 依赖完整 `Intl.DateTimeFormat` 的 `timeZone` 支持；Hermes 默认不保证。
-- 切片 5 必须在 app 入口最早处引入 FormatJS polyfill，至少覆盖：`Intl.DateTimeFormat`（含 `timeZone`）、`Intl.Locale`、`Intl.getCanonicalLocales`，并加载 `Asia/Shanghai`、`America/New_York` 所需 locale data。
-- 该 polyfill 不得影响 Jest 环境；Jest 已有显式 tzid 隔离，polyfill 只应在 RN 入口生效。
-- 真机验收必须包含一条 DST 时区的规则（建议 `America/New_York`），验证 `expandOccurrences` 在 Hermes 下的结果与 Jest 一致。
-
-### 4.22 调试入口约定（v0.5 新增）
-- 允许在 `src/app/` 下新增一个仅 `__DEV__` 可见的调试页，用于：创建/删除 reminder、手动触发 `reconcile()`、查看 `getAllScheduledNotificationsAsync()` 结果、触发一次聚合补提醒通知。
-- 调试页不是正式 UI，不得被正式导航入口引用；切片 6 正式 UI 完成后可保留在 dev 菜单。
-- 调试页不得绕过 Repository 直接写库。
-
-### 4.23 Item 时间字段与 schema v4（v0.6 冻结）
-- schema 版本 3→4，Item 新增字段：
-  - startAt: number | null（绝对毫秒时间戳；null 表示未安排）
-  - endAt: number | null（绝对毫秒时间戳；null 表示无结束时间）
-  - allDay: boolean（默认 false）
-- 这三个字段供切片 7 的今日/本周视图分组使用；切片 6 只做数据模型与编辑入口。
-- migration 追加 `toVersion: 4`；v3 step 不动；不得清库。
-- Item 既有字段（id/type/title/content/status/createdAt/updatedAt）不变；type 枚举不变。
-- 时间字段的时区语义：startAt/endAt 是绝对时刻；分组展示时按设备当前 IANA 时区解释（切片 7 契约）。
-- allDay=true 时 startAt 表示设备时区当天 00:00；endAt 可为 null。
-
-### 4.24 Repository 扩展（v0.6 冻结）
-新增方法，签名冻结：
-- getItemById(id: string): Promise<ItemWithTags | null>
-- updateItemTime(id: string, patch: { startAt?: number | null; endAt?: number | null; allDay?: boolean }): Promise<Item>
-
-规则：
-- 保留 v0.2/v0.3 的 updateItem 不变；时间字段只走 updateItemTime，避免与 title/content patch 混淆。
-- updateItemTime 必须同时更新 updatedAt；不得改 createdAt。
-- startAt 与 endAt 同时非 null 时，endAt 必须 >= startAt，否则抛明确错误。
-
-### 4.25 Reminder 时区白名单（v0.6 冻结）
-- 允许的 tzid 仅：`Asia/Shanghai`、`America/New_York`。
-- UI 时区选择器只展示这两个；Repository.createReminder / updateReminder 遇到白名单外 tzid 必须抛明确错误。
-- DB 中已存在白名单外 tzid 的 reminder（如切片 5 调试数据）：详情页只读展示并标注“该时区暂不支持编辑”，不得自动改写 tzid，不得删除。
-- 理由：Hermes polyfill 用 `add-golden-tz`，只含这两个时区数据；其他时区在真机未验证。
-- 扩展白名单必须先换 `add-all-tz` 并真机验证，再改本节；AI 不得自行替换 polyfill 策略。
-
-### 4.26 通知点击跳转契约（v0.6 冻结）
-- 通知 data 必须含 occurrenceKey、reminderId、itemId（切片 5 已实现）。
-- 点击通知（前台、后台、冷启动三种路径）必须导航到 Item 详情页。
-- Item 不存在时显示“条目已删除”占位页，不崩溃。
-- 通知点击不得自动标记 Item 完成，不得自动 acknowledge missed；missed 确认在后续切片。
-
-### 4.27 详情页与编辑页契约（v0.6）
-- 详情页：`src/app/item/[id].tsx`；编辑页：`src/app/item/[id]/edit.tsx`（或等价的 modal 路由，以项目现有导航为准）。
-- 详情页展示：title、type、content、tags、startAt/endAt（按设备当前 IANA 时区格式化）、allDay、reminders 列表（frequency、localTime、weekdays/dayOfMonth、tzid、enabled、lastReconciledAt）、status。
-- 编辑页可改：title、content、type、startAt/endAt/allDay、tags。
-- Reminder 的创建/编辑/删除在详情页内完成，不在编辑页；删除 reminder 必须同时 `cancelForReminder`。
-- 保存涉及 reminder 或 Item 状态变更后必须调用 `reconcile()`；reconcile 失败不得阻断保存，错误写日志并在详情页 dev 信息区可见。
-
-### 4.28 missed 正式展示推迟（v0.6 记录）
-- 切片 6 不实现 missed 的正式 UI 展示；已知缺口：用户可能错过提醒而不知道。
-- `getLastAutoReconcileResult()` 仍在 dev 调试页可见。
-- 不得在切片 6 用 AsyncStorage 临时存 missed 来“先凑合”；missed 持久化与展示必须在后续切片以 schema 变更方式正式设计，避免数据一致性债务。
-
-### 4.29 今日/本周定义（v0.6 预冻结，切片 7 实现）
-- 以设备当前 IANA 时区为准；reminder 的 tzid 不影响视图分组。
-- 今日：设备时区当天 00:00–24:00；本周：设备时区周一 00:00 至下周一 00:00。
-- 无 startAt 的 Item 不进入今日/本周；是否用 createdAt 进入“今日创建”分组在切片 7 决定。
-- “以设备时区为准”在切片 7 前不改；其余细节可在切片 7 任务卡中微调。
-
-### 4.30 依赖与 UI 库约束（v0.6）
-- 允许新增日期时间选择器依赖（如 `@react-native-community/datetimepicker`），必须说明理由，且只用于编辑页/Reminder 表单。
-- 不得引入重量级 UI 框架（如 NativeBase、Tamagui、gluestack）或图标库全家桶；优先用现有组件与 RN 内置能力。
-- 不得引入新的状态库；详情页/编辑页状态用局部 state + Repository 读取。
+核心不可违反项（摘要素引，正文以契约文件为准）：
+- 数据只能经 Repository 访问；UI/domain 不得直接 import WatermelonDB 或 expo-notifications。
+- schema 变更必须升版本并追加 migration step；不得清库、不得修改已发布 step。
+- 已冻结接口签名（4.5/4.7/4.16/4.18/4.24）与冻结枚举（type；daily/weekly/monthly）不得改动。
+- DST：gap 跳过不平移、fold 取较早瞬间；occurrenceKey 必须确定性，禁止纯 UTC 标识。
+- Reminder tzid 白名单仅 Asia/Shanghai、America/New_York；通知 identifier 必须为 occurrenceKey。
+- missed 不得用 AsyncStorage 临时凑合；§5 构建配置不得删除或“简化”。
 
 ## 5. 构建与配置约束（不得“优化”或删除）
 
@@ -338,6 +84,7 @@ CreateReminderInput 不含 lastFiredOccurrenceKey / lastReconciledAt，由 Repos
    不得使用强制推送改写已推送历史；合并后保留切片分支以便追溯。
 10. 每个切片结束必须在 `tasks/slice-<编号>-closeout.md` 提交收尾移交，至少包含：环境事实、数据库/构建事实、代码地图、踩坑教训、遗留披露。closeout 必须纳入该切片提交，不能只留在会话里。
 11. 切片提交信息格式：`完成切片 N：<一句话摘要>`；closeout 可并入该提交，但必须能从 `git log` 追溯到对应切片。
+12. 上下文加载规则：docs/contracts/ 下的契约文件是受保护契约的正文，AGENTS.md §4 只是索引与不可违反摘要。新会话除 §7.1 要求外：开始切片前，按任务卡涉及的范围先读对应契约文件全文（数据模型/Repository/重复规则/通知/UI/构建）；§4 摘要与契约正文出现不一致时，以契约正文为准，并把不一致作为缺陷报告，不得静默采信任一方。
 
 ## 8. 当前切片
 
