@@ -24,8 +24,40 @@
 - `getLastAutoReconcileResult()` 仍在 dev 调试页可见。
 - 不得在切片 6 用 AsyncStorage 临时存 missed 来“先凑合”；missed 持久化与展示必须在后续切片以 schema 变更方式正式设计，避免数据一致性债务。
 
-## 4.29 今日/本周定义（v0.6 预冻结，切片 7 实现）
-- 以设备当前 IANA 时区为准；reminder 的 tzid 不影响视图分组。
-- 今日：设备时区当天 00:00–24:00；本周：设备时区周一 00:00 至下周一 00:00。
-- 无 startAt 的 Item 不进入今日/本周；是否用 createdAt 进入“今日创建”分组在切片 7 决定。
-- “以设备时区为准”在切片 7 前不改；其余细节可在切片 7 任务卡中微调。
+## 今日/本周视图（v0.7，切片 7 落地）
+
+### 时区与范围
+- 分组以设备当前 IANA 时区为准；reminder 的 tzid 不影响视图分组。
+- 今日：设备时区当天 00:00–24:00。
+- 本周：设备时区周一 00:00 至下周一 00:00。
+- 范围边界必须由领域层纯函数计算并显式传入 startMs/endMs；UI 不得自行用 new Date(y,m,d) 构造边界。
+
+### 分组
+- 今日视图三个分组，顺序固定：过期 → 已安排 → 今日创建。
+- 本周视图两个分组，顺序固定：过期 → 已安排（本周）。
+- 过期：endAt 非 null 且 endAt < now，且 status='active'。
+- 已安排：startAt 落在视图范围内；跨天 Item 满足 startAt < rangeEnd 且（endAt 为 null 时 startAt >= rangeStart，否则 endAt > rangeStart）。
+- 今日创建：startAt 为 null 且 createdAt 落在今日范围内；仅今日视图有此分组。
+- allDay=true 的 Item 进入已安排分组，展示“全天”，排序按 startAt（当天 00:00）参与。
+- 同一 Item 只进一个分组，优先级：过期 > 已安排 > 今日创建。
+
+### 排序
+- 过期：endAt 升序。
+- 已安排：startAt 升序；相同时 createdAt 升序。
+- 今日创建：createdAt 降序。
+
+### 状态与交互
+- 已安排和过期分组展示 status='active' 与 'done'；done 项置灰并排在同组末尾。
+- 今日创建分组只展示 status='active'。
+- 点击 Item 进入详情页。
+- 快速完成/取消完成必须触发一次 reconcile()；失败不阻断 UI，记录日志。
+- 归档/删除不在视图内提供，通过详情页操作。
+
+### 空态
+- 今日全空：显示“今天没有安排”+ 快速记录入口。
+- 本周全空：显示“本周没有安排”。
+- 单个分组为空时隐藏该分组标题，不展示空分组。
+
+### 刷新
+- 使用 WatermelonDB 响应式查询，Item/Reminder 变更后自动刷新。
+- 不轮询、不提供下拉刷新（可后置）。

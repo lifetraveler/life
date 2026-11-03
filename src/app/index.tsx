@@ -365,11 +365,18 @@ export default function IndexScreen() {
       </Pressable>
       <View style={styles.listHeaderRow}>
         <Text style={styles.sectionLabel}>已有记录</Text>
-        <Link href="/archived" asChild>
-          <Pressable hitSlop={8}>
-            <Text style={styles.archivedLink}>已归档</Text>
-          </Pressable>
-        </Link>
+        <View style={styles.listHeaderLinks}>
+          <Link href="/today" asChild>
+            <Pressable hitSlop={8}>
+              <Text style={styles.archivedLink}>今日</Text>
+            </Pressable>
+          </Link>
+          <Link href="/archived" asChild>
+            <Pressable hitSlop={8}>
+              <Text style={styles.archivedLink}>已归档</Text>
+            </Pressable>
+          </Link>
+        </View>
       </View>
       <SearchInput
         value={searchInput}
@@ -515,6 +522,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  listHeaderLinks: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
   },
   archivedLink: {
     fontSize: 13,
