@@ -6,7 +6,6 @@ import type {
   Reminder,
   UpdateReminderInput,
 } from '../domain/reminder';
-import { assertValidTimeZone } from '../domain/recurrence/civilTime';
 import { escapeLikePattern, normalizeSearchKeyword } from '../domain/search';
 import { normalizeTagName } from '../domain/tag';
 import type { ItemWithTags, Tag } from '../domain/tag';
@@ -14,6 +13,7 @@ import ItemModel from '../db/models/ItemModel';
 import ItemTagModel from '../db/models/ItemTagModel';
 import ReminderModel from '../db/models/ReminderModel';
 import TagModel from '../db/models/TagModel';
+import { assertValidItemTimePatch, assertValidItemTimeRange } from './itemTimeRules';
 import type { ItemRepository } from './ItemRepository';
 import {
   normalizeReminderRuleFields,
@@ -21,6 +21,7 @@ import {
   parseWeekdaysJson,
   serializeWeekdays,
 } from './reminderRuleMapping';
+import { assertWhitelistedReminderTz } from './reminderTzWhitelist';
 
 const ITEMS_TABLE = 'items';
 const TAGS_TABLE = 'tags';
@@ -48,6 +49,11 @@ function toDomainItem(model: ItemModel): Item {
     title: model.title,
     content: model.content,
     status: model.status,
+    // 切片 6（§4.23）：migration addColumns 对既有行不回填，读取层归一
+    // （null → null / all_day null → false），与 createItem 写入的缺省一致。
+    startAt: model.startAt ?? null,
+    endAt: model.endAt ?? null,
+    allDay: model.allDay ?? false,
     createdAt: model.createdAt.getTime(),
     updatedAt: model.updatedAt.getTime(),
   };
@@ -187,12 +193,20 @@ export class WatermelonItemRepository implements ItemRepository {
       throw new Error('createItem: title is required');
     }
 
+    // 切片 6（§4.24）：时间字段与 updateItemTime 同一套校验（有限性 + endAt >= startAt）。
+    assertValidItemTimePatch({ startAt: input.startAt, endAt: input.endAt });
+    assertValidItemTimeRange(input.startAt, input.endAt);
+
     const created = await this.db.write(async () => {
       const item = await this.db.get<ItemModel>(ITEMS_TABLE).create((record) => {
         record.type = input.type;
         record.title = title;
         record.content = input.content ?? '';
         record.status = 'active';
+        // §4.24：未传时 startAt/endAt 落 null、allDay 落 false。
+        record.startAt = input.startAt ?? null;
+        record.endAt = input.endAt ?? null;
+        record.allDay = input.allDay ?? false;
       });
       return item;
     });
@@ -429,10 +443,53 @@ export class WatermelonItemRepository implements ItemRepository {
     return models.length > 0 ? toDomainItem(models[0]) : null;
   }
 
+  /** 切片 6（§4.24 冻结）：按 id 取 ItemWithTags，不存在返回 null（详情页用）。 */
+  async getItemById(id: string): Promise<ItemWithTags | null> {
+    const found = await loadItemsWithTagsByItemQuery(
+      this.db,
+      this.db.get<ItemModel>(ITEMS_TABLE).query(Q.where('id', id)),
+    );
+    return found.length > 0 ? found[0] : null;
+  }
+
   /**
-   * 创建 Reminder（AGENTS.md §4.17/§4.18）：
+   * 切片 6（§4.24 冻结）：只更新时间字段；updatedAt 由 prepareUpdate 自动刷新。
+   * - patch 值必须为有限数字或 null（NaN/Infinity 抛错）；
+   * - 合并既有值后，startAt/endAt 同时非 null 时校验 endAt >= startAt；
+   * - 不改 createdAt，不触碰 title/content/type/status（时间只走本方法）。
+   */
+  async updateItemTime(
+    id: string,
+    patch: { startAt?: number | null; endAt?: number | null; allDay?: boolean },
+  ): Promise<Item> {
+    assertValidItemTimePatch(patch);
+
+    const updated = await this.db.write(async () => {
+      const record = await this.db.get<ItemModel>(ITEMS_TABLE).find(id);
+      const nextStartAt = patch.startAt !== undefined ? patch.startAt : (record.startAt ?? null);
+      const nextEndAt = patch.endAt !== undefined ? patch.endAt : (record.endAt ?? null);
+      assertValidItemTimeRange(nextStartAt, nextEndAt);
+
+      return record.update((draft) => {
+        if (patch.startAt !== undefined) {
+          draft.startAt = patch.startAt;
+        }
+        if (patch.endAt !== undefined) {
+          draft.endAt = patch.endAt;
+        }
+        if (patch.allDay !== undefined) {
+          draft.allDay = patch.allDay;
+        }
+      });
+    });
+
+    return toDomainItem(updated);
+  }
+
+  /**
+   * 创建 Reminder（AGENTS.md §4.17/§4.18；切片 6 §4.25 白名单）：
    * - 宿主 Item 必须存在（提醒一律经 reminders 表关联，Item 上不加字段）；
-   * - tzid 经 assertValidTimeZone 校验（只读复用切片 4 的纯函数，不改 recurrence/）；
+   * - tzid 必须在时区白名单内（§4.25），白名单外抛明确错误；
    * - 规则字段经 normalizeReminderRuleFields 归一化校验；
    * - lastFiredOccurrenceKey / lastReconciledAt 初始化为 null（§4.18）。
    */
@@ -441,7 +498,7 @@ export class WatermelonItemRepository implements ItemRepository {
     if (!owner) {
       throw new Error(`createReminder: item not found: ${input.itemId}`);
     }
-    assertValidTimeZone(input.tzid);
+    assertWhitelistedReminderTz(input.tzid);
     const startAt = normalizeStartAt(input.startAt);
     const fields = normalizeReminderRuleFields({
       frequency: input.frequency,
@@ -471,11 +528,15 @@ export class WatermelonItemRepository implements ItemRepository {
   }
 
   /**
-   * 更新 Reminder：仅规则字段与 enabled；tzid / itemId / id / createdAt 不可更新
-   * （tzid 为创建时写入语义，§4.17）；lastFiredOccurrenceKey / lastReconciledAt
-   * 只经 markReminderFired / markReminderReconciled 写入。
+   * 更新 Reminder：规则字段、enabled 与 tzid（切片 6）可更新；itemId / id / createdAt
+   * 不可更新。tzid 仅接受白名单值（§4.25；任务卡实现要求 5 允许在两个白名单值间切换），
+   * §4.17 的“不随系统时区自动改写”仅禁自动改写。lastFiredOccurrenceKey /
+   * lastReconciledAt 只经 markReminderFired / markReminderReconciled 写入。
    */
   async updateReminder(id: string, patch: UpdateReminderInput): Promise<Reminder> {
+    if (patch.tzid !== undefined) {
+      assertWhitelistedReminderTz(patch.tzid);
+    }
     return this.db.write(async () => {
       const record = await this.db.get<ReminderModel>(REMINDERS_TABLE).find(id);
       const current = toDomainReminder(record);
@@ -499,6 +560,9 @@ export class WatermelonItemRepository implements ItemRepository {
         draft.startAt = startAt;
         if (patch.enabled !== undefined) {
           draft.enabled = patch.enabled;
+        }
+        if (patch.tzid !== undefined) {
+          draft.tzid = patch.tzid;
         }
       });
 

@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 
 import { itemRepository } from '../data';
 import type { ItemWithTags } from '../domain/tag';
@@ -13,6 +13,7 @@ import TagChip from '../ui/TagChip';
  * 数据经 Repository 获取（listArchivedItems），不直接接触 WatermelonDB。
  */
 export default function ArchivedScreen() {
+  const router = useRouter();
   const [items, setItems] = useState<ItemWithTags[]>([]);
 
   const refresh = useCallback((): void => {
@@ -41,10 +42,12 @@ export default function ArchivedScreen() {
 
   const renderItem = useCallback(({ item }: { item: ItemWithTags }) => (
     <View style={styles.row}>
-      <Text style={styles.rowTitle}>{item.title}</Text>
-      <Text style={styles.rowMeta}>
-        {TYPE_LABELS[item.type]} · {formatTimestamp(item.updatedAt)}
-      </Text>
+      <Pressable onPress={() => router.push(`/item/${item.id}`)}>
+        <Text style={styles.rowTitle}>{item.title}</Text>
+        <Text style={styles.rowMeta}>
+          {TYPE_LABELS[item.type]} · {formatTimestamp(item.updatedAt)}
+        </Text>
+      </Pressable>
       <View style={styles.tagRow}>
         {item.tags.map((tag) => (
           <TagChip key={tag.id} label={tag.name} />
@@ -59,7 +62,7 @@ export default function ArchivedScreen() {
         </Pressable>
       </View>
     </View>
-  ), [handleUnarchive]);
+  ), [handleUnarchive, router]);
 
   return (
     <View style={styles.container}>

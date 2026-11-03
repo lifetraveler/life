@@ -3,11 +3,14 @@ import { appSchema, tableSchema } from '@nozbe/watermelondb';
 /**
  * schema 版本号：任何表/列变更必须 +1 并提供 migration（AGENTS.md §4.1 / §4.6）。
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export const schema = appSchema({
   version: SCHEMA_VERSION,
   tables: [
+    // 切片 6（AGENTS.md §4.23）：items 新增时间字段，schema v4。
+    // start_at / end_at 为绝对毫秒时间戳，null 表示未安排/无结束时间；all_day 默认 false。
+    // v1→v3 的列定义保持原样（AGENTS.md §4.6 已发布列不得修改）。
     tableSchema({
       name: 'items',
       columns: [
@@ -15,6 +18,9 @@ export const schema = appSchema({
         { name: 'title', type: 'string' },
         { name: 'content', type: 'string' },
         { name: 'status', type: 'string', isIndexed: true },
+        { name: 'start_at', type: 'number', isOptional: true },
+        { name: 'end_at', type: 'number', isOptional: true },
+        { name: 'all_day', type: 'boolean', isOptional: true },
         { name: 'created_at', type: 'number' },
         { name: 'updated_at', type: 'number' },
       ],

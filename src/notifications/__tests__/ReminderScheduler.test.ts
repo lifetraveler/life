@@ -58,6 +58,9 @@ function activeItem(id: string, title: string): Item {
     title,
     content: '',
     status: 'active',
+    startAt: null,
+    endAt: null,
+    allDay: false,
     createdAt: FIXED_NOW - 1,
     updatedAt: FIXED_NOW - 1,
   };
@@ -215,6 +218,15 @@ class FakeRepository implements ItemRepository {
 
   async removeTagFromItem(): Promise<void> {
     throw new Error('FakeRepository: removeTagFromItem 未实现');
+  }
+
+  // 切片 6（§4.24）新增接口方法：调度器单测不触及，为满足接口而存在。
+  async getItemById(): Promise<ItemWithTags | null> {
+    throw new Error('FakeRepository: getItemById 未实现');
+  }
+
+  async updateItemTime(): Promise<Item> {
+    throw new Error('FakeRepository: updateItemTime 未实现');
   }
 
   async createReminder(_input: CreateReminderInput): Promise<Reminder> {

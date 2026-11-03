@@ -23,6 +23,9 @@ import type { ItemWithTags, Tag } from '../domain/tag';
  *   listEnabledReminders / markReminderReconciled / markReminderFired：
  *   切片 5（§4.18）冻结签名。lastFiredOccurrenceKey / lastReconciledAt 由
  *   Repository 初始化为 null，仅调度器经 mark* 方法写入。
+ * - getItemById / updateItemTime：切片 6（§4.24）冻结签名。getItemById 返回
+ *   ItemWithTags | null；updateItemTime 只动时间字段并同时刷新 updatedAt，
+ *   startAt/endAt 同时非 null 时 endAt < startAt 抛明确错误。
  * - getItem：契约外显式扩展（与 observe* 同一先例）：ReminderScheduler 需要按 id
  *   读取 Item（完成/归档判定与通知文案），Item 不存在时返回 null。
  * 观察方法的返回值均为退订函数。
@@ -42,6 +45,13 @@ export interface ItemRepository {
   observeItemsWithTags(onNext: (items: ItemWithTags[]) => void): () => void;
   observeTags(onNext: (tags: Tag[]) => void): () => void;
   getItem(id: string): Promise<Item | null>;
+
+  // —— 切片 6：Item 时间字段（AGENTS.md §4.24，签名冻结）——
+  getItemById(id: string): Promise<ItemWithTags | null>;
+  updateItemTime(
+    id: string,
+    patch: { startAt?: number | null; endAt?: number | null; allDay?: boolean },
+  ): Promise<Item>;
 
   // —— 切片 5：reminders（AGENTS.md §4.18，签名冻结）——
   createReminder(input: CreateReminderInput): Promise<Reminder>;
