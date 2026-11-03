@@ -71,6 +71,8 @@ export default function RootLayout() {
       <StatusBar style="auto" />
       <Stack>
         <Stack.Screen name="index" options={{ title: '生活' }} />
+        <Stack.Screen name="today" options={{ title: '今日' }} />
+        <Stack.Screen name="week" options={{ title: '本周' }} />
         <Stack.Screen name="archived" options={{ title: '已归档' }} />
         <Stack.Screen name="item/[id]" options={{ title: '详情' }} />
         <Stack.Screen name="item/[id]/edit" options={{ title: '编辑' }} />

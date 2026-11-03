@@ -229,6 +229,31 @@ class FakeRepository implements ItemRepository {
     throw new Error('FakeRepository: updateItemTime 未实现');
   }
 
+  // 切片 7 视图查询方法：调度器单测不触及，为满足接口而存在。
+  async listScheduledItemsInRange(): Promise<ItemWithTags[]> {
+    throw new Error('FakeRepository: listScheduledItemsInRange 未实现');
+  }
+
+  async listOverdueItems(): Promise<ItemWithTags[]> {
+    throw new Error('FakeRepository: listOverdueItems 未实现');
+  }
+
+  async listUnscheduledItemsCreatedInRange(): Promise<ItemWithTags[]> {
+    throw new Error('FakeRepository: listUnscheduledItemsCreatedInRange 未实现');
+  }
+
+  observeScheduledItemsInRange(): () => void {
+    throw new Error('FakeRepository: observeScheduledItemsInRange 未实现');
+  }
+
+  observeOverdueItems(): () => void {
+    throw new Error('FakeRepository: observeOverdueItems 未实现');
+  }
+
+  observeUnscheduledItemsCreatedInRange(): () => void {
+    throw new Error('FakeRepository: observeUnscheduledItemsCreatedInRange 未实现');
+  }
+
   async createReminder(_input: CreateReminderInput): Promise<Reminder> {
     throw new Error('FakeRepository: createReminder 未实现');
   }

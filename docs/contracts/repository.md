@@ -76,3 +76,27 @@ CreateReminderInput 不含 lastFiredOccurrenceKey / lastReconciledAt，由 Repos
 - 保留 v0.2/v0.3 的 updateItem 不变；时间字段只走 updateItemTime，避免与 title/content patch 混淆。
 - updateItemTime 必须同时更新 updatedAt；不得改 createdAt。
 - startAt 与 endAt 同时非 null 时，endAt 必须 >= startAt，否则抛明确错误。
+
+
+## 视图查询接口（v0.7，切片 7 落地）
+
+签名冻结：
+
+- `listScheduledItemsInRange(rangeStartMs: number, rangeEndMs: number): Promise<ItemWithTags[]>`
+  - 命中条件：startAt 非 null 且 startAt ∈ [rangeStartMs, rangeEndMs)；或 startAt < rangeStartMs 且 endAt 非 null 且 endAt > rangeStartMs（跨天）。
+  - status 为 'active' 或 'done'；不返回 'archived'。
+  - 按 startAt 升序返回；startAt 相同时 createdAt 升序。
+
+- `listOverdueItems(nowMs: number): Promise<ItemWithTags[]>`
+  - 命中条件：endAt 非 null 且 endAt < nowMs 且 status='active'。
+  - 按 endAt 升序返回。
+
+- `listUnscheduledItemsCreatedInRange(rangeStartMs: number, rangeEndMs: number): Promise<ItemWithTags[]>`
+  - 命中条件：startAt 为 null 且 createdAt ∈ [rangeStartMs, rangeEndMs) 且 status='active'。
+  - 按 createdAt 降序返回。
+
+### 约束
+- 必须通过 WatermelonDB 查询实现，不得内存全表过滤。
+- 不新增 schema 索引；MVP 数据量下不加。后续若数据量 > 1000 且视图卡顿，以独立 schema 变更提案处理。
+- 跨天判定抽成纯函数 `overlapsRange(item, rangeStart, rangeEnd)`，Repository 与视图共用，不得各写一份。
+- 范围计算抽成纯函数 `getTodayRange(nowMs, tzid)` / `getWeekRange(nowMs, tzid)`，必须显式传 tzid，不得读设备默认时区。

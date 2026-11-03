@@ -407,17 +407,21 @@ export class WatermelonItemRepository implements ItemRepository {
         // 否则归档后行内仍滞留在观察列表中。
         .query(NOT_ARCHIVED, SORT_BY_UPDATED_DESC)
         .observe(),
-      this.db
-        .get<ItemTagModel>(ITEM_TAGS_TABLE)
-        .query(Q.sortBy('created_at', 'asc'))
-        .observe(),
-      this.db
-        .get<TagModel>(TAGS_TABLE)
-        .query()
-        .observe(),
+      this.itemTagsJoinQuery().observe(),
+      this.allTagsQuery().observe(),
       joinItemsWithTags,
       onNext,
     );
+  }
+
+  /** join 投影辅助：全量 item_tags，join 顺序 = created_at 升序（与 loadItemsWithTagsByItemQuery 一致）。 */
+  private itemTagsJoinQuery(): Query<ItemTagModel> {
+    return this.db.get<ItemTagModel>(ITEM_TAGS_TABLE).query(Q.sortBy('created_at', 'asc'));
+  }
+
+  /** join 投影辅助：全量 tags。 */
+  private allTagsQuery(): Query<TagModel> {
+    return this.db.get<TagModel>(TAGS_TABLE).query();
   }
 
   observeTags(onNext: (tags: Tag[]) => void): () => void {
@@ -484,6 +488,134 @@ export class WatermelonItemRepository implements ItemRepository {
     });
 
     return toDomainItem(updated);
+  }
+
+  // —— 切片 7：视图查询（repository.md「视图查询接口（v0.7）」，签名冻结）——
+  // 三个查询构建器为 list* 与 observe* 共用（同一份条件，保证两种入口结果一致）。
+  // 全部条件落 WatermelonDB 查询（SQLite），不做内存全表过滤；不加新索引。
+
+  /**
+   * 已安排：startAt ∈ [rangeStartMs, rangeEndMs)，或 startAt < rangeStartMs 且
+   * endAt ≠ null 且 endAt > rangeStartMs（跨天项）。status ∈ {active, done}（非 archived）。
+   * end_at / start_at 为可空列：与数值比较时 SQL 的 NULL 判定天然为假，无需显式非空条件。
+   */
+  private scheduledInRangeQuery(rangeStartMs: number, rangeEndMs: number): Query<ItemModel> {
+    return this.db
+      .get<ItemModel>(ITEMS_TABLE)
+      .query(
+        Q.where('status', Q.oneOf(['active', 'done'])),
+        Q.or(
+          Q.and(
+            Q.where('start_at', Q.gte(rangeStartMs)),
+            Q.where('start_at', Q.lt(rangeEndMs)),
+          ),
+          Q.and(
+            Q.where('start_at', Q.lt(rangeStartMs)),
+            Q.where('end_at', Q.gt(rangeStartMs)),
+          ),
+        ),
+        Q.sortBy('start_at', 'asc'),
+        Q.sortBy('created_at', 'asc'),
+      );
+  }
+
+  /** 过期：endAt ≠ null 且 endAt < nowMs 且 status = active（archived/done 均排除）。 */
+  private overdueQuery(nowMs: number): Query<ItemModel> {
+    return this.db
+      .get<ItemModel>(ITEMS_TABLE)
+      .query(
+        Q.where('end_at', Q.lt(nowMs)),
+        Q.where('status', 'active'),
+        Q.sortBy('end_at', 'asc'),
+        Q.sortBy('created_at', 'asc'),
+      );
+  }
+
+  /** 今日创建：startAt = null 且 createdAt ∈ [rangeStartMs, rangeEndMs) 且 status = active。 */
+  private unscheduledCreatedInRangeQuery(
+    rangeStartMs: number,
+    rangeEndMs: number,
+  ): Query<ItemModel> {
+    return this.db
+      .get<ItemModel>(ITEMS_TABLE)
+      .query(
+        Q.where('start_at', null),
+        Q.where('status', 'active'),
+        Q.where('created_at', Q.gte(rangeStartMs)),
+        Q.where('created_at', Q.lt(rangeEndMs)),
+        Q.sortBy('created_at', 'desc'),
+      );
+  }
+
+  async listScheduledItemsInRange(
+    rangeStartMs: number,
+    rangeEndMs: number,
+  ): Promise<ItemWithTags[]> {
+    return loadItemsWithTagsByItemQuery(this.db, this.scheduledInRangeQuery(rangeStartMs, rangeEndMs));
+  }
+
+  async listOverdueItems(nowMs: number): Promise<ItemWithTags[]> {
+    return loadItemsWithTagsByItemQuery(this.db, this.overdueQuery(nowMs));
+  }
+
+  async listUnscheduledItemsCreatedInRange(
+    rangeStartMs: number,
+    rangeEndMs: number,
+  ): Promise<ItemWithTags[]> {
+    return loadItemsWithTagsByItemQuery(
+      this.db,
+      this.unscheduledCreatedInRangeQuery(rangeStartMs, rangeEndMs),
+    );
+  }
+
+  observeScheduledItemsInRange(
+    rangeStartMs: number,
+    rangeEndMs: number,
+    onNext: (items: ItemWithTags[]) => void,
+  ): () => void {
+    return combineLatest3(
+      this.scheduledInRangeQuery(rangeStartMs, rangeEndMs).observeWithColumns([
+        // Query.observe() 只在匹配集合成员变化时发射（processChangeSet），status 在
+        // active|done 之间翻转不改变成员资格（仍匹配 scheduled 条件），但会改变
+        // done-last 排序与行展示——必须按列订阅才能捕获字段级变化。
+        'status',
+        'start_at',
+        'end_at',
+        'all_day',
+      ]),
+      this.itemTagsJoinQuery().observe(),
+      this.allTagsQuery().observe(),
+      joinItemsWithTags,
+      onNext,
+    );
+  }
+
+  observeOverdueItems(nowMs: number, onNext: (items: ItemWithTags[]) => void): () => void {
+    return combineLatest3(
+      // end_at 在过期集合内变化（仍是过去时刻）不改变成员资格但改变 endAt↑ 排序；
+      // status 翻转虽会移出集合（成员变化必发射），列订阅保证一致语义。
+      this.overdueQuery(nowMs).observeWithColumns(['status', 'end_at']),
+      this.itemTagsJoinQuery().observe(),
+      this.allTagsQuery().observe(),
+      joinItemsWithTags,
+      onNext,
+    );
+  }
+
+  observeUnscheduledItemsCreatedInRange(
+    rangeStartMs: number,
+    rangeEndMs: number,
+    onNext: (items: ItemWithTags[]) => void,
+  ): () => void {
+    return combineLatest3(
+      // 本查询 status 仅取 active：翻转即成员变化，observe() 本就会发射；
+      // 仍统一用 observeWithColumns 与另两个视图订阅保持同一语义口径（防御性）。
+      this.unscheduledCreatedInRangeQuery(rangeStartMs, rangeEndMs).observeWithColumns(['status']),
+      this.itemTagsJoinQuery().observe(),
+      this.allTagsQuery().observe(),
+      joinItemsWithTags,
+      onNext,
+    );
   }
 
   /**

@@ -28,6 +28,12 @@ import type { ItemWithTags, Tag } from '../domain/tag';
  *   startAt/endAt 同时非 null 时 endAt < startAt 抛明确错误。
  * - getItem：契约外显式扩展（与 observe* 同一先例）：ReminderScheduler 需要按 id
  *   读取 Item（完成/归档判定与通知文案），Item 不存在时返回 null。
+ * - listScheduledItemsInRange / listOverdueItems / listUnscheduledItemsCreatedInRange：
+ *   切片 7（docs/contracts/repository.md「视图查询接口（v0.7）」）签名冻结。
+ * - observeScheduledItemsInRange / observeOverdueItems / observeUnscheduledItemsCreatedInRange：
+ *   契约外显式扩展（与 observeItemsWithTags 同一先例）：切片 7 视图页要求 WatermelonDB
+ *   响应式查询自动刷新（ui.md「刷新」节），而 UI 层不得直接访问 WatermelonDB，
+ *   因此观察入口只能由 data 层提供；语义与对应 list* 方法完全一致。返回退订函数。
  * 观察方法的返回值均为退订函数。
  */
 export interface ItemRepository {
@@ -52,6 +58,24 @@ export interface ItemRepository {
     id: string,
     patch: { startAt?: number | null; endAt?: number | null; allDay?: boolean },
   ): Promise<Item>;
+
+  // —— 切片 7：视图查询（repository.md「视图查询接口（v0.7）」，签名冻结）——
+  listScheduledItemsInRange(rangeStartMs: number, rangeEndMs: number): Promise<ItemWithTags[]>;
+  listOverdueItems(nowMs: number): Promise<ItemWithTags[]>;
+  listUnscheduledItemsCreatedInRange(rangeStartMs: number, rangeEndMs: number): Promise<ItemWithTags[]>;
+
+  // —— 切片 7：视图响应式扩展（契约外显式扩展，语义与对应 list* 一致）——
+  observeScheduledItemsInRange(
+    rangeStartMs: number,
+    rangeEndMs: number,
+    onNext: (items: ItemWithTags[]) => void,
+  ): () => void;
+  observeOverdueItems(nowMs: number, onNext: (items: ItemWithTags[]) => void): () => void;
+  observeUnscheduledItemsCreatedInRange(
+    rangeStartMs: number,
+    rangeEndMs: number,
+    onNext: (items: ItemWithTags[]) => void,
+  ): () => void;
 
   // —— 切片 5：reminders（AGENTS.md §4.18，签名冻结）——
   createReminder(input: CreateReminderInput): Promise<Reminder>;
