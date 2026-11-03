@@ -94,3 +94,5 @@ type Occurrence = {
 - occurrenceKey 的构造格式示例
 - 未完成项与风险
 - 是否触碰受保护契约（应为“否”；若为“是”，附变更提案）
+
+> 契约位置已迁移（2026-11）：AGENTS.md §4 拆分至 docs/contracts/，本文件引用的 4.14→docs/contracts/recurrence.md；完整映射见 AGENTS.md §4 索引；本文件为历史记录，正文未改。

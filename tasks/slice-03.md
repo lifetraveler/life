@@ -50,3 +50,5 @@
 - 真机验收每一步的实际观察
 - 未完成项与风险
 - 是否触碰受保护契约（应为“否”）
+
+> 契约位置已迁移（2026-11）：AGENTS.md §4 拆分至 docs/contracts/，本文件引用的 4.9→docs/contracts/repository.md；完整映射见 AGENTS.md §4 索引；本文件为历史记录，正文未改。
