@@ -32,8 +32,11 @@ export interface ViewTimeRange {
  * 民用 00:00 不存在——此时按 DST gap「跳过不平移」取当天最早存在的整点，
  * 保证范围起点仍是该民用日的合法瞬间。秋季 fold 时 resolveCivilTimeToInstant
  * 已返回较早瞬间。
+ *
+ * 切片 8 起导出复用：src/data/allDayNormalize.ts 归一化 allDay startAt 用
+ * 同一「当天起点」语义，保证视图范围与全天项起点严格一致。
  */
-function resolveDayStart(tzid: string, date: CivilDate): number {
+export function resolveDayStart(tzid: string, date: CivilDate): number {
   const atMidnight = resolveCivilTimeToInstant(tzid, date.year, date.month, date.day, 0, 0);
   if (atMidnight !== null) {
     return atMidnight;

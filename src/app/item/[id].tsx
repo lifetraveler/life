@@ -164,6 +164,38 @@ export default function ItemDetailPage() {
     ]);
   };
 
+  /** 切片 8：删除本地副本（data-model.md v0.8：删除即从本地库移除，不影响外部来源）。 */
+  const handleDeleteLocalCopy = async (): Promise<void> => {
+    if (!id) {
+      return;
+    }
+    try {
+      // 先取消该条目全部提醒的系统通知（契约顺序：cancel 成功才动存储），再删行。
+      for (const reminder of reminders) {
+        await reminderScheduler.cancelForReminder(reminder.id);
+      }
+      await itemRepository.deleteItem(id);
+      await reconcileAfterSave('删除本地副本');
+      router.back();
+    } catch (error) {
+      console.warn('[slice-08] 删除本地副本失败', error);
+      setActionError(`删除本地副本失败：${String(error)}`);
+    }
+  };
+
+  const confirmDeleteLocalCopy = (): void => {
+    Alert.alert('删除本地副本', '将从本地库删除该条目及其提醒，不影响外部来源的 ICS 文件。', [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '删除',
+        style: 'destructive',
+        onPress: () => {
+          void handleDeleteLocalCopy();
+        },
+      },
+    ]);
+  };
+
   if (item === undefined) {
     return (
       <View style={styles.container}>
@@ -188,12 +220,19 @@ export default function ItemDetailPage() {
     <ScrollView style={styles.scroll} contentContainerStyle={styles.container}>
       <View style={styles.headerRow}>
         <Text style={styles.title}>{item.title}</Text>
-        <Pressable
-          style={styles.secondaryButton}
-          onPress={() => router.push(`/item/${item.id}/edit`)}
-        >
-          <Text style={styles.secondaryText}>编辑</Text>
-        </Pressable>
+        {item.sourceReadOnly ? (
+          // 切片 8：只读项隐藏「编辑」入口，展示来源徽标（tasks/slice-08.md 实现要求 6）。
+          <View style={styles.sourceBadge}>
+            <Text style={styles.sourceBadgeText}>来源：ICS（只读）</Text>
+          </View>
+        ) : (
+          <Pressable
+            style={styles.secondaryButton}
+            onPress={() => router.push(`/item/${item.id}/edit`)}
+          >
+            <Text style={styles.secondaryText}>编辑</Text>
+          </Pressable>
+        )}
       </View>
       <Text style={styles.meta}>
         {TYPE_LABELS[item.type] ?? item.type} · 状态 {item.status}
@@ -206,6 +245,21 @@ export default function ItemDetailPage() {
           {item.tags.map((tag) => (
             <TagChip key={tag.id} label={tag.name} />
           ))}
+        </View>
+      ) : null}
+
+      {item.sourceReadOnly ? (
+        <View style={styles.sectionBox}>
+          <Text style={styles.sectionTitle}>外部来源</Text>
+          <Text style={styles.meta}>
+            此条目来自 ICS 导入：时间/标题/内容只读，可完成、可归档、可删除本地副本。
+          </Text>
+          <Pressable
+            style={[styles.secondaryButton, styles.dangerButton, styles.sourceDeleteButton]}
+            onPress={confirmDeleteLocalCopy}
+          >
+            <Text style={[styles.secondaryText, styles.dangerText]}>删除本地副本</Text>
+          </Pressable>
         </View>
       ) : null}
 
@@ -417,5 +471,19 @@ const styles = StyleSheet.create({
   devText: {
     fontSize: 12,
     color: '#666',
+  },
+  sourceBadge: {
+    backgroundColor: '#eef2ff',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  sourceBadgeText: {
+    fontSize: 12,
+    color: '#4f46e5',
+  },
+  sourceDeleteButton: {
+    marginTop: 8,
+    alignSelf: 'flex-start',
   },
 });

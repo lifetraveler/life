@@ -1,6 +1,6 @@
 import { Database, Q, Query } from '@nozbe/watermelondb';
 
-import type { CreateItemInput, Item, UpdateItemInput } from '../domain/item';
+import type { CreateItemInput, ImportedItemInput, Item, UpdateItemInput } from '../domain/item';
 import type {
   CreateReminderInput,
   Reminder,
@@ -13,8 +13,10 @@ import ItemModel from '../db/models/ItemModel';
 import ItemTagModel from '../db/models/ItemTagModel';
 import ReminderModel from '../db/models/ReminderModel';
 import TagModel from '../db/models/TagModel';
+import { normalizeAllDayTimestamps } from './allDayNormalize';
+import { getDeviceTzid } from './deviceTimezone';
 import { assertValidItemTimePatch, assertValidItemTimeRange } from './itemTimeRules';
-import type { ItemRepository } from './ItemRepository';
+import type { ImportBatchResult, ItemRepository } from './ItemRepository';
 import {
   normalizeReminderRuleFields,
   normalizeStartAt,
@@ -27,6 +29,19 @@ const ITEMS_TABLE = 'items';
 const TAGS_TABLE = 'tags';
 const ITEM_TAGS_TABLE = 'item_tags';
 const REMINDERS_TABLE = 'reminders';
+
+/** repository.md v0.8：导入超过 500 条时分批写入，每批 100 条。 */
+const IMPORT_BATCH_SIZE = 100;
+
+/** 切片 8：导入项预处理结果（createImportedItem / importItemsInBatches 共用）。 */
+interface PreparedImportedItem {
+  title: string;
+  content: string;
+  startAt: number;
+  endAt: number | null;
+  allDay: boolean;
+  sourceUid: string | null;
+}
 
 /** §4.7 默认列表语义：未归档（含 active/done），未删除（本应用不物理删除 Item）。 */
 const NOT_ARCHIVED = Q.where('status', Q.notEq('archived'));
@@ -54,6 +69,11 @@ function toDomainItem(model: ItemModel): Item {
     startAt: model.startAt ?? null,
     endAt: model.endAt ?? null,
     allDay: model.allDay ?? false,
+    // 切片 8（data-model.md v0.8）：外部来源字段，migration 不回填，读取层归一：
+    // 迁移前的既有行 → ('local', null, false)；新行由 Repository 写入显式值。
+    sourceType: model.sourceType ?? 'local',
+    sourceUid: model.sourceUid ?? null,
+    sourceReadOnly: model.sourceReadOnly ?? false,
     createdAt: model.createdAt.getTime(),
     updatedAt: model.updatedAt.getTime(),
   };
@@ -183,8 +203,16 @@ function combineLatest3<T1, T2, T3, R>(
 export class WatermelonItemRepository implements ItemRepository {
   private readonly db: Database;
 
-  constructor(db: Database) {
+  /**
+   * 设备时区读取（切片 8）：allDay startAt 归一化按「设备当前 IANA 时区」执行。
+   * 默认实现读 Intl；第二参可注入替换，便于单测固定时区（不改动冻结的
+   * ItemRepository 接口，仅影响具体类构造）。
+   */
+  private readonly deviceTzid: () => string;
+
+  constructor(db: Database, deviceTzid: () => string = getDeviceTzid) {
     this.db = db;
+    this.deviceTzid = deviceTzid;
   }
 
   async createItem(input: CreateItemInput): Promise<Item> {
@@ -195,7 +223,14 @@ export class WatermelonItemRepository implements ItemRepository {
 
     // 切片 6（§4.24）：时间字段与 updateItemTime 同一套校验（有限性 + endAt >= startAt）。
     assertValidItemTimePatch({ startAt: input.startAt, endAt: input.endAt });
-    assertValidItemTimeRange(input.startAt, input.endAt);
+    // 切片 8（§4.23）：allDay=true 时 startAt 归一为设备时区当天 00:00；区间校验用归一后的值。
+    const normalized = normalizeAllDayTimestamps(
+      input.startAt ?? null,
+      input.endAt ?? null,
+      input.allDay ?? false,
+      this.deviceTzid(),
+    );
+    assertValidItemTimeRange(normalized.startAt, normalized.endAt);
 
     const created = await this.db.write(async () => {
       const item = await this.db.get<ItemModel>(ITEMS_TABLE).create((record) => {
@@ -204,9 +239,14 @@ export class WatermelonItemRepository implements ItemRepository {
         record.content = input.content ?? '';
         record.status = 'active';
         // §4.24：未传时 startAt/endAt 落 null、allDay 落 false。
-        record.startAt = input.startAt ?? null;
-        record.endAt = input.endAt ?? null;
+        record.startAt = normalized.startAt;
+        record.endAt = normalized.endAt;
         record.allDay = input.allDay ?? false;
+        // 切片 8（data-model.md v0.8）：本地创建固定 ('local', null, false)；
+        // 外部来源三字段仅经 createImportedItem 写入。
+        record.sourceType = 'local';
+        record.sourceUid = null;
+        record.sourceReadOnly = false;
       });
       return item;
     });
@@ -236,6 +276,16 @@ export class WatermelonItemRepository implements ItemRepository {
   async updateItem(id: string, patch: UpdateItemInput): Promise<Item> {
     const updated = await this.db.write(async () => {
       const record = await this.db.get<ItemModel>(ITEMS_TABLE).find(id);
+      // 切片 8（data-model.md v0.8）：外部来源只读护栏 —— source_read_only=true 的
+      // 导入项禁改 title/content/type；status（完成/取消完成、归档/取消归档）仍可更新。
+      if (
+        (record.sourceReadOnly ?? false)
+        && (patch.title !== undefined || patch.content !== undefined || patch.type !== undefined)
+      ) {
+        throw new Error(
+          'updateItem: item is source read-only (imported); only status may be updated',
+        );
+      }
       return record.update((draft) => {
         if (patch.title !== undefined) {
           const title = patch.title.trim();
@@ -460,6 +510,11 @@ export class WatermelonItemRepository implements ItemRepository {
    * 切片 6（§4.24 冻结）：只更新时间字段；updatedAt 由 prepareUpdate 自动刷新。
    * - patch 值必须为有限数字或 null（NaN/Infinity 抛错）；
    * - 合并既有值后，startAt/endAt 同时非 null 时校验 endAt >= startAt；
+   * - 切片 8（§4.23）：合并后 allDay=true（含经 patch 翻转为 true）时 startAt
+   *   归一为设备时区当天 00:00，区间校验与落库均用归一后的值；
+   * - 切片 8 只读护栏（data-model.md「source_read_only」）：sourceReadOnly=true 的
+   *   条目「不可编辑时间」，本方法对其抛错（与 updateItem 的标题/内容护栏同一逻辑；
+   *   既有本地行 sourceReadOnly=false 不受影响）。
    * - 不改 createdAt，不触碰 title/content/type/status（时间只走本方法）。
    */
   async updateItemTime(
@@ -470,16 +525,27 @@ export class WatermelonItemRepository implements ItemRepository {
 
     const updated = await this.db.write(async () => {
       const record = await this.db.get<ItemModel>(ITEMS_TABLE).find(id);
+      if (record.sourceReadOnly ?? false) {
+        throw new Error(
+          'updateItemTime: item is source read-only (imported); time fields may not be updated',
+        );
+      }
       const nextStartAt = patch.startAt !== undefined ? patch.startAt : (record.startAt ?? null);
       const nextEndAt = patch.endAt !== undefined ? patch.endAt : (record.endAt ?? null);
-      assertValidItemTimeRange(nextStartAt, nextEndAt);
+      const nextAllDay = patch.allDay !== undefined ? patch.allDay : (record.allDay ?? false);
+      const normalized = normalizeAllDayTimestamps(nextStartAt, nextEndAt, nextAllDay, this.deviceTzid());
+      assertValidItemTimeRange(normalized.startAt, normalized.endAt);
+
+      // 仅在值确实变化时赋值，避免无谓的 updatedAt 刷新（如仅翻转 allDay 之外的空 patch）。
+      const shouldWriteStartAt = patch.startAt !== undefined || normalized.startAt !== nextStartAt;
+      const shouldWriteEndAt = patch.endAt !== undefined || normalized.endAt !== nextEndAt;
 
       return record.update((draft) => {
-        if (patch.startAt !== undefined) {
-          draft.startAt = patch.startAt;
+        if (shouldWriteStartAt) {
+          draft.startAt = normalized.startAt;
         }
-        if (patch.endAt !== undefined) {
-          draft.endAt = patch.endAt;
+        if (shouldWriteEndAt) {
+          draft.endAt = normalized.endAt;
         }
         if (patch.allDay !== undefined) {
           draft.allDay = patch.allDay;
@@ -488,6 +554,178 @@ export class WatermelonItemRepository implements ItemRepository {
     });
 
     return toDomainItem(updated);
+  }
+
+  // —— 切片 8：ICS 导入导出（repository.md「ICS 导入导出接口（v0.8，切片 8 落地）」）——
+
+  /**
+   * 导入项公共预处理：标题 trim 非空、时间 patch 校验、allDay 归一化、区间校验。
+   * createImportedItem 与 importItemsInBatches 共用，保证两条入口语义一致。
+   */
+  private prepareImportedItem(input: ImportedItemInput): PreparedImportedItem {
+    const title = input.title.trim();
+    if (title.length === 0) {
+      throw new Error('createImportedItem: title must not be blank');
+    }
+    assertValidItemTimePatch({ startAt: input.startAt, endAt: input.endAt });
+    const normalized = normalizeAllDayTimestamps(
+      input.startAt,
+      input.endAt,
+      input.allDay ?? false,
+      this.deviceTzid(),
+    );
+    assertValidItemTimeRange(normalized.startAt, normalized.endAt);
+    if (normalized.startAt === null) {
+      // ImportedItemInput.startAt 为必填 number，透传路径不会产生 null；此分支仅为收窄类型。
+      throw new Error('createImportedItem: startAt must not be null');
+    }
+    return {
+      title,
+      content: input.content ?? '',
+      startAt: normalized.startAt,
+      endAt: normalized.endAt,
+      allDay: input.allDay ?? false,
+      sourceUid: input.sourceUid,
+    };
+  }
+
+  /**
+   * repository.md v0.8 去重：sourceUid 非 null 且 (sourceType='ics', sourceUid) 已存在时
+   * 抛 DuplicateSourceUid；sourceUid 为 null 的 ICS 事件（无 UID）每次都作为新项插入。
+   * 必须在调用方的 db.write 事务内执行（与插入同事务，防并发窗口）。
+   */
+  private async assertNoDuplicateSourceUid(sourceUid: string | null): Promise<void> {
+    if (sourceUid === null) {
+      return;
+    }
+    const duplicates = await this.db
+      .get<ItemModel>(ITEMS_TABLE)
+      .query(Q.where('source_type', 'ics'), Q.where('source_uid', sourceUid))
+      .fetchCount();
+    if (duplicates > 0) {
+      throw new Error(
+        `DuplicateSourceUid: an item with sourceType=ics, sourceUid=${sourceUid} already exists`,
+      );
+    }
+  }
+
+  /** 预处理行的落库（调用方必须已处于 db.write 事务内）；type='event'/status='active' 为契约固定值。 */
+  private async insertImportedItemInTransaction(prepared: PreparedImportedItem): Promise<ItemWithTags> {
+    const created = await this.db.get<ItemModel>(ITEMS_TABLE).create((record) => {
+      record.type = 'event';
+      record.title = prepared.title;
+      record.content = prepared.content;
+      record.status = 'active';
+      record.startAt = prepared.startAt;
+      record.endAt = prepared.endAt;
+      record.allDay = prepared.allDay;
+      // 契约固定：导入项 sourceType='ics'、sourceReadOnly=true。
+      record.sourceType = 'ics';
+      record.sourceUid = prepared.sourceUid;
+      record.sourceReadOnly = true;
+    });
+    return { ...toDomainItem(created), tags: [] };
+  }
+
+  async createImportedItem(input: ImportedItemInput): Promise<ItemWithTags> {
+    const prepared = this.prepareImportedItem(input);
+    return this.db.write(async () => {
+      await this.assertNoDuplicateSourceUid(prepared.sourceUid);
+      return this.insertImportedItemInTransaction(prepared);
+    });
+  }
+
+  async findItemBySource(
+    sourceType: 'ics',
+    sourceUid: string,
+  ): Promise<ItemWithTags | null> {
+    const found = await loadItemsWithTagsByItemQuery(
+      this.db,
+      this.db
+        .get<ItemModel>(ITEMS_TABLE)
+        .query(Q.where('source_type', sourceType), Q.where('source_uid', sourceUid)),
+    );
+    return found[0] ?? null;
+  }
+
+  async listItemsForExport(filter: {
+    includeArchived: false;
+    includeDone: true;
+  }): Promise<ItemWithTags[]> {
+    // MVP 只支持固定 filter（repository.md v0.8）；运行时显式拒绝其他组合。
+    if (filter.includeArchived !== false || filter.includeDone !== true) {
+      throw new Error(
+        'listItemsForExport: only the fixed MVP filter {includeArchived: false, includeDone: true} is supported',
+      );
+    }
+    return loadItemsWithTagsByItemQuery(
+      this.db,
+      this.db
+        .get<ItemModel>(ITEMS_TABLE)
+        .query(NOT_ARCHIVED, Q.sortBy('created_at', 'asc')),
+    );
+  }
+
+  async updateImportedItemTime(
+    id: string,
+    patch: { startAt?: number | null; endAt?: number | null; allDay?: boolean },
+  ): Promise<Item> {
+    // 与 updateItemTime 同语义（含只读拒绝）：sourceReadOnly=true 时 updateItemTime 抛错。
+    return this.updateItemTime(id, patch);
+  }
+
+  /**
+   * 契约外显式扩展：删除本地副本（data-model.md v0.8「删除即从本地库移除，
+   * 不影响外部来源」）。关联 reminders 与 item_tags 一并物理删除；tags 保留。
+   */
+  async deleteItem(id: string): Promise<void> {
+    await this.db.write(async () => {
+      const record = await this.db.get<ItemModel>(ITEMS_TABLE).find(id);
+      const reminders = await this.db
+        .get<ReminderModel>(REMINDERS_TABLE)
+        .query(Q.where('item_id', id))
+        .fetch();
+      for (const reminder of reminders) {
+        await reminder.destroyPermanently();
+      }
+      const itemTags = await this.db
+        .get<ItemTagModel>(ITEM_TAGS_TABLE)
+        .query(Q.where('item_id', id))
+        .fetch();
+      for (const itemTag of itemTags) {
+        await itemTag.destroyPermanently();
+      }
+      await record.destroyPermanently();
+    });
+  }
+
+  /**
+   * 契约外显式扩展：批量导入（repository.md v0.8 约束）——每批 100 条一个事务；
+   * 批内单条失败只记入失败清单（重复计入 skippedDuplicateCount），不影响已成功项落库。
+   */
+  async importItemsInBatches(inputs: ImportedItemInput[]): Promise<ImportBatchResult> {
+    const result: ImportBatchResult = { createdCount: 0, skippedDuplicateCount: 0, failures: [] };
+    for (let offset = 0; offset < inputs.length; offset += IMPORT_BATCH_SIZE) {
+      const batch = inputs.slice(offset, offset + IMPORT_BATCH_SIZE);
+      await this.db.write(async () => {
+        for (const input of batch) {
+          try {
+            const prepared = this.prepareImportedItem(input);
+            await this.assertNoDuplicateSourceUid(prepared.sourceUid);
+            await this.insertImportedItemInTransaction(prepared);
+            result.createdCount += 1;
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            if (reason.startsWith('DuplicateSourceUid')) {
+              result.skippedDuplicateCount += 1;
+            } else {
+              result.failures.push({ title: input.title, sourceUid: input.sourceUid, reason });
+            }
+          }
+        }
+      });
+    }
+    return result;
   }
 
   // —— 切片 7：视图查询（repository.md「视图查询接口（v0.7）」，签名冻结）——

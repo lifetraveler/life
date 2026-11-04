@@ -3,7 +3,7 @@ import { appSchema, tableSchema } from '@nozbe/watermelondb';
 /**
  * schema 版本号：任何表/列变更必须 +1 并提供 migration（AGENTS.md §4.1 / §4.6）。
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export const schema = appSchema({
   version: SCHEMA_VERSION,
@@ -21,6 +21,14 @@ export const schema = appSchema({
         { name: 'start_at', type: 'number', isOptional: true },
         { name: 'end_at', type: 'number', isOptional: true },
         { name: 'all_day', type: 'boolean', isOptional: true },
+        // 切片 8（data-model.md v0.8）：外部来源字段，schema v5。
+        // 三列全部 isOptional：WatermelonDB add_columns 迁移对非可选列会把既有行强制回填
+        // 类型零值（string → ''），违反「既有行不回填、读取层 ?? 'local' 归一」的契约语义；
+        // isOptional 列迁移时回填 null，既有行经 toDomainItem 归一为 ('local', null, false)。
+        // (sourceType, sourceUid) 唯一性由 Repository 先查后写保证，不建 SQLite 唯一索引。
+        { name: 'source_type', type: 'string', isOptional: true },
+        { name: 'source_uid', type: 'string', isOptional: true },
+        { name: 'source_read_only', type: 'boolean', isOptional: true },
         { name: 'created_at', type: 'number' },
         { name: 'updated_at', type: 'number' },
       ],

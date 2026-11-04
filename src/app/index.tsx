@@ -376,6 +376,11 @@ export default function IndexScreen() {
               <Text style={styles.archivedLink}>已归档</Text>
             </Pressable>
           </Link>
+          <Link href="/settings" asChild>
+            <Pressable hitSlop={8}>
+              <Text style={styles.archivedLink}>设置</Text>
+            </Pressable>
+          </Link>
         </View>
       </View>
       <SearchInput

@@ -1,10 +1,29 @@
-import type { CreateItemInput, Item, UpdateItemInput } from '../domain/item';
+import type { CreateItemInput, ImportedItemInput, Item, UpdateItemInput } from '../domain/item';
 import type {
   CreateReminderInput,
   Reminder,
   UpdateReminderInput,
 } from '../domain/reminder';
 import type { ItemWithTags, Tag } from '../domain/tag';
+
+/**
+ * 切片 8：批量导入的单条失败记录
+ * （repository.md v0.8「失败清单作为返回值上报」）。
+ */
+export interface ImportBatchFailure {
+  title: string;
+  sourceUid: string | null;
+  reason: string;
+}
+
+/**
+ * 切片 8：批量导入结果（repository.md v0.8 批量导入约束）。
+ */
+export interface ImportBatchResult {
+  createdCount: number;
+  skippedDuplicateCount: number;
+  failures: ImportBatchFailure[];
+}
 
 /**
  * Repository 接口（AGENTS.md §4.2 / §4.5 / §4.7）。
@@ -34,6 +53,17 @@ import type { ItemWithTags, Tag } from '../domain/tag';
  *   契约外显式扩展（与 observeItemsWithTags 同一先例）：切片 7 视图页要求 WatermelonDB
  *   响应式查询自动刷新（ui.md「刷新」节），而 UI 层不得直接访问 WatermelonDB，
  *   因此观察入口只能由 data 层提供；语义与对应 list* 方法完全一致。返回退订函数。
+ * - createImportedItem / findItemBySource / listItemsForExport / updateImportedItemTime：
+ *   切片 8（docs/contracts/repository.md「ICS 导入导出接口（v0.8，切片 8 落地）」）签名冻结。
+ *   createImportedItem 对 (sourceType='ics', sourceUid) 重复抛 DuplicateSourceUid，
+ *   不做 upsert；updateImportedItemTime 与 updateItemTime 同语义（含只读拒绝，
+ *   source_read_only=true 抛明确错误）。
+ * - deleteItem：契约外显式扩展（与 observe* 同一先例）：切片 8 只读项需要
+ *   「删除本地副本」（repository.md v0.8 只删本地行、不影响源 ICS；关联 reminders
+ *   与 item_tags 一并物理删除，tags 保留）。随本扩展在文件头记录先例依据。
+ * - importItemsInBatches：契约外显式扩展（与 observe* 同一先例）：repository.md v0.8
+ *   要求「Repository 层分批写入（每批 100 条）、单条失败不整批回滚、失败清单作为
+ *   返回值上报」，故批量写入辅助归入 Repository 接口。
  * 观察方法的返回值均为退订函数。
  */
 export interface ItemRepository {
@@ -85,4 +115,17 @@ export interface ItemRepository {
   listEnabledReminders(): Promise<Reminder[]>;
   markReminderReconciled(id: string, lastReconciledAt: number): Promise<void>;
   markReminderFired(id: string, occurrenceKey: string): Promise<void>;
+
+  // —— 切片 8：ICS 导入导出（repository.md「ICS 导入导出接口（v0.8，切片 8 落地）」，签名冻结）——
+  createImportedItem(input: ImportedItemInput): Promise<ItemWithTags>;
+  findItemBySource(sourceType: 'ics', sourceUid: string): Promise<ItemWithTags | null>;
+  listItemsForExport(filter: { includeArchived: false; includeDone: true }): Promise<ItemWithTags[]>;
+  updateImportedItemTime(
+    id: string,
+    patch: { startAt?: number | null; endAt?: number | null; allDay?: boolean },
+  ): Promise<Item>;
+
+  // —— 切片 8：契约外显式扩展（先例依据见文件头 doc）——
+  deleteItem(id: string): Promise<void>;
+  importItemsInBatches(inputs: ImportedItemInput[]): Promise<ImportBatchResult>;
 }
