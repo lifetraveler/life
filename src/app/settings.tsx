@@ -16,10 +16,11 @@ import {
 } from '../ui/transferResultStore';
 
 /**
- * 设置页（切片 8，tasks/slice-08.md 实现要求 4/5）：
+ * 设置页（切片 8/9，tasks/slice-08.md 实现要求 4/5、tasks/slice-09.md 实现要求 3）：
  * - 导入 ICS：DocumentPicker 选文件 → parseIcs → importItemsInBatches → 结果页；
  *   导入完成后 fire-and-forget 触发一次 reconcile()（失败不阻断结果页）；
  * - 导出 ICS：listItemsForExport → buildIcs → 写入 cache 目录 → Sharing 分享 → 成功页；
+ * - 系统日历（切片 9）：纯导航入口 → /system-calendar-import（权限/选择/结果都在该页内）；
  * - 主页不放导入/导出入口（任务卡明确要求入口只在设置页）。
  */
 
@@ -142,6 +143,16 @@ export default function SettingsPage() {
           ) : (
             <Text style={styles.primaryText}>导入 ICS</Text>
           )}
+        </Pressable>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>系统日历</Text>
+        <Text style={styles.hint}>
+          单向导入 Android 系统日历事件到本地（只读来源，不写回系统日历）。
+        </Text>
+        <Pressable style={styles.primaryButton} onPress={() => router.push('/system-calendar-import')}>
+          <Text style={styles.primaryText}>导入系统日历</Text>
         </Pressable>
       </View>
 

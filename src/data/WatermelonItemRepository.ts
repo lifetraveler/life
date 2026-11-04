@@ -1,6 +1,18 @@
 import { Database, Q, Query } from '@nozbe/watermelondb';
 
-import type { CreateItemInput, ImportedItemInput, Item, UpdateItemInput } from '../domain/item';
+import type {
+  CreateItemInput,
+  ImportedItemInput,
+  Item,
+  ItemSourceType,
+  UpdateItemInput,
+} from '../domain/item';
+import { filterEventsInRange } from '../domain/systemCalendar/filterEventsInRange';
+import {
+  mapSystemEventToImportedItem,
+  systemEventDisplayTitle,
+} from '../domain/systemCalendar/mapSystemEvent';
+import type { SystemCalendarEvent } from '../domain/systemCalendar/types';
 import type {
   CreateReminderInput,
   Reminder,
@@ -16,7 +28,14 @@ import TagModel from '../db/models/TagModel';
 import { normalizeAllDayTimestamps } from './allDayNormalize';
 import { getDeviceTzid } from './deviceTimezone';
 import { assertValidItemTimePatch, assertValidItemTimeRange } from './itemTimeRules';
-import type { ImportBatchResult, ItemRepository } from './ItemRepository';
+import type {
+  ImportBatchResult,
+  ItemRepository,
+  SystemCalendarImportInput,
+  SystemImportResult,
+} from './ItemRepository';
+import { defaultSystemCalendarDeps } from './systemCalendarAdapters';
+import type { SystemCalendarDeps } from './systemCalendarAdapters';
 import {
   normalizeReminderRuleFields,
   normalizeStartAt,
@@ -210,9 +229,21 @@ export class WatermelonItemRepository implements ItemRepository {
    */
   private readonly deviceTzid: () => string;
 
-  constructor(db: Database, deviceTzid: () => string = getDeviceTzid) {
+  /**
+   * 切片 9：系统日历读取与哈希依赖（第三参，可选）。
+   * 生产默认 expo-calendar / expo-crypto 实现；测试注入内存实现
+   * （原生模块在 Jest 不可用）。现有单参/双参调用点不受影响。
+   */
+  private readonly systemCalendar: SystemCalendarDeps;
+
+  constructor(
+    db: Database,
+    deviceTzid: () => string = getDeviceTzid,
+    systemCalendar: SystemCalendarDeps = defaultSystemCalendarDeps(),
+  ) {
     this.db = db;
     this.deviceTzid = deviceTzid;
+    this.systemCalendar = systemCalendar;
   }
 
   async createItem(input: CreateItemInput): Promise<Item> {
@@ -635,8 +666,12 @@ export class WatermelonItemRepository implements ItemRepository {
     });
   }
 
+  /**
+   * 切片 9：sourceType 参数放宽为 ItemSourceType（AGENTS.md §7.15，v0.9 授权）；
+   * 查询结构与 v0.8 相同（(source_type, source_uid) 二元组唯一命中）。
+   */
   async findItemBySource(
-    sourceType: 'ics',
+    sourceType: ItemSourceType,
     sourceUid: string,
   ): Promise<ItemWithTags | null> {
     const found = await loadItemsWithTagsByItemQuery(
@@ -726,6 +761,130 @@ export class WatermelonItemRepository implements ItemRepository {
       });
     }
     return result;
+  }
+
+  // —— 切片 9：系统日历导入（repository.md「系统日历导入接口（v0.9，切片 9 落地）」）——
+
+  /**
+   * 切片 9 系统日历导入管线：
+   * reader 读取 → startDate 不可解析分流 failed → 范围过滤（overlapsRange 语义）→
+   * 按 100 条/批分批（沿用 importItemsInBatches 约束），批内逐条：
+   * 映射（sourceUid 解析）→ (system-calendar, uid) 去重查询 →
+   * 命中且 sourceReadOnly=true 计 skippedDuplicate；命中且 sourceReadOnly=false 计
+   * skippedReadOnlyConflict（不覆盖本地项）；未命中 → 落库（type='event'/
+   * sourceType='system-calendar'/sourceReadOnly=true，allDay 归一化与 ICS 共用预处理）。
+   * 批内单条失败只记入 failed，不影响其他条落库。
+   */
+  async importSystemCalendarEvents(input: SystemCalendarImportInput): Promise<SystemImportResult> {
+    const { calendarIds, rangeStartMs, rangeEndMs } = input;
+    if (!Number.isFinite(rangeStartMs) || !Number.isFinite(rangeEndMs)) {
+      throw new Error('importSystemCalendarEvents: rangeStartMs/rangeEndMs must be finite numbers');
+    }
+    if (rangeStartMs >= rangeEndMs) {
+      throw new Error('importSystemCalendarEvents: rangeStartMs must be earlier than rangeEndMs');
+    }
+    const distinctCalendarIds = [
+      ...new Set(calendarIds.filter((id) => typeof id === 'string' && id.length > 0)),
+    ];
+
+    const events: SystemCalendarEvent[] =
+      distinctCalendarIds.length === 0
+        ? []
+        : await this.systemCalendar.reader.getEvents(distinctCalendarIds, rangeStartMs, rangeEndMs);
+
+    const result: SystemImportResult = {
+      imported: 0,
+      skippedDuplicate: 0,
+      skippedReadOnlyConflict: 0,
+      failed: [],
+      totalRead: events.length,
+      outOfRangeCount: 0,
+      sourceUidStrategies: { 'event-id': 0, 'content-hash': 0 },
+    };
+
+    // startDate 不可解析的事件无法参与范围过滤与去重 → 直接分流 failed。
+    const parseable: SystemCalendarEvent[] = [];
+    for (const event of events) {
+      if (event.startDate === null || !Number.isFinite(event.startDate)) {
+        result.failed.push({
+          externalId: event.externalId,
+          title: systemEventDisplayTitle(event.title),
+          reason: '事件缺少有效的开始时间（startDate 不可解析）',
+        });
+      } else {
+        parseable.push(event);
+      }
+    }
+
+    const inRange = filterEventsInRange(parseable, rangeStartMs, rangeEndMs);
+    result.outOfRangeCount = parseable.length - inRange.length;
+
+    for (let offset = 0; offset < inRange.length; offset += IMPORT_BATCH_SIZE) {
+      const batch = inRange.slice(offset, offset + IMPORT_BATCH_SIZE);
+      await this.db.write(async () => {
+        for (const event of batch) {
+          try {
+            const mapped = await mapSystemEventToImportedItem(event, this.systemCalendar.sha256);
+            // 去重键复用 findItemBySource 的 (source_type, source_uid) 查询结构，
+            // 与落库同事务执行（防并发窗口，与 assertNoDuplicateSourceUid 同一原则）。
+            const existing = await this.findSystemCalendarDuplicateInTransaction(mapped.sourceUid);
+            if (existing !== null) {
+              if (existing.sourceReadOnly === true) {
+                result.skippedDuplicate += 1;
+              } else {
+                result.skippedReadOnlyConflict += 1;
+              }
+            } else {
+              await this.insertSystemCalendarItemInTransaction(mapped.input);
+              result.imported += 1;
+            }
+            result.sourceUidStrategies[mapped.strategy] += 1;
+          } catch (error) {
+            result.failed.push({
+              externalId: event.externalId,
+              title: systemEventDisplayTitle(event.title),
+              reason: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+      });
+    }
+    return result;
+  }
+
+  /**
+   * (source_type='system-calendar', source_uid) 去重查询（必须已在 db.write 事务内）。
+   * 查询结构与 findItemBySource 一致（契约「去重键复用 findItemBySource」）；
+   * 硬编码 sourceType 以免放宽后的参数被误用为任意来源探测。
+   */
+  private async findSystemCalendarDuplicateInTransaction(
+    sourceUid: string,
+  ): Promise<ItemWithTags | null> {
+    const found = await loadItemsWithTagsByItemQuery(
+      this.db,
+      this.db
+        .get<ItemModel>(ITEMS_TABLE)
+        .query(Q.where('source_type', 'system-calendar'), Q.where('source_uid', sourceUid)),
+    );
+    return found[0] ?? null;
+  }
+
+  /** 系统日历项落库（调用方必须已处于 db.write 事务内）；type='event'/status='active' 为契约固定值。 */
+  private async insertSystemCalendarItemInTransaction(input: ImportedItemInput): Promise<void> {
+    const prepared = this.prepareImportedItem(input);
+    await this.db.get<ItemModel>(ITEMS_TABLE).create((record) => {
+      record.type = 'event';
+      record.title = prepared.title;
+      record.content = prepared.content;
+      record.status = 'active';
+      record.startAt = prepared.startAt;
+      record.endAt = prepared.endAt;
+      record.allDay = prepared.allDay;
+      // 契约固定（AGENTS.md §7.15）：系统日历导入项 sourceType='system-calendar'、sourceReadOnly=true。
+      record.sourceType = 'system-calendar';
+      record.sourceUid = prepared.sourceUid;
+      record.sourceReadOnly = true;
+    });
   }
 
   // —— 切片 7：视图查询（repository.md「视图查询接口（v0.7）」，签名冻结）——

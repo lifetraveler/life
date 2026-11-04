@@ -184,7 +184,12 @@ export default function ItemDetailPage() {
   };
 
   const confirmDeleteLocalCopy = (): void => {
-    Alert.alert('删除本地副本', '将从本地库删除该条目及其提醒，不影响外部来源的 ICS 文件。', [
+    Alert.alert(
+      '删除本地副本',
+      item?.sourceType === 'system-calendar'
+        ? '将从本地库删除该条目及其提醒，不影响系统日历中的原事件。'
+        : '将从本地库删除该条目及其提醒，不影响外部来源的 ICS 文件。',
+      [
       { text: '取消', style: 'cancel' },
       {
         text: '删除',
@@ -221,9 +226,11 @@ export default function ItemDetailPage() {
       <View style={styles.headerRow}>
         <Text style={styles.title}>{item.title}</Text>
         {item.sourceReadOnly ? (
-          // 切片 8：只读项隐藏「编辑」入口，展示来源徽标（tasks/slice-08.md 实现要求 6）。
+          // 切片 8/9：只读项隐藏「编辑」入口，按来源展示徽标（tasks/slice-08.md 实现 6、slice-09 隐含要求）。
           <View style={styles.sourceBadge}>
-            <Text style={styles.sourceBadgeText}>来源：ICS（只读）</Text>
+            <Text style={styles.sourceBadgeText}>
+              {item.sourceType === 'system-calendar' ? '来源：系统日历（只读）' : '来源：ICS（只读）'}
+            </Text>
           </View>
         ) : (
           <Pressable
@@ -252,7 +259,9 @@ export default function ItemDetailPage() {
         <View style={styles.sectionBox}>
           <Text style={styles.sectionTitle}>外部来源</Text>
           <Text style={styles.meta}>
-            此条目来自 ICS 导入：时间/标题/内容只读，可完成、可归档、可删除本地副本。
+            {item.sourceType === 'system-calendar'
+              ? '此条目来自系统日历导入：时间/标题/内容只读，可完成、可归档、可删除本地副本。'
+              : '此条目来自 ICS 导入：时间/标题/内容只读，可完成、可归档、可删除本地副本。'}
           </Text>
           <Pressable
             style={[styles.secondaryButton, styles.dangerButton, styles.sourceDeleteButton]}

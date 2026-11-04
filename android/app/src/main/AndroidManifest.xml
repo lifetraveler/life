@@ -4,6 +4,12 @@
   <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
   <uses-permission android:name="android.permission.VIBRATE"/>
   <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+  <!-- 切片 9：expo-calendar config plugin 在 bare 工程下的等价注入（plugin 只在 prebuild 时写 manifest，
+       本工程 android/ 已 checked in，故手工同步）。读取经 expo-calendar requestCalendarPermissionsAsync，
+       其实现以单一系统弹窗同时请求两权限并要求均授予（AGENTS.md §7.15 方案 A 如实记录）；
+       本应用无任何系统日历写回调用路径。 -->
+  <uses-permission android:name="android.permission.READ_CALENDAR"/>
+  <uses-permission android:name="android.permission.WRITE_CALENDAR"/>
   <queries>
     <intent>
       <action android:name="android.intent.action.VIEW"/>

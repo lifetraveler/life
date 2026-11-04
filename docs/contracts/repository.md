@@ -123,3 +123,20 @@ CreateReminderInput 不含 lastFiredOccurrenceKey / lastReconciledAt，由 Repos
 - 导出范围固定为“未归档 + active 与 done”；不做自定义筛选。
 - 批量导入在事务内完成：任一条解析失败不影响已成功项落库；失败清单作为返回值上报。
 - 导入超过 500 条时，Repository 层必须分批写入（每批 100 条），避免一次事务过大。
+
+## 系统日历导入接口（v0.9，切片 9 落地）
+
+签名冻结：
+
+- `importSystemCalendarEvents(input: { calendarIds: string[]; rangeStartMs: number; rangeEndMs: number }): Promise<SystemImportResult>`
+
+SystemImportResult：
+- `imported: number`
+- `skippedDuplicate: number`
+- `skippedReadOnlyConflict: number`（如果 sourceUid 命中的本地项 sourceReadOnly=false，跳过并记录）
+- `failed: Array<{ externalId: string | null; title: string; reason: string }>`
+
+约束：
+- 去重键复用 findItemBySource(sourceType='system-calendar', sourceUid)。
+- 批量写入沿用 importItemsInBatches（100/批），单条失败不影响其他条。
+- 不调用任何写入系统日历的 API。

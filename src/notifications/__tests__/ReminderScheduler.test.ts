@@ -6,7 +6,12 @@ import { buildOccurrenceKey } from '../../domain/recurrence';
 import type { CreateItemInput, Item } from '../../domain/item';
 import type { CreateReminderInput, Reminder, UpdateReminderInput } from '../../domain/reminder';
 import type { ItemWithTags, Tag } from '../../domain/tag';
-import type { ImportBatchResult, ItemRepository } from '../../data/ItemRepository';
+import type {
+  ImportBatchResult,
+  ItemRepository,
+  SystemCalendarImportInput,
+  SystemImportResult,
+} from '../../data/ItemRepository';
 
 // —— 固定时钟锚点：2025-06-10T08:00:00Z ——
 const FIXED_NOW = 1749542400000;
@@ -297,6 +302,13 @@ class FakeRepository implements ItemRepository {
 
   async listRemindersByItem(): Promise<Reminder[]> {
     throw new Error('FakeRepository: listRemindersByItem 未实现');
+  }
+
+  // 切片 9：接口新增方法，调度器单测不触及，为满足接口而存在（§7.13 夹具编译必需）。
+  async importSystemCalendarEvents(
+    _input: SystemCalendarImportInput,
+  ): Promise<SystemImportResult> {
+    throw new Error('FakeRepository: importSystemCalendarEvents 未实现');
   }
 }
 
