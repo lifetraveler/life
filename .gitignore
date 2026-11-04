@@ -13,3 +13,6 @@ yarn-error.*
 *.mobileprovision
 *.orig.*
 .env*.local
+
+# 切片验收临时脚本
+.tmp-slice*/

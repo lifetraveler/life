@@ -1,4 +1,10 @@
-import type { CreateItemInput, ImportedItemInput, Item, UpdateItemInput } from '../domain/item';
+import type {
+  CreateItemInput,
+  ImportedItemInput,
+  Item,
+  ItemSourceType,
+  UpdateItemInput,
+} from '../domain/item';
 import type {
   CreateReminderInput,
   Reminder,
@@ -19,6 +25,46 @@ export interface ImportBatchFailure {
 /**
  * 切片 8：批量导入结果（repository.md v0.8 批量导入约束）。
  */
+/**
+ * 切片 9：系统日历导入输入（repository.md「系统日历导入接口（v0.9）」冻结）。
+ */
+export interface SystemCalendarImportInput {
+  /** 要读取的系统日历 id 列表（expo-calendar Calendar.id）。 */
+  calendarIds: string[];
+  /** 范围起点（含），绝对毫秒。 */
+  rangeStartMs: number;
+  /** 范围终点（不含），绝对毫秒。 */
+  rangeEndMs: number;
+}
+
+/** 系统日历导入的单条失败记录（repository.md v0.9 冻结形状）。 */
+export interface SystemImportFailure {
+  /** 系统事件 id（expo-calendar event.id；缺失为 null）。 */
+  externalId: string | null;
+  title: string;
+  reason: string;
+}
+
+/**
+ * 切片 9：系统日历导入结果。
+ * 前四个字段为 repository.md v0.9 冻结语义；totalRead / outOfRangeCount /
+ * sourceUidStrategies 为契约外显式扩展（先例：deleteItem / observe*）——
+ * 任务卡实现要求 4 要求结果页展示读取总数与 sourceUid 策略条数，
+ * 这些数据只在导入过程中可得，不属于冻结四字段。
+ */
+export interface SystemImportResult {
+  imported: number;
+  skippedDuplicate: number;
+  skippedReadOnlyConflict: number;
+  failed: SystemImportFailure[];
+  /** 读取到的事件总数（reader 返回的全部事件，含范围外与解析失败）。 */
+  totalRead: number;
+  /** 被所选时间范围排除的事件数（startDate 不可解析的事件不计入，已入 failed）。 */
+  outOfRangeCount: number;
+  /** sourceUid 策略条数分布（对进入导入管线的事件计数，含因重复/冲突跳过的事件）。 */
+  sourceUidStrategies: { 'event-id': number; 'content-hash': number };
+}
+
 export interface ImportBatchResult {
   createdCount: number;
   skippedDuplicateCount: number;
@@ -118,7 +164,8 @@ export interface ItemRepository {
 
   // —— 切片 8：ICS 导入导出（repository.md「ICS 导入导出接口（v0.8，切片 8 落地）」，签名冻结）——
   createImportedItem(input: ImportedItemInput): Promise<ItemWithTags>;
-  findItemBySource(sourceType: 'ics', sourceUid: string): Promise<ItemWithTags | null>;
+  // v0.9：sourceType 参数放宽为 ItemSourceType（AGENTS.md §7.15，切片 9 以 'system-calendar' 调用）。
+  findItemBySource(sourceType: ItemSourceType, sourceUid: string): Promise<ItemWithTags | null>;
   listItemsForExport(filter: { includeArchived: false; includeDone: true }): Promise<ItemWithTags[]>;
   updateImportedItemTime(
     id: string,
@@ -128,4 +175,7 @@ export interface ItemRepository {
   // —— 切片 8：契约外显式扩展（先例依据见文件头 doc）——
   deleteItem(id: string): Promise<void>;
   importItemsInBatches(inputs: ImportedItemInput[]): Promise<ImportBatchResult>;
+
+  // —— 切片 9：系统日历导入（repository.md「系统日历导入接口（v0.9，切片 9 落地）」，签名冻结）——
+  importSystemCalendarEvents(input: SystemCalendarImportInput): Promise<SystemImportResult>;
 }

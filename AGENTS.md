@@ -100,6 +100,19 @@ AGENTS.md       本文件
 切片 11 之前不得改 src/notifications/ 实现文件。
 
 ## 8. 当前切片
-tasks/slice-07.md → tasks/slice-08.md
-切片 8 已完成并通过验收（静态 1–5 + 真机 6–14），收尾移交见 tasks/slice-08-closeout.md。
-（下一片任务卡待创建）
+tasks/slice-09.md
+切片 9 已完成并通过验收（静态 1–4 + 真机 5–13，方案 A 权限偏差如实记录），收尾移交见 tasks/slice-09-closeout.md。
+（下一片：切片 10 Android 桌面小组件，任务卡待创建）
+
+### 7.15 系统日历来源契约（v0.9，切片 9 冻结）
+- sourceType 扩展为 'local' | 'ics' | 'system-calendar'。
+- 系统日历导入项：sourceReadOnly=true；sourceUid 优先使用 expo-calendar 返回的 event.id；
+  若 event.id 为空或不稳定，使用 (calendarId|title|startAt|endAt) 的 SHA-256 前 16 位作为 sourceUid，
+  并在导入结果页标注“基于内容去重，系统事件修改后可能产生重复”。
+- 系统日历导入不写回系统日历，不调用任何系统日历写入 API（无 createEvent/updateEvent/deleteEvent
+  等写回调用路径）。读取权限经 expo-calendar 申请：该库 Android 读取路径（requestCalendarPermissionsAsync）
+  实现为单一系统弹窗同时请求 READ_CALENDAR 与 WRITE_CALENDAR，且要求两者均授予才放行读取
+  （expo-calendar 15.0.8 库实现所限，切片 9 方案 A 如实记录）；本应用自身不实现系统日历写入
+  功能，除该库读取 API 附带的权限请求外不请求任何日历权限。
+- allDay 归一化沿用切片 8 的 normalizeAllDayTimestamps；时区伪影（getDeviceTzid 返回 UTC）
+  不在本切片修复，接受 UTC 坐标系下自洽。

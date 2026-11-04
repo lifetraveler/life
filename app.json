@@ -19,6 +19,12 @@
       "expo-router",
       "expo-notifications",
       [
+        "expo-calendar",
+        {
+          "calendarPermission": "允许 $(PRODUCT_NAME) 读取你的日历以单向导入系统日历事件"
+        }
+      ],
+      [
         "@morrowdigital/watermelondb-expo-plugin",
         {
           "disableJsi": false
