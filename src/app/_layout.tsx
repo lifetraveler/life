@@ -15,14 +15,18 @@ import {
   markNotificationNavigationReady,
   registerNotificationResponseRouting,
 } from '../notifications/notificationResponse';
+import { initWidgetSnapshotBridge } from '../widget';
 
 /**
- * App 根布局（切片 5 接线，AGENTS.md §4.20 / §4.16 / §4.19；切片 6 §4.26 增加点击路由）：
+ * App 根布局（切片 5 接线，AGENTS.md §4.20 / §4.16 / §4.19；切片 6 §4.26 增加点击路由；
+ * 切片 10 §7.16 增加小组件快照桥）：
  * - 第一行导入 Hermes Intl polyfill（§4.21），必须早于一切 Intl 时间格式化；
  * - 启动时注册通知行为、显式申请 Android 13+ 通知权限（拒绝则降级为无通知）；
  * - 启动与每次回前台执行 reconcile()，幂等可重复调用；
  * - 切片 6（§4.26）：注册通知点击 → Item 详情页路由；冷启动时导航未就绪的
- *   响应先暂存，根导航就绪后冲刷（useRootNavigationState.key 出现即就绪）。
+ *   响应先暂存，根导航就绪后冲刷（useRootNavigationState.key 出现即就绪）；
+ * - 切片 10（§7.16）：挂载小组件快照桥（启动/回前台/数据变更三触发点写快照并
+ *   requestWidgetUpdate；清理函数随 useEffect cleanup 退订，不影响通知逻辑）。
  */
 export default function RootLayout() {
   const rootNavigationState = useRootNavigationState();
@@ -53,9 +57,13 @@ export default function RootLayout() {
     // 切片 6（§4.26）：通知点击路由。返回退订函数，与上面 AppState 退订合并清理。
     const unsubscribeRouting = registerNotificationResponseRouting();
 
+    // 切片 10（§7.16）：小组件快照桥（触发点 1/2/3；触发点 4 在 taskHandler）。
+    const cleanupWidgetSnapshotBridge = initWidgetSnapshotBridge();
+
     return () => {
       subscription.remove();
       unsubscribeRouting();
+      cleanupWidgetSnapshotBridge();
     };
   }, []);
 
@@ -80,6 +88,8 @@ export default function RootLayout() {
         <Stack.Screen name="export-success" options={{ title: '导出成功' }} />
         <Stack.Screen name="item/[id]" options={{ title: '详情' }} />
         <Stack.Screen name="item/[id]/edit" options={{ title: '编辑' }} />
+        {/* 切片 10：life://quick-add 落点（纯重定向，无头瞬跳） */}
+        <Stack.Screen name="quick-add" options={{ headerShown: false }} />
       </Stack>
     </>
   );

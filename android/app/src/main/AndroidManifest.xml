@@ -34,5 +34,21 @@
         <data android:scheme="exp+life"/>
       </intent-filter>
     </activity>
+    <!-- 切片 10：react-native-android-widget config plugin 在 bare 工程下的等价注入
+         （plugin 只在 prebuild 时写 manifest，本工程 android/ 已 checked in，故手工同步；
+         与 plugin 输出逐字段一致，勿改 name/action，改动须同步 app.json 的 plugin 配置）。
+         service：ListWidget 集合视图服务（本切片未用 ListWidget，plugin 无条件注入，保持一致）；
+         receiver：TodayWidget AppWidgetProvider，类在
+         android/app/src/main/java/com/vibecoding/life/widget/TodayWidget.java，
+         provider 配置在 res/xml/widgetprovider_todaywidget.xml；
+         com.vibecoding.life.WIDGET_CLICK 由库原生侧发出，经 headless 任务转发 JS（taskHandler 展开 deep link）。 -->
+    <service android:name="com.reactnativeandroidwidget.RNWidgetCollectionService" android:permission="android.permission.BIND_REMOTEVIEWS"/>
+    <receiver android:name=".widget.TodayWidget" android:exported="false" android:label="今日待办">
+      <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+        <action android:name="com.vibecoding.life.WIDGET_CLICK"/>
+      </intent-filter>
+      <meta-data android:name="android.appwidget.provider" android:resource="@xml/widgetprovider_todaywidget"/>
+    </receiver>
   </application>
 </manifest>

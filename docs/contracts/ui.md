@@ -76,3 +76,17 @@
 - 过期组：仅 status='active'。
 - 已安排组：status='active' 与 'done'；done 项置灰并排在同组末尾。
 - 今日创建组：仅 status='active'。
+
+## Android 桌面小组件（v0.10，切片 10 落地）
+
+### 数据快照 schema（SharedPreferences `widget_today_snapshot_v1`）
+
+```json
+{
+  "generatedAt": 1799999999999,
+  "tzid": "UTC",
+  "groups": {
+    "overdue": [{ "id": "...", "title": "...", "type": "task", "timeLabel": "已过期" }],
+    "scheduled": [{ "id": "...", "title": "...", "type": "event", "timeLabel": "14:00" }]
+  }
+}

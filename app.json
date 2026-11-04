@@ -41,6 +41,24 @@
             }
           }
         }
+      ],
+      [
+        "react-native-android-widget",
+        {
+          "widgets": [
+            {
+              "name": "TodayWidget",
+              "label": "今日待办",
+              "description": "在桌面查看今日过期与已安排的待办，可快速记录",
+              "minWidth": "180dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 2,
+              "previewImage": "./assets/widget-preview/TodayWidget.png",
+              "resizeMode": "horizontal|vertical"
+            }
+          ]
+        }
       ]
     ]
   }

@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.8
+版本：v0.10
 
 ## 1. 项目概览
 
@@ -100,9 +100,8 @@ AGENTS.md       本文件
 切片 11 之前不得改 src/notifications/ 实现文件。
 
 ## 8. 当前切片
-tasks/slice-09.md
-切片 9 已完成并通过验收（静态 1–4 + 真机 5–13，方案 A 权限偏差如实记录），收尾移交见 tasks/slice-09-closeout.md。
-（下一片：切片 10 Android 桌面小组件，任务卡待创建）
+tasks/slice-11.md（任务卡待创建）
+（切片 10 已完成并通过验收；收尾移交见 tasks/slice-10-closeout.md）
 
 ### 7.15 系统日历来源契约（v0.9，切片 9 冻结）
 - sourceType 扩展为 'local' | 'ics' | 'system-calendar'。
@@ -116,3 +115,26 @@ tasks/slice-09.md
   功能，除该库读取 API 附带的权限请求外不请求任何日历权限。
 - allDay 归一化沿用切片 8 的 normalizeAllDayTimestamps；时区伪影（getDeviceTzid 返回 UTC）
   不在本切片修复，接受 UTC 坐标系下自洽。
+
+
+  ### 7.16 Android 桌面小组件契约（v0.10，切片 10 冻结）
+
+- 小组件方案：`react-native-android-widget`，不选 `expo-widgets`（其 Android updateTimeline 为 no-op、
+  updatePeriodMillis 硬编码 0，无法满足待办小组件跨天更新需求）。
+- 数据桥接：小组件进程不直接读取 WatermelonDB SQLite；App 在以下时机将“今日待办快照”序列化为
+  JSON 写入 SharedPreferences（键：`widget_today_snapshot_v1`）：
+  1. App 启动后；
+  2. App 回前台后；
+  3. Item/Reminder 数据变更后（通过切片 7 已有响应式查询的变更通知触发，不新增轮询）；
+  4. 手动刷新小组件时（WIDGET_UPDATE action 内先写快照再渲染）。
+- 快照内容冻结：today 分组（过期 + 已安排）的 top 5 条，每项含 id、title、type、时间标签文本、
+  status；不含 content、tags、reminders 细节。allDay 项时间标签为“全天”；过期项标签为“已过期”。
+- 小组件类型：一个 4x2 或 4x3 小组件，包含“今日待办列表（最多 5 条）+ 底部快速记录按钮”。
+  不在 MVP 做多个小组件类型。
+- 快速记录入口：点击小组件底部按钮，通过 deep link `life://quick-add` 唤起 App 的快速记录入口。
+  如果 App 未运行，冷启动后导航到快速记录；如果已运行，直接前置并聚焦输入。
+- 刷新机制：小组件不依赖 updatePeriodMillis；依赖 App 主动写入快照 + `requestWidgetUpdate`。
+  不引入 AlarmManager 或 WorkManager 做后台定时刷新（留给后续切片）。
+- 小组件点击条目：导航到对应 Item 详情页（复用切片 6 的 item/[id] 路由）。
+- 不得在小组件内实现完成/取消完成操作（避免在原生侧写 DB 的跨进程复杂度）；
+  完成操作仍需进入 App。
