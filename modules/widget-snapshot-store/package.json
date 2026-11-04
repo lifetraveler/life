@@ -1,0 +1,7 @@
+{
+  "name": "widget-snapshot-store",
+  "version": "0.1.0",
+  "description": "Slice 10 local Expo module: JS-accessible SharedPreferences string store for the today-widget snapshot bridge.",
+  "main": "index.ts",
+  "private": true
+}

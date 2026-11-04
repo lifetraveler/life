@@ -16,3 +16,6 @@ yarn-error.*
 
 # 切片验收临时脚本
 .tmp-slice*/
+
+# Gradle 构建产物（android/.gitignore 只覆盖 android/ 下；模块目录在此补充）
+build/

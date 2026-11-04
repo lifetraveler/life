@@ -100,8 +100,8 @@ AGENTS.md       本文件
 切片 11 之前不得改 src/notifications/ 实现文件。
 
 ## 8. 当前切片
-tasks/slice-10.md
-（切片 10 进行中：Android 桌面小组件；切片 9 收尾移交见 tasks/slice-09-closeout.md）
+tasks/slice-11.md（任务卡待创建）
+（切片 10 已完成并通过验收；收尾移交见 tasks/slice-10-closeout.md）
 
 ### 7.15 系统日历来源契约（v0.9，切片 9 冻结）
 - sourceType 扩展为 'local' | 'ics' | 'system-calendar'。

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 切片 10：react-native-android-widget config plugin 等价注入（bare 工程手工同步，
+     与 plugin withWidgetProviderXml 对 app.json 配置的输出逐字段一致；
+     initialLayout @layout/rn_widget 来自库自身 res，经 gradle 依赖合并）。 -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="180dp"
+    android:minHeight="110dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="2"
+
+    android:resizeMode="horizontal|vertical"
+
+    android:description="@string/widget_todaywidget_description"
+
+    android:initialLayout="@layout/rn_widget"
+    android:previewImage="@drawable/todaywidget_preview"
+
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen">
+</appwidget-provider>
