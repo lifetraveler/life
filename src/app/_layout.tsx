@@ -74,6 +74,9 @@ export default function RootLayout() {
         <Stack.Screen name="today" options={{ title: '今日' }} />
         <Stack.Screen name="week" options={{ title: '本周' }} />
         <Stack.Screen name="archived" options={{ title: '已归档' }} />
+        <Stack.Screen name="settings" options={{ title: '设置' }} />
+        <Stack.Screen name="import-result" options={{ title: '导入结果' }} />
+        <Stack.Screen name="export-success" options={{ title: '导出成功' }} />
         <Stack.Screen name="item/[id]" options={{ title: '详情' }} />
         <Stack.Screen name="item/[id]/edit" options={{ title: '编辑' }} />
       </Stack>

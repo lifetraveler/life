@@ -100,3 +100,26 @@ CreateReminderInput 不含 lastFiredOccurrenceKey / lastReconciledAt，由 Repos
 - 不新增 schema 索引；MVP 数据量下不加。后续若数据量 > 1000 且视图卡顿，以独立 schema 变更提案处理。
 - 跨天判定抽成纯函数 `overlapsRange(item, rangeStart, rangeEnd)`，Repository 与视图共用，不得各写一份。
 - 范围计算抽成纯函数 `getTodayRange(nowMs, tzid)` / `getWeekRange(nowMs, tzid)`，必须显式传 tzid，不得读设备默认时区。
+
+## ICS 导入导出接口（v0.8，切片 8 落地）
+
+签名冻结：
+
+- `createImportedItem(input: ImportedItemInput): Promise<ItemWithTags>`
+  - 输入含 title、content、startAt、endAt、allDay、sourceUid，sourceType 固定 'ics'，sourceReadOnly 固定 true。
+  - 内部执行 allDay 归一化（见 data-model.md v0.8）。
+  - 若 sourceUid 非 null 且库内已存在 (sourceType='ics', sourceUid) 项，抛明确错误 `DuplicateSourceUid`；调用方负责跳过或更新，Repository 不做 upsert。
+
+- `findItemBySource(sourceType: 'ics', sourceUid: string): Promise<ItemWithTags | null>`
+
+- `listItemsForExport(filter: { includeArchived: false; includeDone: true }): Promise<ItemWithTags[]>`
+  - MVP 只支持上述固定 filter；参数显式列在签名里是为了未来扩展，不接受任意组合。
+
+- `updateImportedItemTime(id: string, patch): Promise<Item>`
+  - 与 updateItemTime 同语义，但 sourceReadOnly=true 时抛明确错误。
+
+### 约束
+- 导入去重以 (sourceType, sourceUid) 为键；sourceUid 为 null 的 ICS 事件（无 UID）每次都作为新项插入，不做去重。
+- 导出范围固定为“未归档 + active 与 done”；不做自定义筛选。
+- 批量导入在事务内完成：任一条解析失败不影响已成功项落库；失败清单作为返回值上报。
+- 导入超过 500 条时，Repository 层必须分批写入（每批 100 条），避免一次事务过大。

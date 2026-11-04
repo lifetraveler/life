@@ -18,6 +18,10 @@ function makeItem(overrides: Partial<ItemWithTags> & { id: string }): ItemWithTa
     startAt: null,
     endAt: null,
     allDay: false,
+    // 切片 8 编译必需夹具补字段（§7.13）：分组逻辑不读来源字段，固定 local 值。
+    sourceType: 'local',
+    sourceUid: null,
+    sourceReadOnly: false,
     createdAt: 0,
     updatedAt: 0,
     tags: [] as Tag[],

@@ -84,3 +84,26 @@ WatermelonDB schema 版本 2→3，新增 `reminders` 表：
 - Item 既有字段（id/type/title/content/status/createdAt/updatedAt）不变；type 枚举不变。
 - 时间字段的时区语义：startAt/endAt 是绝对时刻；分组展示时按设备当前 IANA 时区解释（切片 7 契约）。
 - allDay=true 时 startAt 表示设备时区当天 00:00；endAt 可为 null。
+
+## Item 外部来源字段（v0.8，切片 8 落地）
+
+### Schema v4 → v5
+Item 新增字段：
+- sourceType: 'local' | 'ics' | 'system-calendar'，默认 'local'
+- sourceUid: string | null，默认 null
+- sourceReadOnly: boolean，默认 false
+
+规则：
+- migration 追加 toVersion: 5；用 addColumns；不得重建表；不得清库；v4 step 不动。
+- 既有 Item 迁移后为 ('local', null, false)。
+- 唯一性：同一 (sourceType, sourceUid) 组合在本地库内唯一；sourceUid 为 null 时不做唯一约束。
+  唯一性由 Repository 层保证（导入时先查后写），不依赖 SQLite 唯一索引；若后续需真索引，以独立 schema 变更提案处理。
+- sourceReadOnly=true 的 Item：不可编辑时间/标题/内容；可完成/取消完成；可归档/删除（删除即从本地库移除，不影响外部来源）。
+- 只读项转为本地（sourceReadOnly=false）在 MVP 不做；若后续需要，以独立切片设计“解绑”流程。
+
+### allDay 归一化（v0.8）
+- allDay=true 的 Item，startAt 必须是设备当前 IANA 时区当天 00:00 的绝对毫秒值。
+- 归一化职责：Repository.createItem / updateItemTime 中统一执行；UI 不得自行归一化。
+- 编辑页选择 allDay 时只提供日期，不提供时刻；Repository 收到日期后按设备时区 00:00 落库。
+- 导入 ICS 的 VALUE=DATE 事件：解析出的 startAt 是“当天 00:00 在 ICS 声明时区”的绝对时刻；
+  落库前按“该绝对时刻在设备时区对应的日期”的 00:00 重新归一化，保证与本地 allDay 语义一致。

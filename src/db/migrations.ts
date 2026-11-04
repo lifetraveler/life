@@ -7,6 +7,7 @@ import { addColumns, createTable, schemaMigrations } from '@nozbe/watermelondb/S
  * - v2：新增 tags、item_tags 表（切片 2）
  * - v3：新增 reminders 表（切片 5，AGENTS.md §4.17）
  * - v4：items 新增 start_at / end_at / all_day 列（切片 6，AGENTS.md §4.23）
+ * - v5：items 新增 source_type / source_uid / source_read_only 列（切片 8，data-model.md v0.8）
  *
  * 规则（AGENTS.md §4.6）：已发布的 migration step 不得修改，只能在末尾追加；
  * 新增表必须在 migration 中显式创建，不得依赖“删库重装”。
@@ -68,6 +69,24 @@ export default schemaMigrations({
             { name: 'start_at', type: 'number', isOptional: true },
             { name: 'end_at', type: 'number', isOptional: true },
             { name: 'all_day', type: 'boolean', isOptional: true },
+          ],
+        }),
+      ],
+    },
+    // 切片 8（data-model.md v0.8）：v5 items 追加外部来源三列；v2–v4 step 保持原样，不得修改。
+    // 三列全部 isOptional：WatermelonDB add_columns 对非可选列会把既有行回填类型零值
+    // （string → ''，见 adapters/sqlite/encodeSchema 与 lokijs DatabaseDriver），违反
+    // 「既有行不回填、读取层 ?? 'local' 归一」的契约语义；isOptional 列回填 null，
+    // 既有行经 toDomainItem 归一为 ('local', null, false)。
+    {
+      toVersion: 5,
+      steps: [
+        addColumns({
+          table: 'items',
+          columns: [
+            { name: 'source_type', type: 'string', isOptional: true },
+            { name: 'source_uid', type: 'string', isOptional: true },
+            { name: 'source_read_only', type: 'boolean', isOptional: true },
           ],
         }),
       ],

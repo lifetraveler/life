@@ -1,7 +1,7 @@
 import { Model, Query, associations } from '@nozbe/watermelondb';
 import { children, date, field, readonly, text } from '@nozbe/watermelondb/decorators';
 
-import type { ItemStatus, ItemType } from '../../domain/item';
+import type { ItemSourceType, ItemStatus, ItemType } from '../../domain/item';
 import ItemTagModel from './ItemTagModel';
 import ReminderModel from './ReminderModel';
 
@@ -37,6 +37,15 @@ export default class ItemModel extends Model {
 
   // all_day 列 isOptional：既有行读到 null，读取层（toDomainItem）归一为 false。
   @field('all_day') allDay!: boolean | null;
+
+  // 切片 8（data-model.md v0.8）：外部来源字段，schema v5。
+  // 三列 isOptional：迁移不回填，既有行读到 null，读取层（toDomainItem）归一
+  // 为 ('local', null, false)；新行由 Repository 写入显式值。
+  @text('source_type') sourceType!: ItemSourceType | null;
+
+  @text('source_uid') sourceUid!: string | null;
+
+  @field('source_read_only') sourceReadOnly!: boolean | null;
 
   @readonly @date('created_at') createdAt!: Date;
 

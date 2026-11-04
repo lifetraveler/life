@@ -36,7 +36,7 @@
 - 今日视图三个分组，顺序固定：过期 → 已安排 → 今日创建。
 - 本周视图两个分组，顺序固定：过期 → 已安排（本周）。
 - 过期：endAt 非 null 且 endAt < now，且 status='active'。
-- 已安排：startAt 落在视图范围内；跨天 Item 满足 startAt < rangeEnd 且（endAt 为 null 时 startAt >= rangeStart，否则 endAt > rangeStart）。
+- 已安排：命中条件以 docs/contracts/repository.md「视图查询接口（v0.7）」为准：startAt ∈ [rangeStart, rangeEnd)；或 startAt < rangeStart 且 endAt 非 null 且 endAt > rangeStart。不在 ui.md 重复条件描述，避免两处歧义。
 - 今日创建：startAt 为 null 且 createdAt 落在今日范围内；仅今日视图有此分组。
 - allDay=true 的 Item 进入已安排分组，展示“全天”，排序按 startAt（当天 00:00）参与。
 - 同一 Item 只进一个分组，优先级：过期 > 已安排 > 今日创建。
@@ -47,8 +47,9 @@
 - 今日创建：createdAt 降序。
 
 ### 状态与交互
-- 已安排和过期分组展示 status='active' 与 'done'；done 项置灰并排在同组末尾。
-- 今日创建分组只展示 status='active'。
+- 过期组：仅 status='active'。
+- 已安排组：status='active' 与 'done'；done 项置灰并排在同组末尾。
+- 今日创建组：仅 status='active'。
 - 点击 Item 进入详情页。
 - 快速完成/取消完成必须触发一次 reconcile()；失败不阻断 UI，记录日志。
 - 归档/删除不在视图内提供，通过详情页操作。
@@ -61,3 +62,17 @@
 ### 刷新
 - 使用 WatermelonDB 响应式查询，Item/Reminder 变更后自动刷新。
 - 不轮询、不提供下拉刷新（可后置）。
+
+## 修复记录（v0.8，切片 8 前置）
+
+以下两节替换 v0.7 对应条目，实现不变（切片 7 已按 repository.md 实现）：
+
+### 已安排（替换 v0.7 原条件）
+- 命中条件以 docs/contracts/repository.md「视图查询接口（v0.7）」为准：
+  `startAt ∈ [rangeStart, rangeEnd)`；或 `startAt < rangeStart 且 endAt 非 null 且 endAt > rangeStart`。
+- 不在 ui.md 重复条件描述，避免两处歧义。
+
+### 分组内 status（替换 v0.7 原描述）
+- 过期组：仅 status='active'。
+- 已安排组：status='active' 与 'done'；done 项置灰并排在同组末尾。
+- 今日创建组：仅 status='active'。

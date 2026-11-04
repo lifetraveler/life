@@ -6,7 +6,7 @@ import { buildOccurrenceKey } from '../../domain/recurrence';
 import type { CreateItemInput, Item } from '../../domain/item';
 import type { CreateReminderInput, Reminder, UpdateReminderInput } from '../../domain/reminder';
 import type { ItemWithTags, Tag } from '../../domain/tag';
-import type { ItemRepository } from '../../data/ItemRepository';
+import type { ImportBatchResult, ItemRepository } from '../../data/ItemRepository';
 
 // —— 固定时钟锚点：2025-06-10T08:00:00Z ——
 const FIXED_NOW = 1749542400000;
@@ -61,6 +61,10 @@ function activeItem(id: string, title: string): Item {
     startAt: null,
     endAt: null,
     allDay: false,
+    // 切片 8 编译必需夹具补字段（§7.13）：调度器不读来源字段，固定 local 值。
+    sourceType: 'local',
+    sourceUid: null,
+    sourceReadOnly: false,
     createdAt: FIXED_NOW - 1,
     updatedAt: FIXED_NOW - 1,
   };
@@ -252,6 +256,31 @@ class FakeRepository implements ItemRepository {
 
   observeUnscheduledItemsCreatedInRange(): () => void {
     throw new Error('FakeRepository: observeUnscheduledItemsCreatedInRange 未实现');
+  }
+
+  // 切片 8（repository.md v0.8 + 契约外扩展）新增接口方法：调度器单测不触及，为满足接口而存在。
+  async createImportedItem(): Promise<ItemWithTags> {
+    throw new Error('FakeRepository: createImportedItem 未实现');
+  }
+
+  async findItemBySource(): Promise<ItemWithTags | null> {
+    throw new Error('FakeRepository: findItemBySource 未实现');
+  }
+
+  async listItemsForExport(): Promise<ItemWithTags[]> {
+    throw new Error('FakeRepository: listItemsForExport 未实现');
+  }
+
+  async updateImportedItemTime(): Promise<Item> {
+    throw new Error('FakeRepository: updateImportedItemTime 未实现');
+  }
+
+  async deleteItem(): Promise<void> {
+    throw new Error('FakeRepository: deleteItem 未实现');
+  }
+
+  async importItemsInBatches(): Promise<ImportBatchResult> {
+    throw new Error('FakeRepository: importItemsInBatches 未实现');
   }
 
   async createReminder(_input: CreateReminderInput): Promise<Reminder> {

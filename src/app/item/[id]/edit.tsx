@@ -120,6 +120,11 @@ export default function ItemEditPage() {
     if (!id || submitting) {
       return;
     }
+    // 切片 8：URL 直达时也必须拦截只读项（tasks/slice-08.md 实现要求 6）。
+    if (loaded?.sourceReadOnly ?? false) {
+      setFormError('只读项：此条目来自 ICS 导入，时间/标题/内容不可编辑');
+      return;
+    }
     const trimmedTitle = title.trim();
     if (trimmedTitle.length === 0) {
       setFormError('标题不能为空');
@@ -180,6 +185,14 @@ export default function ItemEditPage() {
   return (
     <KeyboardAvoidingView style={styles.flex} behavior="padding">
       <ScrollView style={styles.scroll} contentContainerStyle={styles.container}>
+        {(loaded?.sourceReadOnly ?? false) ? (
+          <View style={styles.readonlyBox}>
+            <Text style={styles.readonlyTitle}>来源：ICS（只读）</Text>
+            <Text style={styles.readonlyText}>
+              此条目来自 ICS 导入，时间/标题/内容不可编辑；可完成、归档或在详情页删除本地副本。
+            </Text>
+          </View>
+        ) : null}
         <Text style={styles.label}>标题</Text>
         <TextInput style={styles.input} value={title} onChangeText={setTitle} placeholder="标题" />
 
@@ -222,28 +235,34 @@ export default function ItemEditPage() {
         <View style={styles.row}>
           {tags.length === 0 ? <Text style={styles.meta}>暂无标签</Text> : null}
           {tags.map((tag) => (
-            <TagChip key={tag.id} label={tag.name} onRemove={() => handleRemoveTag(tag)} />
+            <TagChip
+              key={tag.id}
+              label={tag.name}
+              onRemove={(loaded?.sourceReadOnly ?? false) ? undefined : () => handleRemoveTag(tag)}
+            />
           ))}
         </View>
-        <View style={styles.row}>
-          <TextInput
-            style={[styles.input, styles.tagInput]}
-            value={tagInput}
-            onChangeText={setTagInput}
-            placeholder="新标签名"
-          />
-          <Pressable style={styles.secondaryButton} onPress={handleAddTag}>
-            <Text style={styles.secondaryText}>添加</Text>
-          </Pressable>
-        </View>
+        {(loaded?.sourceReadOnly ?? false) ? null : (
+          <View style={styles.row}>
+            <TextInput
+              style={[styles.input, styles.tagInput]}
+              value={tagInput}
+              onChangeText={setTagInput}
+              placeholder="新标签名"
+            />
+            <Pressable style={styles.secondaryButton} onPress={handleAddTag}>
+              <Text style={styles.secondaryText}>添加</Text>
+            </Pressable>
+          </View>
+        )}
 
         {formError ? <Text style={styles.errorText}>{formError}</Text> : null}
 
         <View style={styles.row}>
           <Pressable
-            style={[styles.primaryButton, submitting && styles.disabled]}
+            style={[styles.primaryButton, (submitting || (loaded?.sourceReadOnly ?? false)) && styles.disabled]}
             onPress={handleSave}
-            disabled={submitting}
+            disabled={submitting || (loaded?.sourceReadOnly ?? false)}
           >
             <Text style={styles.primaryText}>{submitting ? '保存中…' : '保存'}</Text>
           </Pressable>
@@ -357,5 +376,24 @@ const styles = StyleSheet.create({
   meta: {
     fontSize: 12,
     color: '#888',
+  },
+  readonlyBox: {
+    borderWidth: 1,
+    borderColor: '#c7d2fe',
+    backgroundColor: '#eef2ff',
+    borderRadius: 6,
+    padding: 10,
+    marginTop: 8,
+  },
+  readonlyTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#4f46e5',
+  },
+  readonlyText: {
+    fontSize: 12,
+    color: '#555',
+    lineHeight: 18,
+    marginTop: 4,
   },
 });
