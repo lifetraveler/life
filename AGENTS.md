@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.10
+版本：v0.11
 
 ## 1. 项目概览
 
@@ -98,10 +98,7 @@ AGENTS.md       本文件
 切片 10：Android 桌面小组件
 切片 11：可靠性切片（force-stop 后通知重排，需改 src/notifications/ 冻结区，先出变更提案）
 切片 11 之前不得改 src/notifications/ 实现文件。
-
-## 8. 当前切片
-tasks/slice-11.md（任务卡待创建）
-（切片 10 已完成并通过验收；收尾移交见 tasks/slice-10-closeout.md）
+切片 11 为可靠性切片，开工前必须先提交变更提案并通过用户确认；提案未确认前，禁止修改 src/notifications/ 实现文件。
 
 ### 7.15 系统日历来源契约（v0.9，切片 9 冻结）
 - sourceType 扩展为 'local' | 'ics' | 'system-calendar'。
@@ -138,3 +135,19 @@ tasks/slice-11.md（任务卡待创建）
 - 小组件点击条目：导航到对应 Item 详情页（复用切片 6 的 item/[id] 路由）。
 - 不得在小组件内实现完成/取消完成操作（避免在原生侧写 DB 的跨进程复杂度）；
   完成操作仍需进入 App。
+
+### 7.17 可靠性切片闸门（v0.11）
+- 切片 11 涉及两处冻结区变更：`src/polyfill.ts` 的时区来源、`src/notifications/` 的
+  reconcile 策略。
+- 开工顺序固定：先写变更提案（docs/proposals/slice-11-reliability.md），
+  列出影响范围、回滚方案、旧数据兼容路径，用户确认后再改实现。
+- 提案未确认前，不得修改 ReminderScheduler / reconcileDiff / computeMissed /
+  polyfill 四个实现文件；可以先写测试与纯函数草案，但不得合入。
+- 两处变更必须分两次提交：先时区、后通知。不得混在一个 commit 里，便于独立回滚。
+
+
+## 8. 当前切片
+tasks/slice-10.md → tasks/slice-11.md
+（切片 10 已完成并通过验收；收尾移交见 tasks/slice-10-closeout.md）
+
+
