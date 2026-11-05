@@ -1,3 +1,5 @@
+import * as Localization from 'expo-localization';
+
 import {
   formatItemDate,
   formatItemEnd,
@@ -6,6 +8,12 @@ import {
   formatReminderRuleSummary,
   getDeviceTzid,
 } from '../timeFormat';
+
+// 切片 11 变更 A：getDeviceTzid 收口到 src/data/deviceTimezone（expo-localization 来源）。
+// 这里 mock 掉原生依赖，验证委托行为与回退；格式化函数本身仍用显式 tzid 的纯函数断言。
+jest.mock('expo-localization', () => ({
+  getCalendars: jest.fn(() => [{ timeZone: 'Asia/Shanghai' }]),
+}));
 
 // 固定时刻（UTC 毫秒），民用结果按显式 tzid 断言，不依赖测试机时区。
 const TS_2025_06_10_01Z = Date.UTC(2025, 5, 10, 1, 0); // Asia/Shanghai(+08): 2025-06-10 09:00；NY(EDT -4): 2025-06-09 21:00
@@ -17,6 +25,21 @@ describe('timeFormat（切片 6 展示格式化，显式 tzid）', () => {
     const tzid = getDeviceTzid();
     expect(typeof tzid).toBe('string');
     expect(tzid.length).toBeGreaterThan(0);
+  });
+
+  it('getDeviceTzid 委托 expo-localization 日历时区（mock Asia/Shanghai）', () => {
+    (Localization.getCalendars as jest.Mock).mockReturnValue([{ timeZone: 'Asia/Shanghai' }]);
+    expect(getDeviceTzid()).toBe('Asia/Shanghai');
+  });
+
+  it('getDeviceTzid 无日历信息/异常时回退 UTC', () => {
+    (Localization.getCalendars as jest.Mock).mockReturnValue([]);
+    expect(getDeviceTzid()).toBe('UTC');
+    (Localization.getCalendars as jest.Mock).mockImplementation(() => {
+      throw new Error('native module unavailable');
+    });
+    expect(getDeviceTzid()).toBe('UTC');
+    (Localization.getCalendars as jest.Mock).mockReturnValue([{ timeZone: 'Asia/Shanghai' }]);
   });
 
   it('formatItemTime：Asia/Shanghai (+08)', () => {

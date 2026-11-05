@@ -90,3 +90,15 @@
     "scheduled": [{ "id": "...", "title": "...", "type": "event", "timeLabel": "14:00" }]
   }
 }
+```
+
+## 时区来源修正（v0.11，切片 11 落地）
+
+> 替换 v0.7「今日/本周视图」与 v0.8「allDay 归一化」中“当前 UTC 坐标系”的临时表述。
+
+- 设备时区一律通过 `getDeviceTzid()` 获取；其实现改为 `expo-localization.getCalendars()[0].timeZone`，
+  不依赖 `Intl.DateTimeFormat`。
+- 视图分组、allDay 归一化、小组件 timeLabel、新建 reminder 的默认 tzid，全部使用该来源。
+- 已有 tzid='UTC' 的 reminder 不自动迁移；其 occurrence 仍按 UTC 展开，
+  在详情页展示时标注“创建于时区修正前（UTC）”。
+- 小组件快照 JSON 的 `tzid` 字段改为真实设备时区；快照 schema 不变。
