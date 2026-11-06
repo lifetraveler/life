@@ -114,3 +114,15 @@ RN Directory 元数据 watermelondb/widget-snapshot-store/@nozbe/simdjson），�
    AGENTS.md 版本行 v0.10→v0.11 随提案 commit `d088618`。
 6. 测试种子留在设备 DB（SLICE11-TODAY / SLICE11-CAL-EVENT / 3 条 reminder；MuMu 无实机日历，
    日历事件经 syncadapter URI 直插）——复现验收可直接用，正式环境不影响。
+7. **dev-launcher reload 竞态（合并后观察，未改实现）**：force-stop 后经裸 deep link
+   `life://item/<id>` 冷启会先落在 expo-dev-launcher 界面（dev client 接管 `life://` scheme，
+   生产 build 无 launcher、直接进详情页）；从 launcher 再拉起的一次冷启中，cold start 的
+   forceRebuild 判定链**无任何日志**（既无 rebuild 行也无 catch warn），reconcile 走 diff
+   （注册表 89=期望 → diff ∅）并更新了 lastReconciledAt，`dumpsys alarm`=0。定性为 dev-launcher
+   「reloading app」（`raiseSoftException(getOrCreateDestroyTask())`）时序下的一次性竞态，
+   黑盒未能进一步归因；与 cold start 双 reconcile 触发源（useEffect + AppState）及 60s 判定的
+   读-写时序相关的可能性未排除。**自愈实证**：>60s 再冷启 forceRebuild 正常（89 条重排、闹钟
+   恢复）——验收结论不受影响，后果与披露 2 同族（单次冷启漏、下次补）。若后续要加固：
+   `reconcileNow` 并发去重/串行化（module 级 in-flight promise），留给后续切片评估。
+8. dev-launcher reload 竞态的复现前置是「force-stop → 裸 `life://` deep link 进 launcher 界面」，
+   该路径仅在 dev client 存在；验收/演示时从桌面图标或 `exp+life://...?url=` 直拉可避开。
