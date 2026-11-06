@@ -78,6 +78,10 @@ export interface ImportBatchResult {
  * - updateItem / addTagToItem / removeTagFromItem / listItemsWithTags：§4.5 冻结签名。
  * - searchItems / archiveItem / unarchiveItem / listArchivedItems：§4.7 冻结签名。
  *   listItemsWithTags 语义按 §4.7 明确为「未归档 + 未删除」的默认列表。
+ * - listArchivedItemsWithTags：repository.md v0.12「搜索与归档增强接口」明文新增
+ *   （切片 12），归档视图页的查询入口；与 v0.3 的 listArchivedItems 并存，
+ *   后者保留不删（既有调用方不改）。语义与 listArchivedItems 一致：
+ *   status='archived'，updatedAt 降序，返回 ItemWithTags。
  * - observeItems / observeItemsWithTags / observeTags：契约外显式扩展
  *   （与切片 1 observeItems 同一先例）：状态管理锁定为 WatermelonDB 响应式查询，
  *   而 UI 层不得直接访问 WatermelonDB，因此观察入口只能由 data 层提供。
@@ -124,6 +128,9 @@ export interface ItemRepository {
   archiveItem(id: string): Promise<void>;
   unarchiveItem(id: string): Promise<void>;
   listArchivedItems(): Promise<ItemWithTags[]>;
+  // —— v0.12：归档视图查询（repository.md「搜索与归档增强接口（v0.12）」明文新增，
+  //    切片 12 落地；与 v0.3 listArchivedItems 并存，后者保留不删）——
+  listArchivedItemsWithTags(): Promise<ItemWithTags[]>;
   observeItemsWithTags(onNext: (items: ItemWithTags[]) => void): () => void;
   observeTags(onNext: (tags: Tag[]) => void): () => void;
   getItem(id: string): Promise<Item | null>;

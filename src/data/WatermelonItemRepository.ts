@@ -513,6 +513,20 @@ export class WatermelonItemRepository implements ItemRepository {
     );
   }
 
+  /**
+   * 归档视图查询（repository.md v0.12「搜索与归档增强接口」）：status='archived'，
+   * updatedAt 降序，返回 ItemWithTags。与 v0.3 的 listArchivedItems 同语义并存，
+   * 切片 12 决策 C：归档页换调本方法；listArchivedItems 保留不删。
+   */
+  async listArchivedItemsWithTags(): Promise<ItemWithTags[]> {
+    return loadItemsWithTagsByItemQuery(
+      this.db,
+      this.db
+        .get<ItemModel>(ITEMS_TABLE)
+        .query(Q.where('status', 'archived'), SORT_BY_UPDATED_DESC),
+    );
+  }
+
   observeItemsWithTags(onNext: (items: ItemWithTags[]) => void): () => void {
     return combineLatest3(
       this.db

@@ -213,6 +213,10 @@ class FakeRepository implements ItemRepository {
     throw new Error('FakeRepository: listArchivedItems 未实现');
   }
 
+  async listArchivedItemsWithTags(): Promise<ItemWithTags[]> {
+    throw new Error('FakeRepository: listArchivedItemsWithTags 未实现');
+  }
+
   async updateItem(): Promise<Item> {
     throw new Error('FakeRepository: updateItem 未实现');
   }

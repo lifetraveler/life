@@ -7,21 +7,29 @@ import type { ItemWithTags } from '../domain/tag';
 import EmptyState from '../ui/EmptyState';
 import { TYPE_LABELS, formatTimestamp } from '../ui/display';
 import TagChip from '../ui/TagChip';
+import { formatItemStart, getDeviceTzid } from '../ui/timeFormat';
 
 /**
- * 已归档列表（切片 3）：展示 status = 'archived' 的 Item 及其标签，可取消归档。
- * 数据经 Repository 获取（listArchivedItems），不直接接触 WatermelonDB。
+ * 已归档列表（ui.md v0.12）：展示 status = 'archived' 的 Item 及其标签，可取消归档。
+ * 数据经 Repository 获取（listArchivedItemsWithTags，repository.md v0.12 归档视图
+ * 查询入口；切片 12 决策 C 由 listArchivedItems 换调而来），不直接接触 WatermelonDB。
+ * 加载与取消归档失败均用页面内提示，不静默（不再只 console.error）。
  */
 export default function ArchivedScreen() {
   const router = useRouter();
   const [items, setItems] = useState<ItemWithTags[]>([]);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const refresh = useCallback((): void => {
     void itemRepository
-      .listArchivedItems()
-      .then(setItems)
+      .listArchivedItemsWithTags()
+      .then((loaded) => {
+        setItems(loaded);
+        setErrorMessage(null);
+      })
       .catch((error: unknown) => {
-        console.error('listArchivedItems failed:', error);
+        console.error('listArchivedItemsWithTags failed:', error);
+        setErrorMessage('已归档列表加载失败，请重试');
       });
   }, []);
 
@@ -34,9 +42,13 @@ export default function ArchivedScreen() {
   const handleUnarchive = useCallback((itemId: string): void => {
     void itemRepository
       .unarchiveItem(itemId)
-      .then(refresh)
+      .then(() => {
+        setErrorMessage(null);
+        refresh();
+      })
       .catch((error: unknown) => {
         console.error('unarchiveItem failed:', error);
+        setErrorMessage('取消归档失败，请重试');
       });
   }, [refresh]);
 
@@ -47,6 +59,11 @@ export default function ArchivedScreen() {
         <Text style={styles.rowMeta}>
           {TYPE_LABELS[item.type]} · {formatTimestamp(item.updatedAt)}
         </Text>
+        {item.startAt !== null && (
+          <Text style={styles.rowMeta}>
+            归档前：{formatItemStart(item.startAt, item.allDay, getDeviceTzid())}
+          </Text>
+        )}
       </Pressable>
       <View style={styles.tagRow}>
         {item.tags.map((tag) => (
@@ -66,11 +83,14 @@ export default function ArchivedScreen() {
 
   return (
     <View style={styles.container}>
+      {errorMessage !== null && (
+        <Text style={styles.errorText}>{errorMessage}</Text>
+      )}
       <FlatList<ItemWithTags>
         data={items}
         renderItem={renderItem}
         keyExtractor={(record) => record.id}
-        ListEmptyComponent={<EmptyState message="暂无归档记录" />}
+        ListEmptyComponent={<EmptyState message="没有已归档的条目" />}
       />
     </View>
   );
@@ -117,5 +137,10 @@ const styles = StyleSheet.create({
   actionText: {
     fontSize: 12,
     color: '#333333',
+  },
+  errorText: {
+    color: '#b00020',
+    fontSize: 13,
+    marginBottom: 8,
   },
 });
