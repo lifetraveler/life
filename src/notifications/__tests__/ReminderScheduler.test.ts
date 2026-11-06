@@ -213,6 +213,10 @@ class FakeRepository implements ItemRepository {
     throw new Error('FakeRepository: listArchivedItems 未实现');
   }
 
+  async listArchivedItemsWithTags(): Promise<ItemWithTags[]> {
+    throw new Error('FakeRepository: listArchivedItemsWithTags 未实现');
+  }
+
   async updateItem(): Promise<Item> {
     throw new Error('FakeRepository: updateItem 未实现');
   }
@@ -306,6 +310,10 @@ class FakeRepository implements ItemRepository {
 
   async listRemindersByItem(): Promise<Reminder[]> {
     throw new Error('FakeRepository: listRemindersByItem 未实现');
+  }
+
+  async listAllReminders(): Promise<Reminder[]> {
+    throw new Error('FakeRepository: listAllReminders 未实现');
   }
 
   // 切片 9：接口新增方法，调度器单测不触及，为满足接口而存在（§7.13 夹具编译必需）。

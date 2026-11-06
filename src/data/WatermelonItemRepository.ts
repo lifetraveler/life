@@ -18,7 +18,12 @@ import type {
   Reminder,
   UpdateReminderInput,
 } from '../domain/reminder';
-import { escapeLikePattern, normalizeSearchKeyword } from '../domain/search';
+import {
+  escapeLikePattern,
+  extractDateFragment,
+  matchesDateFragment,
+  normalizeSearchKeyword,
+} from '../domain/search';
 import { normalizeTagName } from '../domain/tag';
 import type { ItemWithTags, Tag } from '../domain/tag';
 import ItemModel from '../db/models/ItemModel';
@@ -403,6 +408,8 @@ export class WatermelonItemRepository implements ItemRepository {
    * 1. tags 表按 name LIKE 匹配 → tagIds；
    * 2. item_tags 按 tag_id oneOf → itemIds；
    * 3. items 表 title/content LIKE（同表 OR 允许）→ itemIds；
+   * 3.5（v0.12）仅当关键词整体解析为日期片段时：items 表取 start_at/end_at
+   *    非空行，内存中对格式化日期（设备时区）做子串匹配 → itemIds；
    * 4. 合并去重，取回完整 ItemWithTags，按 updatedAt 降序返回。
    * 空关键词（trim 后为空）直接返回 []，不查库。
    */
@@ -446,6 +453,32 @@ export class WatermelonItemRepository implements ItemRepository {
       matchedItemIds.add(itemModel.id);
     }
 
+    // 第 3.5 步（repository.md v0.12）：日期片段命中。LIKE 语义无法对 epoch
+    // 数值列匹配 'YYYY-MM-DD' 格式化串，schema v5 冻结不能加生成列，故仅在
+    // 关键词整体解析为日期片段时：单表取 start_at/end_at 非空行（同表 OR 允许），
+    // 内存中对格式化日期（设备时区 = 构造器注入 deviceTzid，切片 11 来源）做
+    // 子串匹配。非日期关键词完全不触发本路径；本路径不过滤 status，与
+    // title/content/tag 匹配范围一致（结果并集只增不减）。
+    const dateFragment = extractDateFragment(trimmed);
+    if (dateFragment !== null) {
+      const tzid = this.deviceTzid();
+      const scheduledModels = await this.db
+        .get<ItemModel>(ITEMS_TABLE)
+        .query(Q.or(
+          Q.where('start_at', Q.notEq(null)),
+          Q.where('end_at', Q.notEq(null)),
+        ))
+        .fetch();
+      for (const scheduledModel of scheduledModels) {
+        if (
+          matchesDateFragment(scheduledModel.startAt, dateFragment, tzid) ||
+          matchesDateFragment(scheduledModel.endAt, dateFragment, tzid)
+        ) {
+          matchedItemIds.add(scheduledModel.id);
+        }
+      }
+    }
+
     // 第 4 步：合并去重 → 完整投影 → updatedAt 降序
     if (matchedItemIds.size === 0) {
       return [];
@@ -472,6 +505,20 @@ export class WatermelonItemRepository implements ItemRepository {
   }
 
   async listArchivedItems(): Promise<ItemWithTags[]> {
+    return loadItemsWithTagsByItemQuery(
+      this.db,
+      this.db
+        .get<ItemModel>(ITEMS_TABLE)
+        .query(Q.where('status', 'archived'), SORT_BY_UPDATED_DESC),
+    );
+  }
+
+  /**
+   * 归档视图查询（repository.md v0.12「搜索与归档增强接口」）：status='archived'，
+   * updatedAt 降序，返回 ItemWithTags。与 v0.3 的 listArchivedItems 同语义并存，
+   * 切片 12 决策 C：归档页换调本方法；listArchivedItems 保留不删。
+   */
+  async listArchivedItemsWithTags(): Promise<ItemWithTags[]> {
     return loadItemsWithTagsByItemQuery(
       this.db,
       this.db
@@ -1122,6 +1169,19 @@ export class WatermelonItemRepository implements ItemRepository {
     const models = await this.db
       .get<ReminderModel>(REMINDERS_TABLE)
       .query(Q.where('enabled', true), Q.sortBy('created_at', 'asc'))
+      .fetch();
+    return models.map(toDomainReminder);
+  }
+
+  /**
+   * 全库 Reminder 读取（契约外显式扩展，见 ItemRepository.ts 文件头）：
+   * 切片 12 数据导出的提醒概览入口（决策 A-1）。不过滤 enabled/status，
+   * 返回原始领域对象（调度器内部字段由导出序列化层负责剔除）。
+   */
+  async listAllReminders(): Promise<Reminder[]> {
+    const models = await this.db
+      .get<ReminderModel>(REMINDERS_TABLE)
+      .query(Q.sortBy('created_at', 'asc'))
       .fetch();
     return models.map(toDomainReminder);
   }
