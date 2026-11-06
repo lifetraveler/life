@@ -140,3 +140,22 @@ SystemImportResult：
 - 去重键复用 findItemBySource(sourceType='system-calendar', sourceUid)。
 - 批量写入沿用 importItemsInBatches（100/批），单条失败不影响其他条。
 - 不调用任何写入系统日历的 API。
+
+## 搜索与归档增强接口（v0.12，切片 12 落地）
+
+### 搜索范围扩展
+`searchItems(keyword: string)` 的签名不变，但匹配范围新增：
+- Item.startAt / Item.endAt 的格式化日期字符串（YYYY-MM-DD，设备时区）
+- 不新增参数；匹配范围由 Repository 内部实现决定。
+
+规则：
+- LIKE 转义逻辑不变（`%`、`_`、`\`）。
+- 跨表查询仍分步：先查 tags，再查 title/content/日期。
+- 排序不变：updatedAt 降序。
+
+### 归档视图查询
+新增：
+- `listArchivedItemsWithTags(): Promise<ItemWithTags[]>`
+  - 返回 status='archived' 的 Item，按 updatedAt 降序。
+  - 与 v0.3 的 listArchivedItems 并存；后者保留不删（既有调用方不改）。
+  - 标签关系保留，返回 ItemWithTags。

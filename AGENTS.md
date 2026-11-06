@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.11
+版本：v0.12
 
 ## 1. 项目概览
 
@@ -99,6 +99,7 @@ AGENTS.md       本文件
 切片 11：可靠性切片（force-stop 后通知重排，需改 src/notifications/ 冻结区，先出变更提案）
 切片 11 之前不得改 src/notifications/ 实现文件。
 切片 11 为可靠性切片，开工前必须先提交变更提案并通过用户确认；提案未确认前，禁止修改 src/notifications/ 实现文件。
+切片 12：搜索增强 + 已归档视图 + 数据导出 + 快速记录优化（纯功能层，不碰冻结区）
 
 ### 7.15 系统日历来源契约（v0.9，切片 9 冻结）
 - sourceType 扩展为 'local' | 'ics' | 'system-calendar'。
@@ -145,9 +146,15 @@ AGENTS.md       本文件
   polyfill 四个实现文件；可以先写测试与纯函数草案，但不得合入。
 - 两处变更必须分两次提交：先时区、后通知。不得混在一个 commit 里，便于独立回滚。
 
+### 7.18 搜索与数据导出约束（v0.12）
+- WatermelonDB 不引入 FTS5；搜索继续保持 LIKE 语义（切片 3 契约不变）。
+  搜索增强只做 UI 层与查询范围扩展，不改变匹配方式。
+- 数据导出复用切片 8 的 expo-file-system + expo-sharing 基础设施；
+  不新增原生依赖，不修改 package.json 的 native 依赖。
+- 快速记录增强不修改 quick-add 路由的 deep link 约定（`life://quick-add`），
+  只增加输入后行为（如保存后留在输入框、支持连续创建）。
 
 ## 8. 当前切片
-tasks/slice-11.md（可靠性切片：时区来源修正 + forceRebuild，已完成并通过验收；
-收尾移交见 tasks/slice-11-closeout.md）
+tasks/slice-11.md → tasks/slice-12.md
 
 
