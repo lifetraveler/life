@@ -6,6 +6,7 @@ import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
 
 import { itemRepository } from '../data';
+import { serializeExportData } from '../domain/export';
 import { buildIcs } from '../domain/ics/buildIcs';
 import { parseIcs } from '../domain/ics/parseIcs';
 import { reminderScheduler } from '../notifications';
@@ -20,6 +21,9 @@ import {
  * - 导入 ICS：DocumentPicker 选文件 → parseIcs → importItemsInBatches → 结果页；
  *   导入完成后 fire-and-forget 触发一次 reconcile()（失败不阻断结果页）；
  * - 导出 ICS：listItemsForExport → buildIcs → 写入 cache 目录 → Sharing 分享 → 成功页；
+ * - 导出 JSON（切片 12，tasks/slice-12.md 实现要求 3）：默认列表 ∪ 归档列表 + 全库
+ *   Reminder → serializeExportData → 写入 cache 目录 → Sharing 分享；成功/失败
+ *   页内提示（不用 Alert），导出路径纯只读、不触发 reconcile；
  * - 系统日历（切片 9）：纯导航入口 → /system-calendar-import（权限/选择/结果都在该页内）；
  * - 主页不放导入/导出入口（任务卡明确要求入口只在设置页）。
  */
@@ -37,6 +41,11 @@ function exportFileStamp(now: number): string {
 export default function SettingsPage() {
   const router = useRouter();
   const [busy, setBusy] = useState<'import' | 'export' | null>(null);
+  // 切片 12：JSON 导出的页内结果提示（成功/失败都不用 Alert，任务卡实现要求 3）。
+  const [exportJsonResult, setExportJsonResult] = useState<{
+    ok: boolean;
+    text: string;
+  } | null>(null);
 
   const handleImport = useCallback(async (): Promise<void> => {
     if (busy !== null) {
@@ -124,6 +133,55 @@ export default function SettingsPage() {
     }
   }, [busy, router]);
 
+  // 切片 12 JSON 导出（tasks/slice-12.md 实现要求 3）：范围=默认列表 ∪ 归档列表
+  // （决策 B，含 archived/done），提醒=全库（决策 A-1）；序列化纯函数在
+  // src/domain/export.ts。与 ICS 导出共用 busy='export'；不触发 reconcile。
+  const handleExportJson = useCallback(async (): Promise<void> => {
+    if (busy !== null) {
+      return;
+    }
+    setBusy('export');
+    setExportJsonResult(null);
+    try {
+      const [defaultItems, archivedItems, allReminders] = await Promise.all([
+        itemRepository.listItemsWithTags(),
+        itemRepository.listArchivedItemsWithTags(),
+        itemRepository.listAllReminders(),
+      ]);
+      const json = serializeExportData(
+        [...defaultItems, ...archivedItems],
+        allReminders,
+      );
+      const now = Date.now();
+      const fileName = `life-export-${exportFileStamp(now)}.json`;
+      const fileUri = `${FileSystem.cacheDirectory}${fileName}`;
+      await FileSystem.writeAsStringAsync(fileUri, json, {
+        encoding: FileSystem.EncodingType.UTF8,
+      });
+      const count = defaultItems.length + archivedItems.length;
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(fileUri, {
+          mimeType: 'application/json',
+          dialogTitle: '分享 JSON 导出文件',
+        });
+        setExportJsonResult({
+          ok: true,
+          text: `导出成功：${fileName}（${count} 条，已打开分享面板）`,
+        });
+      } else {
+        setExportJsonResult({
+          ok: true,
+          text: `导出成功：${fileName}（${count} 条，文件位于 ${fileUri}）`,
+        });
+      }
+    } catch (error) {
+      console.warn('[slice-12] JSON 导出失败', error);
+      setExportJsonResult({ ok: false, text: '导出失败，请重试' });
+    } finally {
+      setBusy(null);
+    }
+  }, [busy]);
+
   return (
     <View style={styles.container}>
       <View style={styles.section}>
@@ -175,6 +233,31 @@ export default function SettingsPage() {
           )}
         </Pressable>
       </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>导出 JSON</Text>
+        <Text style={styles.hint}>
+          导出全部条目（含已完成与已归档）及其标签、提醒规则为 JSON 文件，可通过系统分享面板发送或保存。
+        </Text>
+        <Pressable
+          style={[styles.primaryButton, busy !== null && styles.disabled]}
+          onPress={() => {
+            void handleExportJson();
+          }}
+          disabled={busy !== null}
+        >
+          {busy === 'export' ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.primaryText}>导出 JSON</Text>
+          )}
+        </Pressable>
+        {exportJsonResult !== null && (
+          <Text style={exportJsonResult.ok ? styles.hint : styles.errorHint}>
+            {exportJsonResult.text}
+          </Text>
+        )}
+      </View>
     </View>
   );
 }
@@ -200,6 +283,11 @@ const styles = StyleSheet.create({
   hint: {
     fontSize: 12,
     color: '#888',
+    lineHeight: 18,
+  },
+  errorHint: {
+    fontSize: 12,
+    color: '#b00020',
     lineHeight: 18,
   },
   primaryButton: {

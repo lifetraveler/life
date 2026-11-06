@@ -1173,6 +1173,19 @@ export class WatermelonItemRepository implements ItemRepository {
     return models.map(toDomainReminder);
   }
 
+  /**
+   * 全库 Reminder 读取（契约外显式扩展，见 ItemRepository.ts 文件头）：
+   * 切片 12 数据导出的提醒概览入口（决策 A-1）。不过滤 enabled/status，
+   * 返回原始领域对象（调度器内部字段由导出序列化层负责剔除）。
+   */
+  async listAllReminders(): Promise<Reminder[]> {
+    const models = await this.db
+      .get<ReminderModel>(REMINDERS_TABLE)
+      .query(Q.sortBy('created_at', 'asc'))
+      .fetch();
+    return models.map(toDomainReminder);
+  }
+
   /** 对账完成时间戳（§4.19 窗口起点）。 */
   async markReminderReconciled(id: string, lastReconciledAt: number): Promise<void> {
     await this.db.write(async () => {

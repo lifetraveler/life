@@ -92,6 +92,9 @@ export interface ImportBatchResult {
  *   listEnabledReminders / markReminderReconciled / markReminderFired：
  *   切片 5（§4.18）冻结签名。lastFiredOccurrenceKey / lastReconciledAt 由
  *   Repository 初始化为 null，仅调度器经 mark* 方法写入。
+ * - listAllReminders：契约外显式扩展（与 observe* / getItem 同一先例）：切片 12
+ *   数据导出需要全库 Reminder 概览（tasks/slice-12.md 实现要求 3，决策 A-1）；
+ *   不过滤 enabled/status，返回领域对象（调度器内部字段由导出序列化层剔除）。
  * - getItemById / updateItemTime：切片 6（§4.24）冻结签名。getItemById 返回
  *   ItemWithTags | null；updateItemTime 只动时间字段并同时刷新 updatedAt，
  *   startAt/endAt 同时非 null 时 endAt < startAt 抛明确错误。
@@ -166,6 +169,8 @@ export interface ItemRepository {
   deleteReminder(id: string): Promise<void>;
   listRemindersByItem(itemId: string): Promise<Reminder[]>;
   listEnabledReminders(): Promise<Reminder[]>;
+  // —— 切片 12：数据导出（契约外显式扩展，理由见文件头 listAllReminders 条目）——
+  listAllReminders(): Promise<Reminder[]>;
   markReminderReconciled(id: string, lastReconciledAt: number): Promise<void>;
   markReminderFired(id: string, occurrenceKey: string): Promise<void>;
 

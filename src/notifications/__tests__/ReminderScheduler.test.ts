@@ -312,6 +312,10 @@ class FakeRepository implements ItemRepository {
     throw new Error('FakeRepository: listRemindersByItem 未实现');
   }
 
+  async listAllReminders(): Promise<Reminder[]> {
+    throw new Error('FakeRepository: listAllReminders 未实现');
+  }
+
   // 切片 9：接口新增方法，调度器单测不触及，为满足接口而存在（§7.13 夹具编译必需）。
   async importSystemCalendarEvents(
     _input: SystemCalendarImportInput,
