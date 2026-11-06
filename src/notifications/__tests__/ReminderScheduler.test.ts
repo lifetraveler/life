@@ -132,6 +132,7 @@ jest.mock('expo-notifications', () => ({
   getAllScheduledNotificationsAsync: jest.fn(),
   scheduleNotificationAsync: jest.fn(),
   cancelScheduledNotificationAsync: jest.fn(),
+  cancelAllScheduledNotificationsAsync: jest.fn(),
   setNotificationHandler: jest.fn(),
   getPermissionsAsync: jest.fn(),
 }));
@@ -142,6 +143,9 @@ const getAllScheduledNotificationsAsyncMock = jest.mocked(
 const scheduleNotificationAsyncMock = jest.mocked(Notifications.scheduleNotificationAsync);
 const cancelScheduledNotificationAsyncMock = jest.mocked(
   Notifications.cancelScheduledNotificationAsync,
+);
+const cancelAllScheduledNotificationsAsyncMock = jest.mocked(
+  Notifications.cancelAllScheduledNotificationsAsync,
 );
 
 // —— 内存版 Repository：只实现调度器会触达的方法 ——
@@ -341,6 +345,9 @@ describe('WatermelonReminderScheduler（mock expo-notifications）', () => {
     cancelScheduledNotificationAsyncMock.mockImplementation(async (identifier) => {
       scheduledStore.delete(identifier);
     });
+    cancelAllScheduledNotificationsAsyncMock.mockImplementation(async () => {
+      scheduledStore.clear();
+    });
   });
 
   describe('reconcile', () => {
@@ -455,6 +462,51 @@ describe('WatermelonReminderScheduler（mock expo-notifications）', () => {
         { id: 'r2', lastReconciledAt: FIXED_NOW },
       ]);
     });
+
+    // —— 切片 11（notifications.md v0.11）：forceRebuild ——
+    it('forceRebuild=true：清空本 App 全部通知后全量重排，幽灵注册表不再误导 diff', async () => {
+      repository.items.set('i1', activeItem('i1', '标题甲'));
+      repository.reminders.set('r1', reminderR1());
+      const scheduler = makeScheduler(repository);
+      await scheduler.reconcile();
+      expect(scheduledStore.size).toBe(30);
+
+      // 模拟幽灵注册表：注册表残留一条 DB 中已无对应 occurrence 的通知。
+      scheduledStore.set('recurrence:v1|ghost|2025-06-10|09:00|UTC', storedRequest('recurrence:v1|ghost|2025-06-10|09:00|UTC'));
+
+      const result = await scheduler.reconcile({ forceRebuild: true });
+
+      expect(cancelAllScheduledNotificationsAsyncMock).toHaveBeenCalledTimes(1);
+      expect(scheduledStore.has('recurrence:v1|ghost|2025-06-10|09:00|UTC')).toBe(false);
+      expect([...scheduledStore.keys()].sort()).toEqual([...R1_EXPECTED_KEYS].sort());
+      expect(result.newlyScheduled).toEqual(R1_EXPECTED_KEYS);
+      // actual 视为空集：幽灵不进入 toCancel，取消动作完全由 cancelAll 承担。
+      expect(result.cancelled).toEqual([]);
+      expect(result.missed).toEqual([]);
+    });
+
+    it('forceRebuild 缺省/false：不调用 cancelAllScheduledNotificationsAsync，diff 语义不变', async () => {
+      repository.items.set('i1', activeItem('i1', '标题甲'));
+      repository.reminders.set('r1', reminderR1());
+      const scheduler = makeScheduler(repository);
+
+      await scheduler.reconcile();
+      await scheduler.reconcile({ forceRebuild: false });
+
+      expect(cancelAllScheduledNotificationsAsyncMock).not.toHaveBeenCalled();
+      expect(scheduledStore.size).toBe(30);
+    });
+
+    it('连续两次 forceRebuild：第二次 missed 为空（missed 逻辑仍基于 lastFiredOccurrenceKey）', async () => {
+      repository.items.set('i2', activeItem('i2', '标题乙'));
+      repository.reminders.set('r2', reminderR2());
+
+      const first = await seedAndReconcile(repository);
+      expect(first.missed.map((o) => o.occurrenceKey)).toEqual(R2_MISSED_KEYS);
+
+      const second = await seedAndReconcile(repository);
+      expect(second.missed).toEqual([]);
+    });
   });
 
   describe('cancelForReminder', () => {
@@ -530,6 +582,28 @@ describe('WatermelonReminderScheduler（mock expo-notifications）', () => {
       const newKeys = dailyKeys('r1', '10:00', 'UTC', '2025-06-10', 30);
       expect([...scheduledStore.keys()].sort()).toEqual([...newKeys].sort());
       expect(scheduledStore.size).toBe(30);
+    });
+  });
+
+  describe('getLastReconciledAt（切片 11 cold start 阈值数据源，决议②）', () => {
+    it('无 enabled reminder 或从未对账 → null', async () => {
+      const scheduler = makeScheduler(repository);
+      expect(await scheduler.getLastReconciledAt()).toBeNull();
+
+      repository.reminders.set('r1', reminderR1());
+      expect(await scheduler.getLastReconciledAt()).toBeNull();
+    });
+
+    it('对账后返回 lastReconciledAt 最大值（fixed clock 下即 FIXED_NOW）', async () => {
+      repository.items.set('i1', activeItem('i1', '标题甲'));
+      repository.reminders.set('r1', reminderR1());
+      repository.items.set('i2', activeItem('i2', '标题乙'));
+      repository.reminders.set('r2', reminderR2());
+
+      const scheduler = makeScheduler(repository);
+      await scheduler.reconcile();
+
+      expect(await scheduler.getLastReconciledAt()).toBe(FIXED_NOW);
     });
   });
 });
