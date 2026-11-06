@@ -147,7 +147,7 @@ AGENTS.md       本文件
 
 
 ## 8. 当前切片
-tasks/slice-10.md → tasks/slice-11.md
-（切片 10 已完成并通过验收；收尾移交见 tasks/slice-10-closeout.md）
+tasks/slice-11.md（可靠性切片：时区来源修正 + forceRebuild，已完成并通过验收；
+收尾移交见 tasks/slice-11-closeout.md）
 
 
