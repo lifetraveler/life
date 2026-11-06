@@ -76,7 +76,7 @@ export interface ReminderScheduler {
   scheduleForReminder(reminderId: string): Promise<void>;
   cancelForReminder(reminderId: string): Promise<void>;
   cancelAll(): Promise<void>;
-  reconcile(): Promise<ReconcileResult>;
+  reconcile(options?: { forceRebuild?: boolean }): Promise<ReconcileResult>;
 }
 
 export type ReminderSchedulerDeps = {
@@ -246,10 +246,27 @@ export class WatermelonReminderScheduler implements ReminderScheduler {
     }
   }
 
-  async reconcile(): Promise<ReconcileResult> {
+  /**
+   * 对账（notifications.md v0.11：reconcile(options?: { forceRebuild?: boolean })）。
+   * - forceRebuild 缺省/false：与 v0.5 语义完全一致（纯 diff）。
+   * - forceRebuild=true：先 cancelAllScheduledNotificationsAsync 清掉本 App 全部
+   *   已调度通知，再把现网集合视为空集全量重建（missed 逻辑不变，仍基于
+   *   lastFiredOccurrenceKey）。用于修复 force-stop / install -r / pm clear 后
+   *   AlarmManager 真实闹钟已清、expo SharedPreferences 注册表残留的「幽灵注册表」
+   *   （切片 8 发现：actual 与期望 diff 误判为一致，reconcile 静默跳过，通知永不触发）。
+   *   已知边界：cancelAllScheduledNotificationsAsync 的范围是「本 App 全部通知」，
+   *   当前只有 reminder 前缀通知，可接受；后续若新增非前缀通知类型，必须改为按
+   *   前缀取消（任务卡：此风险写入 closeout）。
+   */
+  async reconcile(options?: { forceRebuild?: boolean }): Promise<ReconcileResult> {
     const now = this.now();
+    const forceRebuild = options?.forceRebuild === true;
+    if (forceRebuild) {
+      await Notifications.cancelAllScheduledNotificationsAsync();
+      this.log('reconcile: forceRebuild — cancelled ALL app notifications, rebuilding');
+    }
     const reminders = await this.repository.listEnabledReminders();
-    const actualKeys = await this.listScheduledOurKeys();
+    const actualKeys = forceRebuild ? new Set<string>() : await this.listScheduledOurKeys();
 
     // §4.16（与 scheduleForReminder 同语义）：Item 不存在 / 已完成 / 已归档 → 等价 cancel。
     // 在 reconcile 中：该 reminder 不展开、不计 missed，其现网通知因不在期望集合而被对账取消。
@@ -375,6 +392,25 @@ export class WatermelonReminderScheduler implements ReminderScheduler {
     }
 
     return { newlyScheduled, cancelled, missed };
+  }
+
+  /**
+   * 全部 enabled reminder 的 lastReconciledAt 最大值（毫秒）；无记录返回 null。
+   * 切片 11（变更提案决议②）：cold start 以「距上次对账 > 60s」判断是否传
+   * forceRebuild，阈值数据源是 DB（markReminderReconciled 落库，reconcile 每轮
+   * 对全部 active reminder 刷新），不引入 AsyncStorage。非冻结接口方法，
+   * 由 _layout.tsx 直接经 WatermelonReminderScheduler 实例调用。
+   */
+  async getLastReconciledAt(): Promise<number | null> {
+    const reminders = await this.repository.listEnabledReminders();
+    let latest: number | null = null;
+    for (const reminder of reminders) {
+      const at = reminder.lastReconciledAt;
+      if (at !== null && (latest === null || at > latest)) {
+        latest = at;
+      }
+    }
+    return latest;
   }
 
   // —— 以下为调试页（tasks/slice-05.md 实现要求 7）所需的附加能力，不进入冻结接口 ——

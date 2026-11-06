@@ -59,3 +59,15 @@
 - 点击通知（前台、后台、冷启动三种路径）必须导航到 Item 详情页。
 - Item 不存在时显示“条目已删除”占位页，不崩溃。
 - 通知点击不得自动标记 Item 完成，不得自动 acknowledge missed；missed 确认在后续切片。
+
+
+## reconcile forceRebuild（v0.11，切片 11 落地）
+
+- `reconcile(options?: { forceRebuild?: boolean }): Promise<ReconcileResult>`。
+- `forceRebuild=true` 时，先 `cancelAllScheduledNotificationsAsync()`，
+  再对全部 enabled reminder 重新 `scheduleForReminder`；
+  `missed` 计算逻辑不变，仍基于 `lastFiredOccurrenceKey`。
+- `forceRebuild=false` 或缺省时，行为与 v0.5 完全一致。
+- 调用约定：App cold start 且距上次 reconcile > 60s 时传 true；
+  前台恢复、数据变更、WIDGET_UPDATE 传 false。
+- 500 条预算逻辑不变；forceRebuild 后若超出预算，最远的 reminder 仍跳过并记 warning。

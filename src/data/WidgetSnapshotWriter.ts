@@ -29,7 +29,8 @@ export class WidgetSnapshotWriter {
   /**
    * 查库 → 生成快照 → 写入 SharedPreferences。
    * nowMs 由调用方传入（启动/回前台/变更回调各自取当下）；
-   * tzid 用 getDeviceTzid()（运行时伪影：恒 'UTC'，见 slice-08 closeout，本切片不修）。
+   * tzid 用 getDeviceTzid()（切片 11 变更 A 起为真实设备时区；此前恒 'UTC' 的
+   * 运行时伪影已修，见 slice-11 提案与 closeout）。
    * 返回写入是否成功。
    */
   async writeSnapshotFromRepository(nowMs: number, tzid: string): Promise<boolean> {

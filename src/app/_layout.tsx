@@ -17,6 +17,9 @@ import {
 } from '../notifications/notificationResponse';
 import { initWidgetSnapshotBridge } from '../widget';
 
+/** 切片 11：cold start 距上次对账超过该阈值才 forceRebuild（notifications.md v0.11）。 */
+const FORCE_REBUILD_THRESHOLD_MS = 60_000;
+
 /**
  * App 根布局（切片 5 接线，AGENTS.md §4.20 / §4.16 / §4.19；切片 6 §4.26 增加点击路由；
  * 切片 10 §7.16 增加小组件快照桥）：
@@ -37,9 +40,9 @@ export default function RootLayout() {
       console.warn('[slice-05] 通知权限申请失败，降级为无通知', error);
     });
 
-    const reconcileNow = (): void => {
+    const reconcileNow = (options?: { forceRebuild?: boolean }): void => {
       void reminderScheduler
-        .reconcile()
+        .reconcile(options)
         .then((result) => {
           recordAutoReconcileResult(result);
         })
@@ -47,7 +50,23 @@ export default function RootLayout() {
           console.warn('[slice-05] reconcile 失败', error);
         });
     };
-    reconcileNow();
+    // 切片 11（notifications.md v0.11）：仅 cold start 判断是否强制重建——
+    // force-stop / install -r / pm clear 会清掉 AlarmManager 真实闹钟而
+    // expo SharedPreferences 注册表残留（幽灵注册表），纯 diff 会误判一致、
+    // 通知永不触发。距上次对账（DB lastReconciledAt，决议②）> 60s 或从无
+    // 记录 → forceRebuild；前台恢复 / 数据变更路径走默认 diff。
+    void reminderScheduler
+      .getLastReconciledAt()
+      .then((lastReconciledAt) => {
+        const forceRebuild =
+          lastReconciledAt === null ||
+          Date.now() - lastReconciledAt > FORCE_REBUILD_THRESHOLD_MS;
+        reconcileNow({ forceRebuild });
+      })
+      .catch((error: unknown) => {
+        console.warn('[slice-11] getLastReconciledAt 失败，走默认 diff 对账', error);
+        reconcileNow();
+      });
     const subscription = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
         reconcileNow();

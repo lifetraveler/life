@@ -10,14 +10,12 @@
 import { formatLocalDate, formatLocalTime, getZonedParts } from '../domain/recurrence/civilTime';
 import type { Reminder, ReminderFrequency } from '../domain/reminder';
 
-/** 设备当前 IANA 时区（§4.27：详情页按设备当前 IANA 时区格式化）；取不到时回退 UTC。 */
-export function getDeviceTzid(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-  } catch {
-    return 'UTC';
-  }
-}
+/**
+ * 设备当前 IANA 时区（§4.27：详情页按设备当前 IANA 时区格式化）；取不到时回退 UTC。
+ * 切片 11 变更 A：实现收口到 src/data/deviceTimezone（expo-localization 来源，
+ * 不再依赖 Intl.DateTimeFormat），此处仅再导出，避免两处读时区逻辑分叉。
+ */
+export { getDeviceTzid } from '../data/deviceTimezone';
 
 /** 绝对时刻 → 'YYYY-MM-DD HH:mm'（显式 tzid） */
 export function formatItemTime(instant: number, tzid: string): string {

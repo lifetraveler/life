@@ -323,6 +323,11 @@ export default function ItemDetailPage() {
                 {!editable ? (
                   <Text style={styles.readonlyNote}>该时区暂不支持编辑（只读）</Text>
                 ) : null}
+                {reminder.tzid === 'UTC' ? (
+                  // 切片 11 变更 A：时区来源修正前的历史 reminder 不迁移（occurrence 仍按 UTC 展开），
+                  // 详情页如实标注（docs/contracts/ui.md v0.11）。
+                  <Text style={styles.readonlyNote}>创建于时区修正前（UTC）</Text>
+                ) : null}
                 {editable && editingThis ? (
                   <ReminderFormEditor
                     initial={reminder}
