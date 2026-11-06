@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { Link, useRouter } from 'expo-router';
+import {
+  BackHandler,
+  FlatList,
+  Keyboard,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+import { Link, useRouter, useFocusEffect } from 'expo-router';
 
 import { itemRepository } from '../data';
 import type { ItemType } from '../domain/item';
@@ -9,6 +18,8 @@ import EmptyState from '../ui/EmptyState';
 import SearchInput from '../ui/SearchInput';
 import { TYPE_LABELS, formatTimestamp } from '../ui/display';
 import TagChip from '../ui/TagChip';
+import { consumeTitleFocusRequest } from '../ui/focusRequestStore';
+import { isQuickAddDraftEmpty } from '../ui/quickAddDraft';
 
 const ITEM_TYPES: readonly ItemType[] = ['note', 'task', 'event'];
 
@@ -53,6 +64,11 @@ export default function IndexScreen() {
   // 行内「添加标签」编辑器状态：当前展开的 Item id + 输入框文本
   const [editingTagsForId, setEditingTagsForId] = useState<string | null>(null);
   const [rowTagInput, setRowTagInput] = useState('');
+
+  // 切片 12（ui.md v0.12 快速记录增强）：标题输入聚焦（quick-add 落地）与
+  // 返回键收键盘判定所需。
+  const titleInputRef = useRef<TextInput | null>(null);
+  const keyboardVisibleRef = useRef(false);
 
   // 搜索状态：输入原文 + 最近一次完成搜索的结果。
   // 约定：searchInput 为空串 = 默认列表模式；非空（含纯空白）= 搜索模式。
@@ -146,6 +162,50 @@ export default function IndexScreen() {
       }
     })();
   }, [canSave, content, pendingTags, selectedType, title]);
+
+  // 切片 12（ui.md v0.12 快速记录增强）：quick-add 深链 replace('/') 落地后
+  // 聚焦标题输入。聚焦请求是模块级一次性信号（quick-add.tsx 置位，此处消费
+  // 复位）；useFocusEffect 每次回到主页都触发，100ms 延迟避开路由切换动画期
+  // TextInput 尚未挂稳的问题（冷启动深链尤甚）。
+  useFocusEffect(
+    useCallback(() => {
+      if (!consumeTitleFocusRequest()) {
+        return;
+      }
+      const timer = setTimeout(() => {
+        titleInputRef.current?.focus();
+      }, 100);
+      return () => clearTimeout(timer);
+    }, []),
+  );
+
+  // 切片 12（ui.md v0.12 快速记录增强）：返回键按草稿空/非空区分——
+  // 键盘未弹起时不拦截（返回 false 走默认行为：根页退出/系统返回）；
+  // 键盘弹起时：草稿为空 = 关闭键盘并退出聚焦；草稿非空 = 仅关闭键盘、不丢草稿。
+  useEffect(() => {
+    const showSub = Keyboard.addListener('keyboardDidShow', () => {
+      keyboardVisibleRef.current = true;
+    });
+    const hideSub = Keyboard.addListener('keyboardDidHide', () => {
+      keyboardVisibleRef.current = false;
+    });
+    const backSub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (!keyboardVisibleRef.current) {
+        return false;
+      }
+      Keyboard.dismiss();
+      if (isQuickAddDraftEmpty(title, content, tagInput, pendingTags.length)) {
+        titleInputRef.current?.blur();
+        return true;
+      }
+      return true;
+    });
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+      backSub.remove();
+    };
+  }, [content, pendingTags, tagInput, title]);
 
   const handleConvertToTask = useCallback((itemId: string): void => {
     void itemRepository
@@ -310,6 +370,7 @@ export default function IndexScreen() {
       <Text style={styles.sectionLabel}>新建记录</Text>
       <TextInput
         style={styles.titleInput}
+        ref={titleInputRef}
         value={title}
         onChangeText={setTitle}
         placeholder="标题（必填）"
