@@ -44,3 +44,11 @@ export const ITEM_PRIORITY_MAX = 3;
 export function isValidItemPriority(value: number): boolean {
   return Number.isInteger(value) && value >= ITEM_PRIORITY_MIN && value <= ITEM_PRIORITY_MAX;
 }
+
+/** priority → 展示标签（§7.22：0=无 1=低 2=中 3=高）；详情页与编辑页共用（阶段 3）。 */
+const ITEM_PRIORITY_LABELS: Record<number, string> = { 0: '无', 1: '低', 2: '中', 3: '高' };
+
+/** 取优先级展示标签；越界值回退数字本身（防御库中脏数据）。 */
+export function itemPriorityLabel(priority: number): string {
+  return ITEM_PRIORITY_LABELS[priority] ?? String(priority);
+}

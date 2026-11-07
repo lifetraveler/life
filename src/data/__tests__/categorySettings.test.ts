@@ -17,7 +17,8 @@ import { WatermelonItemRepository } from '../WatermelonItemRepository';
  * - 关系水合（ItemWithRelations.category/tags，AGENTS.md §7.23）与悬挂 category_id 容错；
  * - createItem/updateItem 的分类与优先级校验（§7.22）；
  * - updateCategoryVisuals/updateTagVisuals 视觉更新；
- * - createImportedItem 落默认分类（category='other'，priority=0）。
+ * - createImportedItem 落默认分类（category='other'，priority=0）；
+ * - 阶段 3 补充：局部 patch、显式 null 清除、空 patch no-op 与设置往返。
  * 真实 WatermelonDB + LokiJS 内存适配器（同 viewQueries/importExport 基准）；
  * 时区经构造函数注入固定为 Asia/Shanghai，不依赖测试机设置。
  */
@@ -296,5 +297,56 @@ describe('导入落默认分类（createImportedItem）', () => {
     const fetched = await repository.getItemById(imported.id);
     expect(fetched?.category?.id).toBe('other');
     expect(fetched?.priority).toBe(0);
+  });
+});
+
+describe('阶段 3 补充：视觉更新与设置往返边角', () => {
+  it('updateCategoryVisuals 局部 patch：只传 emoji 不动 color，只传 color 不动 emoji', async () => {
+    const { repository } = makeContext();
+    // updateCategoryVisuals 本身不触发 ensureSeeded（同上）：先 getCategories() 落预置分类
+    await repository.getCategories();
+    const emojiPatched = await repository.updateCategoryVisuals('work', { emoji: '🚀' });
+    expect(emojiPatched.color).toBe('#E57373');
+    expect(emojiPatched.emoji).toBe('🚀');
+    const colorPatched = await repository.updateCategoryVisuals('work', { color: '#123456' });
+    expect(colorPatched.color).toBe('#123456');
+    expect(colorPatched.emoji).toBe('🚀');
+  });
+
+  it('updateTagVisuals 显式 color: null 清除颜色、emoji 保持不变；经水合路径回读确认', async () => {
+    const { repository } = makeContext();
+    const item = await repository.createItem({ type: 'note', title: 'X' });
+    const tag = await repository.addTagToItem(item.id, '标签B');
+    await repository.updateTagVisuals(tag.id, { color: '#FFB74D', emoji: '📝' });
+    const cleared = await repository.updateTagVisuals(tag.id, { color: null });
+    expect(cleared.color).toBeNull();
+    expect(cleared.emoji).toBe('📝');
+    // 回读验证：listItemsWithTags 水合出的 tag 颜色已清空、图标未受影响
+    const listed = await repository.listItemsWithTags();
+    expect(listed[0]?.tags[0]?.color).toBeNull();
+    expect(listed[0]?.tags[0]?.emoji).toBe('📝');
+  });
+
+  it('updateSettings 往返：text → emoji → both → text，每步 getSettings 随之变化', async () => {
+    const { repository } = makeContext();
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text' });
+    await repository.updateSettings({ tagDisplayMode: 'emoji' });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'emoji' });
+    await repository.updateSettings({ tagDisplayMode: 'both' });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'both' });
+    await repository.updateSettings({ tagDisplayMode: 'text' });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text' });
+  });
+
+  it('updateCategoryVisuals 空 patch 是合法 no-op：不抛错且视觉值不变', async () => {
+    const { repository } = makeContext();
+    await repository.getCategories();
+    const before = (await repository.getCategories()).find((category) => category.id === 'work');
+    expect(before).toBeDefined();
+    // 既有用例表明未知 id 抛错，这里用真实存在的预置分类 id 'work' 验证空 patch 合法
+    const updated = await repository.updateCategoryVisuals('work', {});
+    expect(updated).toEqual(before);
+    const after = (await repository.getCategories()).find((category) => category.id === 'work');
+    expect(after).toEqual(before);
   });
 });

@@ -18,6 +18,7 @@ import EmptyState from '../ui/EmptyState';
 import SearchInput from '../ui/SearchInput';
 import { TYPE_LABELS, formatTimestamp } from '../ui/display';
 import TagChip from '../ui/TagChip';
+import { useTagDisplayMode } from '../ui/useTagDisplayMode';
 import { consumeTitleFocusRequest } from '../ui/focusRequestStore';
 import { isQuickAddDraftEmpty } from '../ui/quickAddDraft';
 
@@ -78,6 +79,9 @@ export default function IndexScreen() {
 
   // 竞态保护：每次新的搜索输入/重放递增序号，过期响应一律丢弃（任务卡 4）。
   const searchSeqRef = useRef(0);
+
+  // 切片 14 阶段 3：标签展示样式（设置页全局切换）
+  const tagDisplayMode = useTagDisplayMode();
 
   useEffect(() => itemRepository.observeItemsWithTags(setItems), []);
   useEffect(() => itemRepository.observeTags(setAllTags), []);
@@ -305,6 +309,7 @@ export default function IndexScreen() {
             <TagChip
               key={tag.id}
               tag={tag}
+              mode={tagDisplayMode}
               onRemove={() => handleRemoveTag(item.id, tag.id)}
             />
           ))}
@@ -349,6 +354,7 @@ export default function IndexScreen() {
                     <TagChip
                       key={tag.id}
                       tag={tag}
+                      mode={tagDisplayMode}
                       onPress={() => handleAddTagToItem(item.id, tag.name)}
                     />
                   ))}
@@ -360,7 +366,8 @@ export default function IndexScreen() {
       </View>
     );
   }, [editingTagsForId, handleAddTagToItem, handleArchive, handleConvertToTask, handleRemoveTag,
-    handleRowTagInputChange, rowTagInput, router, submitRowTag, suggestTagsFor, toggleTagEditor]);
+    handleRowTagInputChange, rowTagInput, router, submitRowTag, suggestTagsFor, tagDisplayMode,
+    toggleTagEditor]);
 
   const searching = searchInput.length > 0;
   const displayedItems = searching ? searchResults : items;

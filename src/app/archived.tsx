@@ -7,6 +7,7 @@ import type { ItemWithTags } from '../domain/tag';
 import EmptyState from '../ui/EmptyState';
 import { TYPE_LABELS, formatTimestamp } from '../ui/display';
 import TagChip from '../ui/TagChip';
+import { useTagDisplayMode } from '../ui/useTagDisplayMode';
 import { formatItemStart, getDeviceTzid } from '../ui/timeFormat';
 
 /**
@@ -19,6 +20,8 @@ export default function ArchivedScreen() {
   const router = useRouter();
   const [items, setItems] = useState<ItemWithTags[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // 切片 14 阶段 3：标签展示样式（设置页全局切换）
+  const tagDisplayMode = useTagDisplayMode();
 
   const refresh = useCallback((): void => {
     void itemRepository
@@ -67,7 +70,7 @@ export default function ArchivedScreen() {
       </Pressable>
       <View style={styles.tagRow}>
         {item.tags.map((tag) => (
-          <TagChip key={tag.id} tag={tag} />
+          <TagChip key={tag.id} tag={tag} mode={tagDisplayMode} />
         ))}
       </View>
       <View style={styles.actionRow}>
@@ -79,7 +82,7 @@ export default function ArchivedScreen() {
         </Pressable>
       </View>
     </View>
-  ), [handleUnarchive, router]);
+  ), [handleUnarchive, router, tagDisplayMode]);
 
   return (
     <View style={styles.container}>

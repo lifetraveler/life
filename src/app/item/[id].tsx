@@ -3,18 +3,21 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 
 import { itemRepository } from '../../data';
-import type { ItemWithTags } from '../../domain/tag';
+import { itemPriorityLabel } from '../../domain/category';
+import type { ItemWithRelations } from '../../domain/relations/itemWithRelations';
 import type { Reminder, ReconcileResult, UpdateReminderInput } from '../../domain/reminder';
 import {
   getLastAutoReconcileResult,
   reminderScheduler,
 } from '../../notifications';
 import { isWhitelistedReminderTz } from '../../data/reminderTzWhitelist';
+import CategoryChip from '../../ui/CategoryChip';
 import EmptyState from '../../ui/EmptyState';
 import ReminderFormEditor from '../../ui/ReminderFormEditor';
 import type { ReminderFormValues } from '../../ui/reminderForm';
 import { buildCreateReminderInput } from '../../ui/reminderForm';
 import TagChip from '../../ui/TagChip';
+import { useTagDisplayMode } from '../../ui/useTagDisplayMode';
 import {
   formatItemEnd,
   formatItemStart,
@@ -53,13 +56,15 @@ export default function ItemDetailPage() {
   const router = useRouter();
 
   // undefined=加载中；null=条目不存在（占位态）
-  const [item, setItem] = useState<ItemWithTags | null | undefined>(undefined);
+  const [item, setItem] = useState<ItemWithRelations | null | undefined>(undefined);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [formMode, setFormMode] = useState<FormMode>(null);
   const [saveReconcile, setSaveReconcile] = useState<ReconcileResult | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const deviceTzid = getDeviceTzid();
+  // 切片 14 阶段 3：标签展示样式（设置页全局切换）
+  const tagDisplayMode = useTagDisplayMode();
 
   const load = useCallback(async (): Promise<void> => {
     if (!id) {
@@ -245,12 +250,18 @@ export default function ItemDetailPage() {
         {TYPE_LABELS[item.type] ?? item.type} · 状态 {item.status}
       </Text>
 
+      {/* 切片 14 阶段 3：分类与优先级展示（只读；编辑在编辑页） */}
+      <View style={styles.tagRow}>
+        {item.category ? <CategoryChip category={item.category} /> : null}
+        <Text style={styles.priorityText}>优先级：{itemPriorityLabel(item.priority)}</Text>
+      </View>
+
       {item.content.length > 0 ? <Text style={styles.content}>{item.content}</Text> : null}
 
       {item.tags.length > 0 ? (
         <View style={styles.tagRow}>
           {item.tags.map((tag) => (
-            <TagChip key={tag.id} tag={tag} />
+            <TagChip key={tag.id} tag={tag} mode={tagDisplayMode} />
           ))}
         </View>
       ) : null}
@@ -369,6 +380,9 @@ export default function ItemDetailPage() {
           <Text style={styles.devText}>本页保存对账：{reconcileBrief(saveReconcile)}</Text>
         </View>
       ) : null}
+
+      {/* 切片 14 阶段 3：来源只读项底部灰色「只读」标注（Toki 图2 风格） */}
+      {item.sourceReadOnly ? <Text style={styles.readonlyFooter}>只读</Text> : null}
     </ScrollView>
   );
 }
@@ -410,6 +424,17 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 6,
     marginTop: 10,
+  },
+  priorityText: {
+    fontSize: 13,
+    color: '#555',
+    alignSelf: 'center',
+  },
+  readonlyFooter: {
+    textAlign: 'center',
+    color: '#9e9e9e',
+    fontSize: 13,
+    marginTop: 24,
   },
   sectionBox: {
     marginTop: 16,

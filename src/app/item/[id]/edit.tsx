@@ -13,10 +13,15 @@ import {
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 
 import { itemRepository } from '../../../data';
-import type { ItemWithTags, Tag } from '../../../domain/tag';
+import { itemPriorityLabel } from '../../../domain/category';
+import type { Category } from '../../../domain/category';
+import type { ItemWithRelations } from '../../../domain/relations/itemWithRelations';
+import type { Tag } from '../../../domain/tag';
 import type { Item, UpdateItemInput } from '../../../domain/item';
 import { reminderScheduler } from '../../../notifications';
+import CategoryChip from '../../../ui/CategoryChip';
 import TagChip from '../../../ui/TagChip';
+import { useTagDisplayMode } from '../../../ui/useTagDisplayMode';
 import DateTimeField from '../../../ui/DateTimeField';
 import { getDeviceTzid } from '../../../ui/timeFormat';
 
@@ -34,13 +39,21 @@ const TYPE_OPTIONS: Array<{ value: Item['type']; label: string }> = [
   { value: 'event', label: '日程' },
 ];
 
+/** 优先级选项（§7.22：0=无 1=低 2=中 3=高；选择器用 ★ 表示 1-3） */
+const PRIORITY_OPTIONS: readonly number[] = [0, 1, 2, 3];
+
+function priorityOptionLabel(priority: number): string {
+  return priority <= 0 ? '无' : '★'.repeat(priority);
+}
+
 export default function ItemEditPage() {
   const params = useLocalSearchParams<{ id?: string }>();
   const id = typeof params.id === 'string' ? params.id : '';
   const router = useRouter();
 
   const deviceTzid = getDeviceTzid();
-  const [loaded, setLoaded] = useState<ItemWithTags | null | undefined>(undefined);
+  const tagDisplayMode = useTagDisplayMode();
+  const [loaded, setLoaded] = useState<ItemWithRelations | null | undefined>(undefined);
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [type, setType] = useState<Item['type']>('note');
@@ -49,6 +62,10 @@ export default function ItemEditPage() {
   const [allDay, setAllDay] = useState(false);
   const [tags, setTags] = useState<Tag[]>([]);
   const [tagInput, setTagInput] = useState('');
+  // 切片 14 阶段 3：分类/优先级（保存时随 updateItem 提交；categoryId null=尚未加载）
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [categoryId, setCategoryId] = useState<string | null>(null);
+  const [priority, setPriority] = useState(0);
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -58,7 +75,11 @@ export default function ItemEditPage() {
       return;
     }
     try {
-      const itemLoaded = await itemRepository.getItemById(id);
+      const [itemLoaded, categoryList] = await Promise.all([
+        itemRepository.getItemById(id),
+        itemRepository.getCategories(),
+      ]);
+      setCategories(categoryList);
       if (itemLoaded) {
         setTitle(itemLoaded.title);
         setContent(itemLoaded.content);
@@ -67,6 +88,8 @@ export default function ItemEditPage() {
         setEndAt(itemLoaded.endAt);
         setAllDay(itemLoaded.allDay);
         setTags(itemLoaded.tags);
+        setCategoryId(itemLoaded.categoryId);
+        setPriority(itemLoaded.priority);
       }
       setLoaded(itemLoaded);
     } catch (error) {
@@ -138,7 +161,12 @@ export default function ItemEditPage() {
     setSubmitting(true);
     try {
       // title/content/type 走 §4.5 updateItem；时间字段只走 §4.24 updateItemTime。
+      // 切片 14 阶段 3：categoryId/priority 一并随 updateItem 提交（repository.md v0.14）。
       const patch: UpdateItemInput = { title: trimmedTitle, content, type };
+      if (categoryId !== null) {
+        patch.categoryId = categoryId;
+      }
+      patch.priority = priority;
       await itemRepository.updateItem(id, patch);
       await itemRepository.updateItemTime(id, { startAt, endAt, allDay });
       // §4.27：Item 时间变更后 reconcile；失败不阻断保存，错误写日志。
@@ -220,6 +248,47 @@ export default function ItemEditPage() {
           ))}
         </View>
 
+        {(loaded?.sourceReadOnly ?? false) ? null : (
+          <>
+            {/* 切片 14 阶段 3：分类选择器——横向滑动 Chip，选中高亮，保存时更新 categoryId。 */}
+            <Text style={styles.label}>分类</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.chipScrollRow}
+            >
+              {categories.map((category) => (
+                <Pressable
+                  key={category.id}
+                  style={[
+                    styles.categoryOption,
+                    categoryId === category.id && styles.categoryOptionActive,
+                  ]}
+                  onPress={() => setCategoryId(category.id)}
+                >
+                  <CategoryChip category={category} />
+                </Pressable>
+              ))}
+            </ScrollView>
+
+            {/* 切片 14 阶段 3：优先级选择器（0-3，保存时更新 priority）。 */}
+            <Text style={styles.label}>优先级</Text>
+            <View style={styles.row}>
+              {PRIORITY_OPTIONS.map((value) => (
+                <Pressable
+                  key={value}
+                  style={[styles.chip, priority === value && styles.chipActive]}
+                  onPress={() => setPriority(value)}
+                >
+                  <Text style={[styles.chipText, priority === value && styles.chipTextActive]}>
+                    {priorityOptionLabel(value)}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          </>
+        )}
+
         <Text style={styles.label}>开始时间（按设备时区 {deviceTzid} 显示）</Text>
         <DateTimeField label="开始" value={startAt} mode="datetime" onChange={setStartAt} />
 
@@ -238,6 +307,7 @@ export default function ItemEditPage() {
             <TagChip
               key={tag.id}
               tag={tag}
+              mode={tagDisplayMode}
               onRemove={(loaded?.sourceReadOnly ?? false) ? undefined : () => handleRemoveTag(tag)}
             />
           ))}
@@ -316,6 +386,20 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     alignItems: 'center',
     gap: 8,
+  },
+  chipScrollRow: {
+    flexDirection: 'row',
+    gap: 6,
+    paddingVertical: 2,
+  },
+  categoryOption: {
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: 'transparent',
+    padding: 1,
+  },
+  categoryOptionActive: {
+    borderColor: '#1e6f5c',
   },
   chip: {
     borderWidth: 1,

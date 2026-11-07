@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -9,7 +9,9 @@ import { itemRepository } from '../data';
 import { serializeExportData } from '../domain/export';
 import { buildIcs } from '../domain/ics/buildIcs';
 import { parseIcs } from '../domain/ics/parseIcs';
+import type { TagDisplayMode } from '../domain/settings';
 import { reminderScheduler } from '../notifications';
+import TagChip from '../ui/TagChip';
 import { getDeviceTzid } from '../ui/timeFormat';
 import {
   setLastExportResult,
@@ -38,6 +40,16 @@ function exportFileStamp(now: number): string {
   )}${pad2(d.getMinutes())}${pad2(d.getSeconds())}`;
 }
 
+/** 标签展示样式选项（§7.22 tagDisplayMode；切片 14 阶段 3 验收 7） */
+const TAG_DISPLAY_OPTIONS: ReadonlyArray<{ value: TagDisplayMode; label: string }> = [
+  { value: 'text', label: '纯文字' },
+  { value: 'emoji', label: '仅表情' },
+  { value: 'both', label: '表情 + 文字' },
+];
+
+/** 单选行的效果示例标签（固定样例数据，非数据库记录） */
+const SAMPLE_TAG = { name: '示例', color: '#64B5F6', emoji: '💼' };
+
 export default function SettingsPage() {
   const router = useRouter();
   const [busy, setBusy] = useState<'import' | 'export' | null>(null);
@@ -46,6 +58,53 @@ export default function SettingsPage() {
     ok: boolean;
     text: string;
   } | null>(null);
+
+  // 切片 14 阶段 3：全局标签展示样式（app_settings.tagDisplayMode）。
+  // null = 尚未加载完成；切换为乐观更新，失败回滚并页内提示（不用 Alert）。
+  const [displayMode, setDisplayMode] = useState<TagDisplayMode | null>(null);
+  const [modeSaving, setModeSaving] = useState(false);
+  const [modeError, setModeError] = useState<string | null>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      itemRepository
+        .getSettings()
+        .then((settings) => {
+          if (!cancelled) {
+            setDisplayMode(settings.tagDisplayMode);
+          }
+        })
+        .catch((error: unknown) => {
+          console.warn('[slice-14] 读取标签展示样式失败', error);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }, []),
+  );
+
+  const handleModeChange = useCallback(
+    async (mode: TagDisplayMode): Promise<void> => {
+      if (modeSaving || displayMode === null || mode === displayMode) {
+        return;
+      }
+      const previous = displayMode;
+      setDisplayMode(mode);
+      setModeSaving(true);
+      try {
+        await itemRepository.updateSettings({ tagDisplayMode: mode });
+        setModeError(null);
+      } catch (error) {
+        console.warn('[slice-14] 标签展示样式保存失败', error);
+        setDisplayMode(previous);
+        setModeError('保存失败，请重试');
+      } finally {
+        setModeSaving(false);
+      }
+    },
+    [modeSaving, displayMode],
+  );
 
   const handleImport = useCallback(async (): Promise<void> => {
     if (busy !== null) {
@@ -185,6 +244,44 @@ export default function SettingsPage() {
   return (
     <View style={styles.container}>
       <View style={styles.section}>
+        <Text style={styles.sectionTitle}>分类与标签</Text>
+        <Text style={styles.hint}>自定义预置分类与标签的颜色、图标。</Text>
+        <Pressable style={styles.navRow} onPress={() => router.push('/settings/categories')}>
+          <Text style={styles.navLabel}>分类管理</Text>
+          <Text style={styles.navChevron}>›</Text>
+        </Pressable>
+        <Pressable style={styles.navRow} onPress={() => router.push('/settings/tags')}>
+          <Text style={styles.navLabel}>标签管理</Text>
+          <Text style={styles.navChevron}>›</Text>
+        </Pressable>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>标签展示样式</Text>
+        <Text style={styles.hint}>影响列表、详情、编辑等页面的标签显示方式。</Text>
+        {TAG_DISPLAY_OPTIONS.map((option) => {
+          const selected = displayMode === option.value;
+          return (
+            <Pressable
+              key={option.value}
+              style={styles.radioRow}
+              onPress={() => {
+                void handleModeChange(option.value);
+              }}
+              disabled={displayMode === null || modeSaving}
+            >
+              <View style={[styles.radioOuter, selected && styles.radioOuterActive]}>
+                {selected ? <View style={styles.radioInner} /> : null}
+              </View>
+              <Text style={styles.radioLabel}>{option.label}</Text>
+              <TagChip tag={SAMPLE_TAG} mode={option.value} />
+            </Pressable>
+          );
+        })}
+        {modeError !== null ? <Text style={styles.errorHint}>{modeError}</Text> : null}
+      </View>
+
+      <View style={styles.section}>
         <Text style={styles.sectionTitle}>导入</Text>
         <Text style={styles.hint}>
           选择一个 .ics 文件（如 Google Calendar 导出）。重复 UID 自动去重；只读项可在详情页删除本地副本。
@@ -305,5 +402,53 @@ const styles = StyleSheet.create({
   },
   disabled: {
     opacity: 0.5,
+  },
+  // —— 切片 14 阶段 3：分类/标签导航行与标签展示样式单选 ——
+  navRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    paddingHorizontal: 4,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#f0f0f0',
+  },
+  navLabel: {
+    fontSize: 14,
+    color: '#333',
+  },
+  navChevron: {
+    fontSize: 16,
+    color: '#bbb',
+  },
+  radioRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+  },
+  radioOuter: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 2,
+    borderColor: '#bbb',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  radioOuterActive: {
+    borderColor: '#1e6f5c',
+  },
+  radioInner: {
+    width: 9,
+    height: 9,
+    borderRadius: 4.5,
+    backgroundColor: '#1e6f5c',
+  },
+  radioLabel: {
+    fontSize: 14,
+    color: '#333',
+    flex: 1,
   },
 });

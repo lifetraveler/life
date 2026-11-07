@@ -102,6 +102,9 @@ export default function RootLayout() {
         <Stack.Screen name="week" options={{ title: '本周' }} />
         <Stack.Screen name="archived" options={{ title: '已归档' }} />
         <Stack.Screen name="settings" options={{ title: '设置' }} />
+        {/* 切片 14 阶段 3：分类/标签视觉配置页（tasks/slice-14.md 阶段 3） */}
+        <Stack.Screen name="settings/categories" options={{ title: '分类管理' }} />
+        <Stack.Screen name="settings/tags" options={{ title: '标签管理' }} />
         <Stack.Screen name="import-result" options={{ title: '导入结果' }} />
         <Stack.Screen name="system-calendar-import" options={{ title: '导入系统日历' }} />
         <Stack.Screen name="export-success" options={{ title: '导出成功' }} />
