@@ -107,3 +107,17 @@ Item 新增字段：
 - 编辑页选择 allDay 时只提供日期，不提供时刻；Repository 收到日期后按设备时区 00:00 落库。
 - 导入 ICS 的 VALUE=DATE 事件：解析出的 startAt 是“当天 00:00 在 ICS 声明时区”的绝对时刻；
   落库前按“该绝对时刻在设备时区对应的日期”的 00:00 重新归一化，保证与本地 allDay 语义一致。
+
+## Category 实体与 Item 关联（v0.14）
+
+### Category 预置数据
+应用启动/迁移时，必须预置以下分类（不可删除，允许用户修改颜色和 Emoji）：
+- id: 'work', name: '工作', color: '#E57373', emoji: '💼', priority: 1
+- id: 'personal', name: '个人', color: '#64B5F6', emoji: '🏠', priority: 2
+- id: 'study', name: '学习', color: '#FFB74D', emoji: '📚', priority: 3
+- id: 'health', name: '健康', color: '#81C784', emoji: '🏃', priority: 4
+- id: 'other', name: '其他', color: '#9E9E9E', emoji: '📌', priority: 5
+
+### 数据结构关系
+- Item 通过 `category_id` 关联 Category。
+- 任何查询 Item 的接口（如今日视图、搜索、Agenda）必须返回完整的 Category 对象，以便 UI 渲染颜色条和 Emoji。

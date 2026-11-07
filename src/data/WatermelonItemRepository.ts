@@ -24,12 +24,24 @@ import {
   matchesDateFragment,
   normalizeSearchKeyword,
 } from '../domain/search';
+import { DEFAULT_CATEGORY_ID, isValidItemPriority } from '../domain/category';
+import type { Category } from '../domain/category';
 import { normalizeTagName } from '../domain/tag';
 import type { ItemWithTags, Tag } from '../domain/tag';
+import type { ItemWithRelations } from '../domain/relations/itemWithRelations';
+import {
+  APP_SETTINGS_ROW_ID,
+  DEFAULT_APP_SETTINGS,
+  isTagDisplayMode,
+} from '../domain/settings';
+import type { AppSettings } from '../domain/settings';
+import AppSettingsModel from '../db/models/AppSettingsModel';
+import CategoryModel from '../db/models/CategoryModel';
 import ItemModel from '../db/models/ItemModel';
 import ItemTagModel from '../db/models/ItemTagModel';
 import ReminderModel from '../db/models/ReminderModel';
 import TagModel from '../db/models/TagModel';
+import { seedPresetData } from '../db/seed';
 import { normalizeAllDayTimestamps } from './allDayNormalize';
 import { getDeviceTzid } from './deviceTimezone';
 import { assertValidItemTimePatch, assertValidItemTimeRange } from './itemTimeRules';
@@ -38,6 +50,7 @@ import type {
   ItemRepository,
   SystemCalendarImportInput,
   SystemImportResult,
+  VisualPatch,
 } from './ItemRepository';
 import { defaultSystemCalendarDeps } from './systemCalendarAdapters';
 import type { SystemCalendarDeps } from './systemCalendarAdapters';
@@ -53,6 +66,9 @@ const ITEMS_TABLE = 'items';
 const TAGS_TABLE = 'tags';
 const ITEM_TAGS_TABLE = 'item_tags';
 const REMINDERS_TABLE = 'reminders';
+// 切片 14（AGENTS.md §7.22，schema v6）：分类与全局设置表。
+const CATEGORIES_TABLE = 'categories';
+const APP_SETTINGS_TABLE = 'app_settings';
 
 /** repository.md v0.8：导入超过 500 条时分批写入，每批 100 条。 */
 const IMPORT_BATCH_SIZE = 100;
@@ -98,6 +114,11 @@ function toDomainItem(model: ItemModel): Item {
     sourceType: model.sourceType ?? 'local',
     sourceUid: model.sourceUid ?? null,
     sourceReadOnly: model.sourceReadOnly ?? false,
+    // 切片 14（AGENTS.md §7.22，schema v6）：分类关联与优先级。
+    // category_id 列 isOptional（升级安装迁移以 SQL 回填 'other'）；域层归一为 'other'，
+    // 与 sourceType ?? 'local' 同一模式。priority 非可选（迁移对既有行回填 0）。
+    categoryId: model.categoryId ?? DEFAULT_CATEGORY_ID,
+    priority: model.priority,
     createdAt: model.createdAt.getTime(),
     updatedAt: model.updatedAt.getTime(),
   };
@@ -107,7 +128,33 @@ function toDomainTag(model: TagModel): Tag {
   return {
     id: model.id,
     name: model.name,
+    // 切片 14（AGENTS.md §7.22，schema v6）：标签视觉字段；列 isOptional，既有行迁移回填 null。
+    color: model.color ?? null,
+    emoji: model.emoji ?? null,
     createdAt: model.createdAt.getTime(),
+  };
+}
+
+/** 切片 14（§7.22）：categories 行 → 领域 Category。 */
+function toDomainCategory(model: CategoryModel): Category {
+  return {
+    id: model.id,
+    name: model.name,
+    color: model.color ?? null,
+    emoji: model.emoji ?? null,
+    priority: model.priority,
+  };
+}
+
+/**
+ * 切片 14（§7.22）：app_settings 行 → 领域 AppSettings。
+ * 库中读到非法枚举值（理论上不应出现，如手改数据库）时防御性回退默认值，不抛错。
+ */
+function toDomainSettings(model: AppSettingsModel): AppSettings {
+  return {
+    tagDisplayMode: isTagDisplayMode(model.tagDisplayMode)
+      ? model.tagDisplayMode
+      : DEFAULT_APP_SETTINGS.tagDisplayMode,
   };
 }
 
@@ -131,15 +178,24 @@ function toDomainReminder(model: ReminderModel): Reminder {
   };
 }
 
-/** 内存连接：Item × ItemTag × Tag → ItemWithTags（tags 按 join 的 created_at 升序，即绑定顺序） */
-function joinItemsWithTags(
+/**
+ * 内存连接：Item × ItemTag × Tag × Category → ItemWithRelations
+ * （tags 按 join 的 created_at 升序，即绑定顺序；category 悬挂引用 → null，
+ * repository.md v0.14「关联 Category 未找到（数据异常）时 category 返回 null」）。
+ */
+function joinItemsWithRelations(
   itemModels: ItemModel[],
   joinModels: ItemTagModel[],
   tagModels: TagModel[],
-): ItemWithTags[] {
+  categoryModels: CategoryModel[],
+): ItemWithRelations[] {
   const tagsById = new Map<string, Tag>();
   for (const tagModel of tagModels) {
     tagsById.set(tagModel.id, toDomainTag(tagModel));
+  }
+  const categoriesById = new Map<string, Category>();
+  for (const categoryModel of categoryModels) {
+    categoriesById.set(categoryModel.id, toDomainCategory(categoryModel));
   }
 
   const tagsByItemId = new Map<string, Tag[]>();
@@ -159,11 +215,14 @@ function joinItemsWithTags(
   return itemModels.map((itemModel) => ({
     ...toDomainItem(itemModel),
     tags: tagsByItemId.get(itemModel.id) ?? [],
+    category: itemModel.categoryId === null
+      ? null
+      : (categoriesById.get(itemModel.categoryId) ?? null),
   }));
 }
 
 /** §4.8：updatedAt 降序；updatedAt 并列时按 id 升序，保证合并去重后的顺序确定。 */
-function sortByUpdatedAtDesc(items: ItemWithTags[]): ItemWithTags[] {
+function sortByUpdatedAtDesc(items: ItemWithRelations[]): ItemWithRelations[] {
   return [...items].sort((a, b) => {
     if (a.updatedAt !== b.updatedAt) {
       return b.updatedAt - a.updatedAt;
@@ -172,60 +231,103 @@ function sortByUpdatedAtDesc(items: ItemWithTags[]): ItemWithTags[] {
   });
 }
 
-/** 给定 items 查询，取回三表数据并在内存完成 ItemWithTags 投影（join 顺序 = created_at 升序）。 */
-async function loadItemsWithTagsByItemQuery(
+/**
+ * 给定 items 查询，批量水合 ItemWithRelations（AGENTS.md §7.23；切片 14 任务卡要求）：
+ * 先取 items → 收集 itemIds/categoryIds → Q.oneOf 批量取 item_tags 与 categories
+ * → 再按 join 收集 tagIds → Q.oneOf 取 tags → 内存合并。
+ * 不用全表 join 查询、不用 model @children/@relation，避免 N+1 与无关数据扫描。
+ * Q.oneOf 不接受空数组：集合为空时跳过对应查询。
+ */
+async function loadItemsWithRelationsByItemQuery(
   db: Database,
   itemQuery: Query<ItemModel>,
-): Promise<ItemWithTags[]> {
+): Promise<ItemWithRelations[]> {
   const itemModels = await itemQuery.fetch();
-  const [joinModels, tagModels] = await Promise.all([
-    db.get<ItemTagModel>(ITEM_TAGS_TABLE).query(Q.sortBy('created_at', 'asc')).fetch(),
-    db.get<TagModel>(TAGS_TABLE).query().fetch(),
-  ]);
-  return joinItemsWithTags(itemModels, joinModels, tagModels);
+  if (itemModels.length === 0) {
+    return [];
+  }
+
+  const categoryIds = [...new Set(
+    itemModels
+      .map((model) => model.categoryId)
+      .filter((id): id is string => id !== null),
+  )];
+  const categoryModels = categoryIds.length === 0
+    ? []
+    : await db.get<CategoryModel>(CATEGORIES_TABLE)
+      .query(Q.where('id', Q.oneOf(categoryIds)))
+      .fetch();
+
+  const joinModels = await db.get<ItemTagModel>(ITEM_TAGS_TABLE)
+    .query(
+      Q.where('item_id', Q.oneOf(itemModels.map((model) => model.id))),
+      Q.sortBy('created_at', 'asc'),
+    )
+    .fetch();
+
+  const tagIds = [...new Set(joinModels.map((join) => join.tagId))];
+  const tagModels = tagIds.length === 0
+    ? []
+    : await db.get<TagModel>(TAGS_TABLE).query(Q.where('id', Q.oneOf(tagIds))).fetch();
+
+  return joinItemsWithRelations(itemModels, joinModels, tagModels, categoryModels);
 }
 
-/** 三路 observe 的最小 combineLatest：三者都到达后才投影 onNext；无需引入 rxjs */
-function combineLatest3<T1, T2, T3, R>(
+/** 四路 observe 的最小 combineLatest：四者都到达后才投影 onNext；无需引入 rxjs */
+function combineLatest4<T1, T2, T3, T4, R>(
   source1: Subscribable<T1>,
   source2: Subscribable<T2>,
   source3: Subscribable<T3>,
-  project: (value1: T1, value2: T2, value3: T3) => R,
+  source4: Subscribable<T4>,
+  project: (value1: T1, value2: T2, value3: T3, value4: T4) => R,
   onNext: (value: R) => void,
 ): () => void {
   let value1: T1 | undefined;
   let value2: T2 | undefined;
   let value3: T3 | undefined;
+  let value4: T4 | undefined;
   let ready1 = false;
   let ready2 = false;
   let ready3 = false;
+  let ready4 = false;
 
   const emit = (): void => {
     if (
-      ready1 && ready2 && ready3
-      && value1 !== undefined && value2 !== undefined && value3 !== undefined
+      ready1 && ready2 && ready3 && ready4
+      && value1 !== undefined && value2 !== undefined && value3 !== undefined && value4 !== undefined
     ) {
-      onNext(project(value1, value2, value3));
+      onNext(project(value1, value2, value3, value4));
     }
   };
 
   const sub1 = source1.subscribe((value) => { value1 = value; ready1 = true; emit(); });
   const sub2 = source2.subscribe((value) => { value2 = value; ready2 = true; emit(); });
   const sub3 = source3.subscribe((value) => { value3 = value; ready3 = true; emit(); });
+  const sub4 = source4.subscribe((value) => { value4 = value; ready4 = true; emit(); });
 
   return (): void => {
     sub1.unsubscribe();
     sub2.unsubscribe();
     sub3.unsubscribe();
+    sub4.unsubscribe();
   };
 }
 
 /**
  * ItemRepository 的 WatermelonDB 实现。UI 与业务层不得直接使用本类之外的 WatermelonDB API。
  * Tag.name 唯一性（trim + 大小写不敏感）在本层保证（AGENTS.md §4.4）。
+ * 切片 14（AGENTS.md §7.22/§7.23）：所有查询统一水合 ItemWithRelations；
+ * categories/app_settings 预置行由 migration（升级安装）或 seedPresetData（全新安装）就位，
+ * 写路径与分类/设置入口经 ensureSeeded() 兜底。
  */
 export class WatermelonItemRepository implements ItemRepository {
   private readonly db: Database;
+
+  /**
+   * 切片 14：seedPresetData 的单次执行缓存（幂等）。
+   * undefined = 尚未执行；执行失败时重置回 undefined，允许下次写路径重试。
+   */
+  private seedPromise: Promise<void> | undefined;
 
   /**
    * 设备时区读取（切片 8）：allDay startAt 归一化按「设备当前 IANA 时区」执行。
@@ -268,7 +370,21 @@ export class WatermelonItemRepository implements ItemRepository {
     );
     assertValidItemTimeRange(normalized.startAt, normalized.endAt);
 
+    // 切片 14（§7.22/repository.md v0.14）：未传 categoryId 落默认 'other'，未传 priority 落 0；
+    // 显式传入 categoryId（含 null→归一后的默认值）时校验分类存在。
+    const explicitCategoryId = input.categoryId ?? null;
+    const categoryId = explicitCategoryId ?? DEFAULT_CATEGORY_ID;
+    const priority = input.priority ?? 0;
+    if (!isValidItemPriority(priority)) {
+      throw new Error('createItem: priority must be an integer in [0, 3]');
+    }
+    // 全新安装兜底：预置分类与设置行必须已就位（升级安装由 migration 插入）。
+    await this.ensureSeeded();
+
     const created = await this.db.write(async () => {
+      if (explicitCategoryId !== null) {
+        await this.assertCategoryExistsInTransaction(categoryId, 'createItem');
+      }
       const item = await this.db.get<ItemModel>(ITEMS_TABLE).create((record) => {
         record.type = input.type;
         record.title = title;
@@ -283,6 +399,9 @@ export class WatermelonItemRepository implements ItemRepository {
         record.sourceType = 'local';
         record.sourceUid = null;
         record.sourceReadOnly = false;
+        // 切片 14（§7.22）：分类与优先级。
+        record.categoryId = categoryId;
+        record.priority = priority;
       });
       return item;
     });
@@ -290,23 +409,28 @@ export class WatermelonItemRepository implements ItemRepository {
     return toDomainItem(created);
   }
 
-  async listItems(): Promise<Item[]> {
-    const models = await this.db.get<ItemModel>(ITEMS_TABLE).query().fetch();
-    return models.map(toDomainItem);
+  async listItems(): Promise<ItemWithRelations[]> {
+    // 切片 14（§7.23）：listItems 升级为完整水合投影。
+    return loadItemsWithRelationsByItemQuery(
+      this.db,
+      this.db.get<ItemModel>(ITEMS_TABLE).query(),
+    );
   }
 
-  observeItems(onNext: (items: Item[]) => void): () => void {
-    const subscription = this.db
-      .get<ItemModel>(ITEMS_TABLE)
-      .query(Q.sortBy('created_at', 'desc'))
-      .observe()
-      .subscribe((models) => {
-        onNext(models.map(toDomainItem));
-      });
-
-    return (): void => {
-      subscription.unsubscribe();
-    };
+  observeItems(onNext: (items: ItemWithRelations[]) => void): () => void {
+    // 切片 14（§7.23）：观察路径同样返回完整水合投影；第四路源为 categories 全表，
+    // 分类行变化（改名/换色）也能触发重新投影。
+    return combineLatest4(
+      this.db
+        .get<ItemModel>(ITEMS_TABLE)
+        .query(Q.sortBy('created_at', 'desc'))
+        .observe(),
+      this.itemTagsJoinQuery().observe(),
+      this.allTagsQuery().observe(),
+      this.allCategoriesQuery().observe(),
+      joinItemsWithRelations,
+      onNext,
+    );
   }
 
   async updateItem(id: string, patch: UpdateItemInput): Promise<Item> {
@@ -321,6 +445,20 @@ export class WatermelonItemRepository implements ItemRepository {
         throw new Error(
           'updateItem: item is source read-only (imported); only status may be updated',
         );
+      }
+      // 切片 14（§7.22/repository.md v0.14）：分类与优先级扩展。
+      // categoryId 显式 null → 归一为默认分类 'other'；显式非 null 时校验分类存在。
+      let nextCategoryId: string | undefined;
+      if (patch.categoryId !== undefined) {
+        nextCategoryId = patch.categoryId ?? DEFAULT_CATEGORY_ID;
+        await this.assertCategoryExistsInTransaction(nextCategoryId, 'updateItem');
+      }
+      let nextPriority: number | undefined;
+      if (patch.priority !== undefined) {
+        if (!isValidItemPriority(patch.priority)) {
+          throw new Error('updateItem: priority must be an integer in [0, 3]');
+        }
+        nextPriority = patch.priority;
       }
       return record.update((draft) => {
         if (patch.title !== undefined) {
@@ -338,6 +476,12 @@ export class WatermelonItemRepository implements ItemRepository {
         }
         if (patch.status !== undefined) {
           draft.status = patch.status;
+        }
+        if (nextCategoryId !== undefined) {
+          draft.categoryId = nextCategoryId;
+        }
+        if (nextPriority !== undefined) {
+          draft.priority = nextPriority;
         }
         // updated_at 不在此赋值：WatermelonDB prepareUpdate 内部自动刷新（且列声明为 readonly）。
       });
@@ -395,9 +539,10 @@ export class WatermelonItemRepository implements ItemRepository {
     });
   }
 
-  async listItemsWithTags(): Promise<ItemWithTags[]> {
+  async listItemsWithTags(): Promise<ItemWithRelations[]> {
     // §4.7：默认列表语义 = 未归档 + 未删除；§4.8：按 updatedAt 降序。
-    return loadItemsWithTagsByItemQuery(
+    // 切片 14（§7.23）：升级为 ItemWithRelations 水合。
+    return loadItemsWithRelationsByItemQuery(
       this.db,
       this.db.get<ItemModel>(ITEMS_TABLE).query(NOT_ARCHIVED, SORT_BY_UPDATED_DESC),
     );
@@ -410,10 +555,10 @@ export class WatermelonItemRepository implements ItemRepository {
    * 3. items 表 title/content LIKE（同表 OR 允许）→ itemIds；
    * 3.5（v0.12）仅当关键词整体解析为日期片段时：items 表取 start_at/end_at
    *    非空行，内存中对格式化日期（设备时区）做子串匹配 → itemIds；
-   * 4. 合并去重，取回完整 ItemWithTags，按 updatedAt 降序返回。
+   * 4. 合并去重，取回完整 ItemWithRelations（切片 14 水合），按 updatedAt 降序返回。
    * 空关键词（trim 后为空）直接返回 []，不查库。
    */
-  async searchItems(keyword: string): Promise<ItemWithTags[]> {
+  async searchItems(keyword: string): Promise<ItemWithRelations[]> {
     const trimmed = normalizeSearchKeyword(keyword);
     if (trimmed.length === 0) {
       return [];
@@ -479,19 +624,18 @@ export class WatermelonItemRepository implements ItemRepository {
       }
     }
 
-    // 第 4 步：合并去重 → 完整投影 → updatedAt 降序
+    // 第 4 步：合并去重 → 完整水合投影（§7.23，批量 Q.oneOf 而非全表扫描）→ updatedAt 降序
     if (matchedItemIds.size === 0) {
       return [];
     }
-    const itemModels = await this.db
-      .get<ItemModel>(ITEMS_TABLE)
-      .query(Q.where('id', Q.oneOf([...matchedItemIds])))
-      .fetch();
-    const [joinModels, tagModels] = await Promise.all([
-      this.db.get<ItemTagModel>(ITEM_TAGS_TABLE).query(Q.sortBy('created_at', 'asc')).fetch(),
-      this.db.get<TagModel>(TAGS_TABLE).query().fetch(),
-    ]);
-    return sortByUpdatedAtDesc(joinItemsWithTags(itemModels, joinModels, tagModels));
+    return sortByUpdatedAtDesc(
+      await loadItemsWithRelationsByItemQuery(
+        this.db,
+        this.db
+          .get<ItemModel>(ITEMS_TABLE)
+          .query(Q.where('id', Q.oneOf([...matchedItemIds]))),
+      ),
+    );
   }
 
   /** 归档：只改 status（AGENTS.md §4.7），不级联改动标签关系，不删除 Item。 */
@@ -504,8 +648,8 @@ export class WatermelonItemRepository implements ItemRepository {
     await this.updateItem(id, { status: 'active' });
   }
 
-  async listArchivedItems(): Promise<ItemWithTags[]> {
-    return loadItemsWithTagsByItemQuery(
+  async listArchivedItems(): Promise<ItemWithRelations[]> {
+    return loadItemsWithRelationsByItemQuery(
       this.db,
       this.db
         .get<ItemModel>(ITEMS_TABLE)
@@ -515,11 +659,11 @@ export class WatermelonItemRepository implements ItemRepository {
 
   /**
    * 归档视图查询（repository.md v0.12「搜索与归档增强接口」）：status='archived'，
-   * updatedAt 降序，返回 ItemWithTags。与 v0.3 的 listArchivedItems 同语义并存，
+   * updatedAt 降序，返回 ItemWithRelations。与 v0.3 的 listArchivedItems 同语义并存，
    * 切片 12 决策 C：归档页换调本方法；listArchivedItems 保留不删。
    */
-  async listArchivedItemsWithTags(): Promise<ItemWithTags[]> {
-    return loadItemsWithTagsByItemQuery(
+  async listArchivedItemsWithTags(): Promise<ItemWithRelations[]> {
+    return loadItemsWithRelationsByItemQuery(
       this.db,
       this.db
         .get<ItemModel>(ITEMS_TABLE)
@@ -527,8 +671,8 @@ export class WatermelonItemRepository implements ItemRepository {
     );
   }
 
-  observeItemsWithTags(onNext: (items: ItemWithTags[]) => void): () => void {
-    return combineLatest3(
+  observeItemsWithTags(onNext: (items: ItemWithRelations[]) => void): () => void {
+    return combineLatest4(
       this.db
         .get<ItemModel>(ITEMS_TABLE)
         // 与 listItemsWithTags 同语义：默认列表（§4.7 未归档 + 未删除，§4.8 updatedAt 降序），
@@ -537,12 +681,13 @@ export class WatermelonItemRepository implements ItemRepository {
         .observe(),
       this.itemTagsJoinQuery().observe(),
       this.allTagsQuery().observe(),
-      joinItemsWithTags,
+      this.allCategoriesQuery().observe(),
+      joinItemsWithRelations,
       onNext,
     );
   }
 
-  /** join 投影辅助：全量 item_tags，join 顺序 = created_at 升序（与 loadItemsWithTagsByItemQuery 一致）。 */
+  /** join 投影辅助：全量 item_tags，join 顺序 = created_at 升序（与 loadItemsWithRelationsByItemQuery 一致）。 */
   private itemTagsJoinQuery(): Query<ItemTagModel> {
     return this.db.get<ItemTagModel>(ITEM_TAGS_TABLE).query(Q.sortBy('created_at', 'asc'));
   }
@@ -550,6 +695,11 @@ export class WatermelonItemRepository implements ItemRepository {
   /** join 投影辅助：全量 tags。 */
   private allTagsQuery(): Query<TagModel> {
     return this.db.get<TagModel>(TAGS_TABLE).query();
+  }
+
+  /** join 投影辅助：全量 categories（切片 14，§7.23 水合的第四路 observe 源）。 */
+  private allCategoriesQuery(): Query<CategoryModel> {
+    return this.db.get<CategoryModel>(CATEGORIES_TABLE).query(Q.sortBy('priority', 'asc'));
   }
 
   observeTags(onNext: (tags: Tag[]) => void): () => void {
@@ -575,9 +725,9 @@ export class WatermelonItemRepository implements ItemRepository {
     return models.length > 0 ? toDomainItem(models[0]) : null;
   }
 
-  /** 切片 6（§4.24 冻结）：按 id 取 ItemWithTags，不存在返回 null（详情页用）。 */
-  async getItemById(id: string): Promise<ItemWithTags | null> {
-    const found = await loadItemsWithTagsByItemQuery(
+  /** 切片 6（§4.24 冻结）：按 id 取条目，不存在返回 null（详情页用）；切片 14 起返回完整水合投影。 */
+  async getItemById(id: string): Promise<ItemWithRelations | null> {
+    const found = await loadItemsWithRelationsByItemQuery(
       this.db,
       this.db.get<ItemModel>(ITEMS_TABLE).query(Q.where('id', id)),
     );
@@ -701,12 +851,17 @@ export class WatermelonItemRepository implements ItemRepository {
       record.sourceType = 'ics';
       record.sourceUid = prepared.sourceUid;
       record.sourceReadOnly = true;
+      // 切片 14（§7.22）：导入项固定默认分类与无优先级。
+      record.categoryId = DEFAULT_CATEGORY_ID;
+      record.priority = 0;
     });
     return { ...toDomainItem(created), tags: [] };
   }
 
   async createImportedItem(input: ImportedItemInput): Promise<ItemWithTags> {
     const prepared = this.prepareImportedItem(input);
+    // 切片 14：导入项落默认分类 'other'，先保证预置行就位。
+    await this.ensureSeeded();
     return this.db.write(async () => {
       await this.assertNoDuplicateSourceUid(prepared.sourceUid);
       return this.insertImportedItemInTransaction(prepared);
@@ -720,8 +875,8 @@ export class WatermelonItemRepository implements ItemRepository {
   async findItemBySource(
     sourceType: ItemSourceType,
     sourceUid: string,
-  ): Promise<ItemWithTags | null> {
-    const found = await loadItemsWithTagsByItemQuery(
+  ): Promise<ItemWithRelations | null> {
+    const found = await loadItemsWithRelationsByItemQuery(
       this.db,
       this.db
         .get<ItemModel>(ITEMS_TABLE)
@@ -733,14 +888,14 @@ export class WatermelonItemRepository implements ItemRepository {
   async listItemsForExport(filter: {
     includeArchived: false;
     includeDone: true;
-  }): Promise<ItemWithTags[]> {
+  }): Promise<ItemWithRelations[]> {
     // MVP 只支持固定 filter（repository.md v0.8）；运行时显式拒绝其他组合。
     if (filter.includeArchived !== false || filter.includeDone !== true) {
       throw new Error(
         'listItemsForExport: only the fixed MVP filter {includeArchived: false, includeDone: true} is supported',
       );
     }
-    return loadItemsWithTagsByItemQuery(
+    return loadItemsWithRelationsByItemQuery(
       this.db,
       this.db
         .get<ItemModel>(ITEMS_TABLE)
@@ -787,6 +942,8 @@ export class WatermelonItemRepository implements ItemRepository {
    */
   async importItemsInBatches(inputs: ImportedItemInput[]): Promise<ImportBatchResult> {
     const result: ImportBatchResult = { createdCount: 0, skippedDuplicateCount: 0, failures: [] };
+    // 切片 14：导入项落默认分类 'other'，先保证预置行就位。
+    await this.ensureSeeded();
     for (let offset = 0; offset < inputs.length; offset += IMPORT_BATCH_SIZE) {
       const batch = inputs.slice(offset, offset + IMPORT_BATCH_SIZE);
       await this.db.write(async () => {
@@ -849,6 +1006,9 @@ export class WatermelonItemRepository implements ItemRepository {
       sourceUidStrategies: { 'event-id': 0, 'content-hash': 0 },
     };
 
+    // 切片 14：导入项落默认分类 'other'，先保证预置行就位。
+    await this.ensureSeeded();
+
     // startDate 不可解析的事件无法参与范围过滤与去重 → 直接分流 failed。
     const parseable: SystemCalendarEvent[] = [];
     for (const event of events) {
@@ -906,8 +1066,8 @@ export class WatermelonItemRepository implements ItemRepository {
    */
   private async findSystemCalendarDuplicateInTransaction(
     sourceUid: string,
-  ): Promise<ItemWithTags | null> {
-    const found = await loadItemsWithTagsByItemQuery(
+  ): Promise<ItemWithRelations | null> {
+    const found = await loadItemsWithRelationsByItemQuery(
       this.db,
       this.db
         .get<ItemModel>(ITEMS_TABLE)
@@ -931,6 +1091,9 @@ export class WatermelonItemRepository implements ItemRepository {
       record.sourceType = 'system-calendar';
       record.sourceUid = prepared.sourceUid;
       record.sourceReadOnly = true;
+      // 切片 14（§7.22）：导入项固定默认分类与无优先级。
+      record.categoryId = DEFAULT_CATEGORY_ID;
+      record.priority = 0;
     });
   }
 
@@ -994,19 +1157,19 @@ export class WatermelonItemRepository implements ItemRepository {
   async listScheduledItemsInRange(
     rangeStartMs: number,
     rangeEndMs: number,
-  ): Promise<ItemWithTags[]> {
-    return loadItemsWithTagsByItemQuery(this.db, this.scheduledInRangeQuery(rangeStartMs, rangeEndMs));
+  ): Promise<ItemWithRelations[]> {
+    return loadItemsWithRelationsByItemQuery(this.db, this.scheduledInRangeQuery(rangeStartMs, rangeEndMs));
   }
 
-  async listOverdueItems(nowMs: number): Promise<ItemWithTags[]> {
-    return loadItemsWithTagsByItemQuery(this.db, this.overdueQuery(nowMs));
+  async listOverdueItems(nowMs: number): Promise<ItemWithRelations[]> {
+    return loadItemsWithRelationsByItemQuery(this.db, this.overdueQuery(nowMs));
   }
 
   async listUnscheduledItemsCreatedInRange(
     rangeStartMs: number,
     rangeEndMs: number,
-  ): Promise<ItemWithTags[]> {
-    return loadItemsWithTagsByItemQuery(
+  ): Promise<ItemWithRelations[]> {
+    return loadItemsWithRelationsByItemQuery(
       this.db,
       this.unscheduledCreatedInRangeQuery(rangeStartMs, rangeEndMs),
     );
@@ -1015,9 +1178,9 @@ export class WatermelonItemRepository implements ItemRepository {
   observeScheduledItemsInRange(
     rangeStartMs: number,
     rangeEndMs: number,
-    onNext: (items: ItemWithTags[]) => void,
+    onNext: (items: ItemWithRelations[]) => void,
   ): () => void {
-    return combineLatest3(
+    return combineLatest4(
       this.scheduledInRangeQuery(rangeStartMs, rangeEndMs).observeWithColumns([
         // Query.observe() 只在匹配集合成员变化时发射（processChangeSet），status 在
         // active|done 之间翻转不改变成员资格（仍匹配 scheduled 条件），但会改变
@@ -1029,19 +1192,21 @@ export class WatermelonItemRepository implements ItemRepository {
       ]),
       this.itemTagsJoinQuery().observe(),
       this.allTagsQuery().observe(),
-      joinItemsWithTags,
+      this.allCategoriesQuery().observe(),
+      joinItemsWithRelations,
       onNext,
     );
   }
 
-  observeOverdueItems(nowMs: number, onNext: (items: ItemWithTags[]) => void): () => void {
-    return combineLatest3(
+  observeOverdueItems(nowMs: number, onNext: (items: ItemWithRelations[]) => void): () => void {
+    return combineLatest4(
       // end_at 在过期集合内变化（仍是过去时刻）不改变成员资格但改变 endAt↑ 排序；
       // status 翻转虽会移出集合（成员变化必发射），列订阅保证一致语义。
       this.overdueQuery(nowMs).observeWithColumns(['status', 'end_at']),
       this.itemTagsJoinQuery().observe(),
       this.allTagsQuery().observe(),
-      joinItemsWithTags,
+      this.allCategoriesQuery().observe(),
+      joinItemsWithRelations,
       onNext,
     );
   }
@@ -1049,15 +1214,16 @@ export class WatermelonItemRepository implements ItemRepository {
   observeUnscheduledItemsCreatedInRange(
     rangeStartMs: number,
     rangeEndMs: number,
-    onNext: (items: ItemWithTags[]) => void,
+    onNext: (items: ItemWithRelations[]) => void,
   ): () => void {
-    return combineLatest3(
+    return combineLatest4(
       // 本查询 status 仅取 active：翻转即成员变化，observe() 本就会发射；
       // 仍统一用 observeWithColumns 与另两个视图订阅保持同一语义口径（防御性）。
       this.unscheduledCreatedInRangeQuery(rangeStartMs, rangeEndMs).observeWithColumns(['status']),
       this.itemTagsJoinQuery().observe(),
       this.allTagsQuery().observe(),
-      joinItemsWithTags,
+      this.allCategoriesQuery().observe(),
+      joinItemsWithRelations,
       onNext,
     );
   }
@@ -1204,5 +1370,136 @@ export class WatermelonItemRepository implements ItemRepository {
         draft.lastFiredOccurrenceKey = occurrenceKey;
       });
     });
+  }
+
+  // —— 切片 14：分类与全局设置（repository.md「Category 与标签接口（v0.14）」）——
+
+  /** 分类列表：priority 升序（并列时按 id 升序，保证顺序确定）。 */
+  async getCategories(): Promise<Category[]> {
+    await this.ensureSeeded();
+    const models = await this.db
+      .get<CategoryModel>(CATEGORIES_TABLE)
+      .query(Q.sortBy('priority', 'asc'), Q.sortBy('id', 'asc'))
+      .fetch();
+    return models.map(toDomainCategory);
+  }
+
+  /**
+   * 更新分类视觉字段（颜色/Emoji）。预置分类不可删除，仅允许改视觉（repository.md v0.14）。
+   * patch 中未出现的字段保持不变（undefined 不写入）。
+   */
+  async updateCategoryVisuals(id: string, patch: VisualPatch): Promise<Category> {
+    return this.db.write(async () => {
+      const models = await this.db
+        .get<CategoryModel>(CATEGORIES_TABLE)
+        .query(Q.where('id', id))
+        .fetch();
+      const model = models[0];
+      if (!model) {
+        throw new Error(`updateCategoryVisuals: category not found: ${id}`);
+      }
+      const updated = await model.update((draft) => {
+        if (patch.color !== undefined) {
+          draft.color = patch.color;
+        }
+        if (patch.emoji !== undefined) {
+          draft.emoji = patch.emoji;
+        }
+      });
+      return toDomainCategory(updated);
+    });
+  }
+
+  /** 更新标签视觉字段（颜色/Emoji）；addTagToItem/removeTagFromItem 语义不变。 */
+  async updateTagVisuals(id: string, patch: VisualPatch): Promise<Tag> {
+    return this.db.write(async () => {
+      const models = await this.db
+        .get<TagModel>(TAGS_TABLE)
+        .query(Q.where('id', id))
+        .fetch();
+      const model = models[0];
+      if (!model) {
+        throw new Error(`updateTagVisuals: tag not found: ${id}`);
+      }
+      const updated = await model.update((draft) => {
+        if (patch.color !== undefined) {
+          draft.color = patch.color;
+        }
+        if (patch.emoji !== undefined) {
+          draft.emoji = patch.emoji;
+        }
+      });
+      return toDomainTag(updated);
+    });
+  }
+
+  /**
+   * 全局设置：单行（id='global'）。无记录时返回默认值并静默补插（repository.md v0.14，
+   * 不得抛错）。实现选择在返回前同步完成补插（静默 = 不向上抛错/不打日志），保证
+   * 紧随其后的 updateSettings 无需再做兜底判断；库中非法枚举值防御性回退默认。
+   */
+  async getSettings(): Promise<AppSettings> {
+    await this.ensureSeeded();
+    return this.db.write(async () => {
+      const models = await this.db.get<AppSettingsModel>(APP_SETTINGS_TABLE).query().fetch();
+      if (models.length === 0) {
+        await this.db.get<AppSettingsModel>(APP_SETTINGS_TABLE).create((record) => {
+          record._raw.id = APP_SETTINGS_ROW_ID;
+          record.tagDisplayMode = DEFAULT_APP_SETTINGS.tagDisplayMode;
+        });
+        return { ...DEFAULT_APP_SETTINGS };
+      }
+      return toDomainSettings(models[0]);
+    });
+  }
+
+  /** 更新全局设置（当前仅支持 tagDisplayMode）；行不存在时以 patch 值（缺省用默认值）建行。 */
+  async updateSettings(patch: Partial<AppSettings>): Promise<void> {
+    await this.ensureSeeded();
+    if (patch.tagDisplayMode !== undefined && !isTagDisplayMode(patch.tagDisplayMode)) {
+      throw new Error('updateSettings: invalid tagDisplayMode');
+    }
+    await this.db.write(async () => {
+      const models = await this.db.get<AppSettingsModel>(APP_SETTINGS_TABLE).query().fetch();
+      const model = models[0];
+      if (!model) {
+        await this.db.get<AppSettingsModel>(APP_SETTINGS_TABLE).create((record) => {
+          record._raw.id = APP_SETTINGS_ROW_ID;
+          record.tagDisplayMode = patch.tagDisplayMode ?? DEFAULT_APP_SETTINGS.tagDisplayMode;
+        });
+        return;
+      }
+      await model.update((draft) => {
+        if (patch.tagDisplayMode !== undefined) {
+          draft.tagDisplayMode = patch.tagDisplayMode;
+        }
+      });
+    });
+  }
+
+  /**
+   * 切片 14：全新安装预置数据兜底（migration 只在升级安装时执行）。
+   * 数据库实例首次调用时执行一次 seedPresetData（幂等），后续调用直接复用同一 promise。
+   */
+  private ensureSeeded(): Promise<void> {
+    if (!this.seedPromise) {
+      this.seedPromise = seedPresetData(this.db).catch((error) => {
+        // 失败时重置缓存，允许下次写路径重试（database.ts 模块级 kick 失败后的兜底）。
+        this.seedPromise = undefined;
+        throw error;
+      });
+    }
+    return this.seedPromise;
+  }
+
+  /** categoryId 存在性校验（必须在 db.write 事务内调用；预置行由 ensureSeeded/migration 保证）。 */
+  private async assertCategoryExistsInTransaction(categoryId: string, context: string): Promise<void> {
+    const count = await this.db
+      .get<CategoryModel>(CATEGORIES_TABLE)
+      .query(Q.where('id', categoryId))
+      .fetchCount();
+    if (count === 0) {
+      throw new Error(`${context}: category not found: ${categoryId}`);
+    }
   }
 }

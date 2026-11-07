@@ -1,5 +1,5 @@
 import { Model } from '@nozbe/watermelondb';
-import { date, readonly, text } from '@nozbe/watermelondb/decorators';
+import { date, field, readonly, text } from '@nozbe/watermelondb/decorators';
 
 /**
  * Tag 表的 WatermelonDB model。
@@ -11,6 +11,12 @@ export default class TagModel extends Model {
   static table = 'tags';
 
   @text('name') name!: string;
+
+  // 切片 14（AGENTS.md §7.22，schema v6）：标签视觉字段；列 isOptional，既有行读到 null，
+  // 读取层（toDomainTag）保持 null，UI 回退默认样式。
+  @field('color') color!: string | null;
+
+  @field('emoji') emoji!: string | null;
 
   @readonly @date('created_at') createdAt!: Date;
 }

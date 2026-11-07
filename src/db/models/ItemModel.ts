@@ -47,6 +47,16 @@ export default class ItemModel extends Model {
 
   @field('source_read_only') sourceReadOnly!: boolean | null;
 
+  // 切片 14（AGENTS.md §7.22，schema v6）：分类关联与优先级。
+  // category_id 列 isOptional：升级安装迁移用 SQL 回填 'other'，全新安装 seed 保证默认分类存在；
+  // 域层经 toDomainItem 以 'other' 归一（与 sourceType ?? 'local' 同一模式）。
+  // 注意：本 model 不声明 categories association——按任务卡要求，Category 由 Repository
+  // 批量水合（Q.oneOf 一次查询 + 内存合并，避免 N+1），UI 不得经 model 关联自查（§7.23）。
+  @text('category_id') categoryId!: string | null;
+
+  // priority 非可选：迁移对既有行回填 0（=无优先级）；新行由 Repository 写入显式值（0..3）。
+  @field('priority') priority!: number;
+
   @readonly @date('created_at') createdAt!: Date;
 
   @readonly @date('updated_at') updatedAt!: Date;

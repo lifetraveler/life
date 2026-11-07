@@ -35,6 +35,9 @@ function makeItem(overrides: {
     sourceType: 'local',
     sourceUid: null,
     sourceReadOnly: false,
+    // 切片 14 编译必需夹具补字段（§7.13）：快照不含分类/优先级，固定默认值。
+    categoryId: 'other',
+    priority: 0,
     createdAt: overrides.createdAt ?? 1000,
     updatedAt: 1000,
     tags: [],

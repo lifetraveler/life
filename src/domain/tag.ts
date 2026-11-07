@@ -3,15 +3,22 @@
  *
  * Tag 与 ItemTag 的字段集合是 AGENTS.md §4.4 的受保护契约：
  * 不得增删字段、不得重命名；Item 与 Tag 为多对多，通过 ItemTag 关联。
+ *
+ * v0.14（AGENTS.md §7.22，schema v6）明确扩展 color / emoji 两个字段；
+ * 列 isOptional，迁移对既有行回填 null，读取层（toDomainTag）保持 null。
  */
 
 import type { Item } from './item';
 
-/** 数据模型：Tag（AGENTS.md §4.4） */
+/** 数据模型：Tag（AGENTS.md §4.4 + §7.22 扩展） */
 export interface Tag {
   id: string;
   /** 全局唯一；唯一性（trim + 大小写不敏感）由 Repository 层保证 */
   name: string;
+  /** 标签颜色；null 时 UI 回退默认样式（既有标签经迁移回填 null） */
+  color: string | null;
+  /** 标签图标（emoji）；null 时 UI 不显示图标 */
+  emoji: string | null;
   /** 毫秒时间戳 */
   createdAt: number;
 }

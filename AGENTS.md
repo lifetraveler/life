@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.13
+版本：v0.14
 
 ## 1. 项目概览
 
@@ -159,7 +159,37 @@ AGENTS.md       本文件
 - 产出报告：docs/proposals/harmony-assessment.md。
 - 评估结论将决定后续是否投入资源做鸿蒙原生适配。
 
+### 7.21 UI 视图架构与筛选（v0.14）
+- 首页支持切换视图：日程（Agenda，图3风格）、今日、本周、本月。
+- 视图内必须按日期分组（如“周五 6”、“周六 7”）。
+- 筛选面板支持按“分类（Category）”、“日历源（sourceType）”、“标签（Tag）”、“状态”进行多选过滤。
+- 小组件展示信息需包含：分类颜色点、具体时间。
+
+### 7.22 Item、Category、Tag 扩展字段及 schema v6（v0.14）
+schema 版本 5→6，新增/修改如下：
+1. `items` 表：
+   - 新增 `categoryId: string | null`（关联 categories 表，默认 'other'）
+   - 新增 `priority: number`（默认 0；0=无，1=低，2=中，3=高）
+   - **注意**：Item 本身不再有 color 字段，颜色统一由 Category 提供。
+2. `categories` 表（新增）：
+   - `id: string`（主键，预置：'work', 'personal', 'study', 'health', 'other'）
+   - `name: string`（分类名称）
+   - `color: string | null`（分类颜色）
+   - `emoji: string | null`（分类图标）
+   - `priority: number`（展示排序权重）
+3. `tags` 表：
+   - 新增 `color: string | null`
+   - 新增 `emoji: string | null`
+4. 新增 `app_settings` 表（单行，id 固定为 'global'）：
+   - `tagDisplayMode: 'text' | 'emoji' | 'both'`（默认 'text'）
+- 必须提供 migration v5→v6：新增表和字段，并插入预置分类数据。严禁重建表或清库。
+
+### 7.23 关系水合与模型查询（v0.14）
+- `WatermelonItemRepository` 的查询必须水合（Hydrate）关联的 Category 和 Tags。
+- 领域对象扩展为 `ItemWithRelations = Item & { tags: Tag[], category: Category | null }`。
+- 视图和 UI 层只消费 `ItemWithRelations`，不得在 UI 层自己去查 Category 或 Tag 表。
+
 ## 8. 当前切片
-tasks/slice-13.md
+tasks/slice-14.md
 
 

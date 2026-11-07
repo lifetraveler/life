@@ -159,3 +159,28 @@ SystemImportResult：
   - 返回 status='archived' 的 Item，按 updatedAt 降序。
   - 与 v0.3 的 listArchivedItems 并存；后者保留不删（既有调用方不改）。
   - 标签关系保留，返回 ItemWithTags。
+
+## Category 与标签接口（v0.14，切片 14 落地）
+
+### Category 接口
+- `getCategories(): Promise<Category[]>`
+  - 按 priority 升序返回所有分类。
+- `updateCategoryVisuals(id: string, patch: { color?: string | null; emoji?: string | null }): Promise<Category>`
+  - 更新分类的颜色和表情。
+
+### Tag 接口扩展
+- `updateTagVisuals(id: string, patch: { color?: string | null; emoji?: string | null }): Promise<Tag>`
+  - 更新标签的颜色和表情。
+- （保留既有 `addTagToItem` / `removeTagFromItem` 等接口不变）
+
+### AppSettings 接口（新增）
+- `getSettings(): Promise<AppSettings>`
+  - 读取全局设置。若库中无记录（例如初次启动），必须返回默认值 `{ tagDisplayMode: 'text' }`，并静默在后台插入该记录，不得抛错。
+- `updateSettings(patch: Partial<AppSettings>): Promise<void>`
+  - 更新全局设置。目前仅支持传入 `tagDisplayMode`。
+
+### Item 接口扩展（水合 ItemWithRelations）
+- `createItem` / `updateItem` 的入参增加 `categoryId?: string | null`。
+- 所有原先返回 `Item[]` 或 `ItemWithTags[]` 的查询接口（如 `listItems`、`searchItems`、`listScheduledItemsInRange` 等），统一升级为返回 `ItemWithRelations[]`。
+  - `ItemWithRelations` 定义为：`Item & { tags: Tag[], category: Category | null }`。
+- 若关联的 Category 未被找到（数据异常），`category` 字段返回 null，由 UI 层回退到默认灰色和无 Emoji 的展示。

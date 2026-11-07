@@ -3,6 +3,9 @@
  *
  * Item 的字段集合是 AGENTS.md §4.1 的受保护契约：
  * 不得增删字段、不得重命名、type 枚举不得扩展。
+ *
+ * v0.14（AGENTS.md §7.22，schema v6）明确扩展 categoryId / priority 两个字段；
+ * Item 不再有 color 字段——颜色统一由关联 Category 提供（§7.22）。
  */
 
 export type ItemType = 'note' | 'task' | 'event';
@@ -34,6 +37,13 @@ export interface Item {
   sourceUid: string | null;
   /** true 时只读：不可编辑时间/标题/内容，可完成/取消完成、可归档/删除（data-model.md v0.8） */
   sourceReadOnly: boolean;
+  /**
+   * 关联分类 id（§7.22，schema v6）。列 isOptional（迁移回填 'other'）；
+   * 域层经 toDomainItem 以 'other' 归一，恒非空（与 sourceType ?? 'local' 同一模式）。
+   */
+  categoryId: string;
+  /** 优先级（§7.22）：0=无 1=低 2=中 3=高；迁移对既有行回填 0 */
+  priority: number;
   /** 毫秒时间戳 */
   createdAt: number;
   /** 毫秒时间戳 */
@@ -43,6 +53,8 @@ export interface Item {
 /**
  * 创建 Item 的输入：标题必填，内容可选（缺省存空字符串），status 固定初始为 'active'。
  * 时间字段可选（§4.24）：未传时 startAt/endAt 落 null、allDay 落 false。
+ * v0.14 扩展（repository.md v0.14 + §7.22）：categoryId 可选（未传落 'other'）；
+ * priority 可选（未传落 0）——priority 为契约外文档化扩展（先例：deleteItem/observe*），供阶段 3 编辑页使用。
  */
 export interface CreateItemInput {
   type: ItemType;
@@ -51,18 +63,27 @@ export interface CreateItemInput {
   startAt?: number | null;
   endAt?: number | null;
   allDay?: boolean;
+  /** 关联分类 id；null/未传 → 'other'（§7.22 默认） */
+  categoryId?: string | null;
+  /** 0=无 1=低 2=中 3=高；未传 → 0（§7.22 默认） */
+  priority?: number;
 }
 
 /**
  * 更新 Item 的输入（AGENTS.md §4.5，签名冻结）：
  * 允许更新 title、content、type、status；不允许更新 id、createdAt。
  * updatedAt 不在输入内——由存储层在写路径自动维护。
+ * v0.14 扩展（repository.md v0.14 + §7.22）：categoryId / priority 同 CreateItemInput 规则。
  */
 export interface UpdateItemInput {
   title?: string;
   content?: string;
   type?: ItemType;
   status?: ItemStatus;
+  /** 关联分类 id；null 显式表示移出分类（落 'other'） */
+  categoryId?: string | null;
+  /** 0=无 1=低 2=中 3=高 */
+  priority?: number;
 }
 
 /**
