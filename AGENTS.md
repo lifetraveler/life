@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.12
+版本：v0.13
 
 ## 1. 项目概览
 
@@ -154,7 +154,12 @@ AGENTS.md       本文件
 - 快速记录增强不修改 quick-add 路由的 deep link 约定（`life://quick-add`），
   只增加输入后行为（如保存后留在输入框、支持连续创建）。
 
+### 7.20 鸿蒙评估切片（v0.13）
+- 切片 13 为纯文档评估，不修改任何源码、不升级 SDK、不引入鸿蒙依赖。
+- 产出报告：docs/proposals/harmony-assessment.md。
+- 评估结论将决定后续是否投入资源做鸿蒙原生适配。
+
 ## 8. 当前切片
-tasks/slice-11.md → tasks/slice-12.md
+tasks/slice-13.md
 
 
