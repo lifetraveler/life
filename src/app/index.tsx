@@ -304,7 +304,7 @@ export default function IndexScreen() {
           {item.tags.map((tag) => (
             <TagChip
               key={tag.id}
-              label={tag.name}
+              tag={tag}
               onRemove={() => handleRemoveTag(item.id, tag.id)}
             />
           ))}
@@ -348,7 +348,7 @@ export default function IndexScreen() {
                   {suggestions.map((tag) => (
                     <TagChip
                       key={tag.id}
-                      label={tag.name}
+                      tag={tag}
                       onPress={() => handleAddTagToItem(item.id, tag.name)}
                     />
                   ))}

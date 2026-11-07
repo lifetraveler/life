@@ -67,7 +67,7 @@ export default function ArchivedScreen() {
       </Pressable>
       <View style={styles.tagRow}>
         {item.tags.map((tag) => (
-          <TagChip key={tag.id} label={tag.name} />
+          <TagChip key={tag.id} tag={tag} />
         ))}
       </View>
       <View style={styles.actionRow}>

@@ -250,7 +250,7 @@ export default function ItemDetailPage() {
       {item.tags.length > 0 ? (
         <View style={styles.tagRow}>
           {item.tags.map((tag) => (
-            <TagChip key={tag.id} label={tag.name} />
+            <TagChip key={tag.id} tag={tag} />
           ))}
         </View>
       ) : null}

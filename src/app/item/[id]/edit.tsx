@@ -237,7 +237,7 @@ export default function ItemEditPage() {
           {tags.map((tag) => (
             <TagChip
               key={tag.id}
-              label={tag.name}
+              tag={tag}
               onRemove={(loaded?.sourceReadOnly ?? false) ? undefined : () => handleRemoveTag(tag)}
             />
           ))}

@@ -64,6 +64,38 @@ export function formatItemEnd(endAt: number | null, allDay: boolean, tzid: strin
   return formatItemTime(endAt, tzid);
 }
 
+/**
+ * 切片 14 阶段 2：Agenda 卡片时间段文案（纯函数）。
+ * - 未安排（startAt=null）→ null（卡片不渲染时间行）；
+ * - allDay → '全天'；
+ * - 有 endAt 且与 startAt 同一民用日 → 'HH:mm - HH:mm'；
+ * - 有 endAt 但跨民用日 → 'YYYY-MM-DD HH:mm - YYYY-MM-DD HH:mm'；
+ * - 无 endAt → 'HH:mm'。
+ * 民用分解按显式 tzid（复用 civilTime 只读导出，§4.13 精神）。
+ */
+export function formatAgendaTimeRange(
+  time: { startAt: number | null; endAt: number | null; allDay: boolean },
+  tzid: string,
+): string | null {
+  if (time.startAt === null) {
+    return null;
+  }
+  if (time.allDay) {
+    return '全天';
+  }
+  const startParts = getZonedParts(time.startAt, tzid);
+  const start = formatLocalTime(startParts.hour, startParts.minute);
+  if (time.endAt === null) {
+    return start;
+  }
+  const endParts = getZonedParts(time.endAt, tzid);
+  const endTime = formatLocalTime(endParts.hour, endParts.minute);
+  const end = formatLocalDate(startParts) === formatLocalDate(endParts)
+    ? endTime
+    : `${formatLocalDate(endParts)} ${endTime}`;
+  return `${start} - ${end}`;
+}
+
 export const WEEKDAY_LABELS: Record<number, string> = {
   1: '周一',
   2: '周二',

@@ -9,6 +9,9 @@ import {
   getDeviceTzid,
 } from '../timeFormat';
 
+// 切片 14 阶段 2 追加（纯新增行，未改动既有用例与既有 import 行）：
+import { formatAgendaTimeRange } from '../timeFormat';
+
 // 切片 11 变更 A：getDeviceTzid 收口到 src/data/deviceTimezone（expo-localization 来源）。
 // 这里 mock 掉原生依赖，验证委托行为与回退；格式化函数本身仍用显式 tzid 的纯函数断言。
 jest.mock('expo-localization', () => ({
@@ -98,5 +101,45 @@ describe('timeFormat（切片 6 展示格式化，显式 tzid）', () => {
       expect(formatReminderRuleSummary({ ...base, frequency: 'monthly', weekdays: [], dayOfMonth: 31 }))
         .toBe('每月 31 日 09:05（Asia/Shanghai）');
     });
+  });
+});
+
+// ─── 以下为切片 14 阶段 2 追加的测试块（既有用例保持原样） ───
+
+describe('formatAgendaTimeRange（切片 14 阶段 2：Agenda 卡片时间段）', () => {
+  const TZ = 'Asia/Shanghai';
+  // 2026-11-07 09:00+08 / 11:00+08（同一民用日）
+  const START_0900_SH = Date.UTC(2026, 10, 7, 1, 0);
+  const END_1100_SH = Date.UTC(2026, 10, 7, 3, 0);
+  // 2026-11-08 10:00+08（次日）
+  const NEXT_DAY_1000_SH = Date.UTC(2026, 10, 8, 2, 0);
+
+  it('startAt=null → null（卡片不渲染时间行）', () => {
+    expect(formatAgendaTimeRange({ startAt: null, endAt: null, allDay: false }, TZ)).toBeNull();
+    expect(formatAgendaTimeRange({ startAt: null, endAt: END_1100_SH, allDay: false }, TZ)).toBeNull();
+  });
+
+  it("allDay=true → '全天'（Asia/Shanghai）", () => {
+    expect(formatAgendaTimeRange({ startAt: START_0900_SH, endAt: END_1100_SH, allDay: true }, TZ)).toBe('全天');
+  });
+
+  it('有 endAt 且同一民用日 → HH:mm - HH:mm', () => {
+    expect(formatAgendaTimeRange({ startAt: START_0900_SH, endAt: END_1100_SH, allDay: false }, TZ)).toBe('09:00 - 11:00');
+  });
+
+  it('无 endAt → HH:mm', () => {
+    expect(formatAgendaTimeRange({ startAt: START_0900_SH, endAt: null, allDay: false }, TZ)).toBe('09:00');
+  });
+
+  it('endAt 跨民用日 → HH:mm - YYYY-MM-DD HH:mm', () => {
+    expect(
+      formatAgendaTimeRange({ startAt: START_0900_SH, endAt: NEXT_DAY_1000_SH, allDay: false }, TZ),
+    ).toBe('09:00 - 2026-11-08 10:00');
+  });
+
+  it("tzid='America/New_York' 生效：Date.UTC(2026,10,7,2,0) = 2026-11-06 21:00（EST，DST 已结束）→ '21:00'", () => {
+    expect(
+      formatAgendaTimeRange({ startAt: Date.UTC(2026, 10, 7, 2, 0), endAt: null, allDay: false }, 'America/New_York'),
+    ).toBe('21:00');
   });
 });
