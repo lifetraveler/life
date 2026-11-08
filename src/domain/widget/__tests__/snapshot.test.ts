@@ -1,16 +1,34 @@
 /**
- * buildTodayWidgetSnapshot 单测（切片 10，任务卡 6 类用例）：
+ * buildTodayWidgetSnapshot 单测（切片 10 六类用例 + 切片 14 阶段 5 categoryColor 透传）：
  * 1) 空输入；2) 恰好 5 条；3) 超 5 截断；4) allDay → '全天'；
- * 5) done 在 scheduled（含 done，位置沿用输入序）；6) overdue 仅 active（done/archived 被过滤）。
+ * 5) done 在 scheduled（含 done，位置沿用输入序）；6) overdue 仅 active（done/archived 被过滤）；
+ * 7) categoryColor 透传（v0.14 阶段 5：有分类带原色，无分类为 null）。
  * 期望值独立构造，timeLabel 断言统一用 tzid 'UTC'（jest 与真机运行时下行为一致，确定性最高）。
  */
 
 import { buildTodayWidgetSnapshot, WIDGET_SNAPSHOT_PREFS_KEY } from '../snapshot';
 import type { WidgetSnapshotEntry } from '../snapshot';
-import type { ItemWithTags } from '../../tag';
+import type { Category } from '../../category';
+import type { ItemWithRelations } from '../../relations/itemWithRelations';
 import type { ItemStatus, ItemType } from '../../item';
 
 const NOW = Date.UTC(2026, 2, 15, 6, 0); // UTC 2026-03-15 06:00
+
+/** 测试夹具分类（§7.22 Category 结构子集全字段） */
+function makeCategory(overrides: {
+  id: string;
+  name?: string;
+  color?: string | null;
+  emoji?: string | null;
+}): Category {
+  return {
+    id: overrides.id,
+    name: overrides.name ?? `分类${overrides.id}`,
+    color: overrides.color ?? null,
+    emoji: overrides.emoji ?? null,
+    priority: 0,
+  };
+}
 
 /** 测试夹具：必填字段给确定值，按参数覆盖 */
 function makeItem(overrides: {
@@ -22,7 +40,8 @@ function makeItem(overrides: {
   endAt?: number | null;
   allDay?: boolean;
   createdAt?: number;
-}): ItemWithTags {
+  category?: Category | null;
+}): ItemWithRelations {
   return {
     id: overrides.id,
     type: overrides.type ?? 'task',
@@ -35,12 +54,13 @@ function makeItem(overrides: {
     sourceType: 'local',
     sourceUid: null,
     sourceReadOnly: false,
-    // 切片 14 编译必需夹具补字段（§7.13）：快照不含分类/优先级，固定默认值。
-    categoryId: 'other',
+    // 切片 14 编译必需夹具补字段（§7.13）：快照不含优先级，固定默认值。
+    categoryId: overrides.category?.id ?? 'other',
     priority: 0,
     createdAt: overrides.createdAt ?? 1000,
     updatedAt: 1000,
     tags: [],
+    category: overrides.category ?? null,
   };
 }
 
@@ -93,6 +113,7 @@ describe('buildTodayWidgetSnapshot · 用例 2：恰好 5 条', () => {
       type: 'task',
       timeLabel: '已过期',
       status: 'active',
+      categoryColor: null,
     });
     expect(snapshot.groups.scheduled.map((e: WidgetSnapshotEntry) => e.timeLabel)).toEqual([
       '01:10',
@@ -107,6 +128,7 @@ describe('buildTodayWidgetSnapshot · 用例 2：恰好 5 条', () => {
       type: 'event',
       timeLabel: '01:10',
       status: 'active',
+      categoryColor: null,
     });
   });
 });
@@ -151,6 +173,7 @@ describe('buildTodayWidgetSnapshot · 用例 4：allDay', () => {
         type: 'event',
         timeLabel: '全天',
         status: 'active',
+        categoryColor: null,
       },
     ]);
   });
@@ -174,6 +197,7 @@ describe('buildTodayWidgetSnapshot · 用例 5：done 在 scheduled', () => {
       type: 'task',
       timeLabel: '14:45',
       status: 'done',
+      categoryColor: null,
     });
   });
 });
@@ -193,5 +217,38 @@ describe('buildTodayWidgetSnapshot · 用例 6：overdue 仅 active', () => {
       tzid: 'UTC',
     });
     expect(snapshot.groups.overdue.map((e) => e.id)).toEqual(['o1', 'o4']);
+  });
+});
+
+describe('buildTodayWidgetSnapshot · 用例 7：categoryColor 透传（v0.14 阶段 5）', () => {
+  it('有分类时原样携带 category.color，无分类为 null', () => {
+    const workCategory = makeCategory({ id: 'work', color: '#2E7D32', emoji: '💼' });
+    const snapshot = buildTodayWidgetSnapshot({
+      overdue: [
+        makeItem({ id: 'o1', endAt: NOW - 60_000, category: workCategory }),
+        makeItem({ id: 'o2', endAt: NOW - 120_000, category: null }),
+      ],
+      scheduled: [
+        makeItem({ id: 's1', startAt: Date.UTC(2026, 2, 15, 9, 0), category: workCategory }),
+      ],
+      nowMs: NOW,
+      tzid: 'UTC',
+    });
+    expect(snapshot.groups.overdue[0].categoryColor).toBe('#2E7D32');
+    expect(snapshot.groups.overdue[1].categoryColor).toBeNull();
+    expect(snapshot.groups.scheduled[0].categoryColor).toBe('#2E7D32');
+  });
+
+  it('分类 color 为 null（未设置颜色）时透传 null，由 UI 层回退灰点', () => {
+    const noColorCategory = makeCategory({ id: 'other' });
+    const snapshot = buildTodayWidgetSnapshot({
+      overdue: [],
+      scheduled: [
+        makeItem({ id: 's1', startAt: Date.UTC(2026, 2, 15, 9, 0), category: noColorCategory }),
+      ],
+      nowMs: NOW,
+      tzid: 'UTC',
+    });
+    expect(snapshot.groups.scheduled[0].categoryColor).toBeNull();
   });
 });

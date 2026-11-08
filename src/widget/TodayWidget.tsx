@@ -8,10 +8,14 @@
  *   （RNWidget.java drawWidget），无需手传像素尺寸；
  * - 亮/暗双色由 WidgetRepresentation { light, dark } 承载（切片 10 采用双色表示），
  *   本组件以 palette prop 切换同一套布局的配色；
- * - 条目行 = 单 TextWidget（时间标签 + 标题）maxLines 1 + truncate 'END'：
- *   TextWidget 无 flex 概念，双 TextWidget（标签列 + 标题列）在窄宽度下截断不可靠；
- *   clickAction OPEN_ITEM + clickActionData { itemId }，点击语义在 taskHandler 展开
- *   （契约：点击条目导航到 item/[id] 详情）；
+ * - 条目行（§7.21 v0.14 阶段 5）= FlexWidget 行（flexDirection row + alignItems center）：
+ *   左侧分类色点（8×8 圆，categoryColor 经合法 #RRGGBB 校验，非法/无分类回退 muted 灰）+
+ *   内层 FlexWidget { width: 0, flex: 1 }（库 JS 层把 flex 映射为原生 LinearLayout weight，
+ *   FlexWidget.js convertFlexStyle；flexShrink 仅存在于 TS 类型、运行时无实现，不可用）+
+ *   内部 TextWidget（时间标签 + 标题）width match_parent + maxLines 1 + truncate 'END'
+ *   （原生 setEllipsize，受权重容器约束后正确省略号截断）；
+ *   clickAction OPEN_ITEM 上移到整行 FlexWidget + clickActionData { itemId }，点击语义在
+ *   taskHandler 展开（契约：点击条目导航到 item/[id] 详情）；
  * - 过期行 / done 行灰显（muted），仍可点击进入详情（详情页可做完成/取消，契约禁止
  *   小组件内直接完成）；
  * - 底部快速记录按钮 = 圆角 pill FlexWidget，clickAction OPEN_QUICK_ADD（契约：
@@ -21,7 +25,7 @@
 'use no memo';
 
 import { FlexWidget, TextWidget } from 'react-native-android-widget';
-import type { ColorProp } from 'react-native-android-widget';
+import type { ColorProp, HexColor } from 'react-native-android-widget';
 import type { WidgetSnapshot, WidgetSnapshotEntry } from '../domain/widget';
 
 export type TodayWidgetPaletteName = 'light' | 'dark';
@@ -53,6 +57,9 @@ const PALETTES: Record<TodayWidgetPaletteName, TodayWidgetPalette> = {
     accentText: '#14110C',
   },
 };
+
+/** 合法分类色（数据异常回退约定 repository.md v0.14，与主页卡片色条同一规则） */
+const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
 
 interface WidgetRow {
   entry: WidgetSnapshotEntry;
@@ -108,24 +115,56 @@ export function TodayWidget({ snapshot, palette }: TodayWidgetProps) {
             style={{ fontSize: 13, color: colors.muted }}
           />
         ) : (
-          rows.map(({ entry, overdue }) => (
-            <TextWidget
-              key={entry.id}
-              text={`${entry.timeLabel}  ${entry.title}`}
-              clickAction="OPEN_ITEM"
-              clickActionData={{ itemId: entry.id }}
-              maxLines={1}
-              truncate="END"
-              style={{
-                width: 'match_parent',
-                fontSize: 13,
-                color:
-                  overdue || entry.status === 'done'
-                    ? colors.muted
-                    : colors.text,
-              }}
-            />
-          ))
+          rows.map(({ entry, overdue }) => {
+            // 运行时已用 HEX_COLOR_PATTERN 校验 #RRGGBB 前缀，收窄为 HexColor 模板字面量类型
+            const dotColor: ColorProp =
+              entry.categoryColor !== null && HEX_COLOR_PATTERN.test(entry.categoryColor)
+                ? (entry.categoryColor as HexColor)
+                : colors.muted;
+            return (
+              <FlexWidget
+                key={entry.id}
+                clickAction="OPEN_ITEM"
+                clickActionData={{ itemId: entry.id }}
+                style={{
+                  width: 'match_parent',
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  flexGap: 6,
+                }}
+              >
+                <FlexWidget
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: 4,
+                    backgroundColor: dotColor,
+                  }}
+                />
+                <FlexWidget
+                  style={{
+                    width: 0,
+                    flex: 1,
+                    flexDirection: 'row',
+                  }}
+                >
+                  <TextWidget
+                    text={`${entry.timeLabel}  ${entry.title}`}
+                    maxLines={1}
+                    truncate="END"
+                    style={{
+                      width: 'match_parent',
+                      fontSize: 13,
+                      color:
+                        overdue || entry.status === 'done'
+                          ? colors.muted
+                          : colors.text,
+                    }}
+                  />
+                </FlexWidget>
+              </FlexWidget>
+            );
+          })
         )}
       </FlexWidget>
       <FlexWidget

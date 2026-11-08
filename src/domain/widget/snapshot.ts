@@ -1,7 +1,9 @@
 /**
  * 今日待办小组件快照（AGENTS.md §7.16 v0.10 + ui.md「Android 桌面小组件（v0.10）」）：
  * - 快照 JSON schema 冻结：{ generatedAt, tzid, groups: { overdue[], scheduled[] } }；
- * - 每项冻结字段：id / title / type / timeLabel / status；不含 content、tags、reminders 细节；
+ * - 每项字段：id / title / type / timeLabel / status；§7.21 v0.14（任务卡阶段 5）扩展
+ *   `categoryColor`（分类颜色原样携带，无分类/颜色 null → UI 层回退灰点）；
+ *   仍不含 content、tags、reminders 细节；
  * - 分组冻结：today 分组（过期 + 已安排）各截前 5；overdue 仅 active，scheduled 含 done；
  * - 排序沿用切片 7 查询返回序（overdue：endAt 升序；scheduled：done 末尾 + startAt 升序），
  *   本纯函数不重排、只防御性过滤 + 截断；
@@ -12,7 +14,7 @@
  */
 
 import type { ItemStatus, ItemType } from '../item';
-import type { ItemWithTags } from '../tag';
+import type { ItemWithRelations } from '../relations/itemWithRelations';
 import { formatLocalTime, getZonedParts } from '../recurrence/civilTime';
 
 /**
@@ -24,7 +26,7 @@ export const WIDGET_SNAPSHOT_PREFS_KEY = 'widget_today_snapshot_v1';
 /** 每组最多条数（契约冻结：top 5）。 */
 export const WIDGET_SNAPSHOT_MAX_PER_GROUP = 5;
 
-/** 快照单项（契约冻结字段集，不得增删）。 */
+/** 快照单项（§7.16 v0.10 冻结字段集 + §7.21 v0.14 扩展 categoryColor）。 */
 export interface WidgetSnapshotEntry {
   id: string;
   title: string;
@@ -32,6 +34,8 @@ export interface WidgetSnapshotEntry {
   /** 展示用时间标签文本：'已过期' | '全天' | 'HH:mm' | '未安排'（防御） */
   timeLabel: string;
   status: ItemStatus;
+  /** 分类颜色原样携带（合法性由 UI 层校验回退）；无分类为 null（v0.14 阶段 5） */
+  categoryColor: string | null;
 }
 
 /** 快照 JSON 根对象（ui.md v0.10 schema 冻结）。 */
@@ -48,9 +52,9 @@ export interface WidgetSnapshot {
 
 export interface BuildTodayWidgetSnapshotInput {
   /** listOverdueItems(nowMs) 结果（已按 endAt 升序），本函数沿用其顺序 */
-  overdue: ItemWithTags[];
+  overdue: ItemWithRelations[];
   /** listScheduledItemsInRange(...) 结果（已按 done 末尾 + startAt 升序），本函数沿用其顺序 */
-  scheduled: ItemWithTags[];
+  scheduled: ItemWithRelations[];
   /** 快照生成时刻（毫秒），写入 generatedAt */
   nowMs: number;
   /** 生成时的 IANA 时区，写入 tzid 并用于 'HH:mm' 取字段 */
@@ -58,18 +62,19 @@ export interface BuildTodayWidgetSnapshotInput {
 }
 
 /** 过期项：标签恒 '已过期'（契约冻结，不拼 endAt 时刻）。 */
-function toOverdueEntry(item: ItemWithTags): WidgetSnapshotEntry {
+function toOverdueEntry(item: ItemWithRelations): WidgetSnapshotEntry {
   return {
     id: item.id,
     title: item.title,
     type: item.type,
     timeLabel: '已过期',
     status: item.status,
+    categoryColor: item.category?.color ?? null,
   };
 }
 
 /** 已安排项：allDay → '全天'；startAt null（防御）→ '未安排'；否则 tzid 下 'HH:mm'。 */
-function toScheduledEntry(item: ItemWithTags, tzid: string): WidgetSnapshotEntry {
+function toScheduledEntry(item: ItemWithRelations, tzid: string): WidgetSnapshotEntry {
   let timeLabel: string;
   if (item.allDay) {
     timeLabel = '全天';
@@ -85,6 +90,7 @@ function toScheduledEntry(item: ItemWithTags, tzid: string): WidgetSnapshotEntry
     type: item.type,
     timeLabel,
     status: item.status,
+    categoryColor: item.category?.color ?? null,
   };
 }
 

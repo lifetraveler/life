@@ -119,12 +119,15 @@ function narrowEntry(value: unknown): WidgetSnapshot['groups']['overdue'][number
     return null;
   }
   const e = value as Record<string, unknown>;
+  // categoryColor 为 v0.14 阶段 5 新增：旧版本快照无此字段，宽松读为 null（其余字段仍严格）
+  const legacyColor = e.categoryColor;
   if (
     typeof e.id !== 'string'
     || typeof e.title !== 'string'
     || typeof e.type !== 'string'
     || typeof e.timeLabel !== 'string'
     || typeof e.status !== 'string'
+    || !(legacyColor === undefined || legacyColor === null || typeof legacyColor === 'string')
   ) {
     return null;
   }
@@ -134,5 +137,6 @@ function narrowEntry(value: unknown): WidgetSnapshot['groups']['overdue'][number
     type: e.type as WidgetSnapshot['groups']['overdue'][number]['type'],
     timeLabel: e.timeLabel,
     status: e.status as WidgetSnapshot['groups']['overdue'][number]['status'],
+    categoryColor: legacyColor === undefined ? null : legacyColor,
   };
 }
