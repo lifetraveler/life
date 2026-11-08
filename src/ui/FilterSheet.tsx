@@ -10,7 +10,9 @@
  * - 草稿模型：visible 变 true 时从 initialFilters 快照（各数组浅拷贝，杜绝共享可变引用）；
  *   应用 = onApply(draft)（父级只提交筛选、不负责关面板）→ 面板自行播放关闭动画 → onClose；
  *   重置 = 清空草稿、面板不关；X / 遮罩 / 安卓返回键 = 丢弃草稿关闭；
- * - 纯 UI 组件：不直接访问 WatermelonDB / expo-notifications（AGENTS.md §4 受保护契约）。
+ * - 纯 UI 组件：不直接访问 WatermelonDB / expo-notifications（AGENTS.md §4 受保护契约）；
+ * - 切片 14 阶段 5：顶部新增「视图」区（日程/今天/周/月，toki_1.webp 图2——视图切换
+ *   移入筛选面板）；应用 = onApply(draft, viewKind) 双参提交，重置 = 清筛选 + 视图回日程。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -26,8 +28,11 @@ import {
   View,
 } from 'react-native';
 
+import { Ionicons } from '@expo/vector-icons';
+import type { ComponentProps } from 'react';
 import type { Category } from '../domain/category';
 import type { ItemSourceType, ItemStatus } from '../domain/item';
+import type { AgendaViewKind } from '../domain/views/agenda';
 import { EMPTY_ITEM_FILTERS } from '../domain/views/filters';
 import type { ItemFilters } from '../domain/views/filters';
 import type { Tag } from '../domain/tag';
@@ -54,6 +59,14 @@ const STATUS_OPTIONS: readonly { value: ItemStatus; label: string }[] = [
   { value: 'done', label: '已完成' },
 ];
 
+/** 视图选项（切片 14 阶段 5：视图切换移入筛选面板顶部；图标 @expo/vector-icons） */
+const VIEW_OPTIONS: readonly { kind: AgendaViewKind; label: string; icon: ComponentProps<typeof Ionicons>['name'] }[] = [
+  { kind: 'agenda', label: '日程', icon: 'list-outline' },
+  { kind: 'today', label: '今天', icon: 'today-outline' },
+  { kind: 'week', label: '周', icon: 'calendar-clear-outline' },
+  { kind: 'month', label: '月', icon: 'calendar-outline' },
+];
+
 interface FilterSheetProps {
   visible: boolean;
   /** 分类全集（打开面板时由父级经 getCategories() 现取最新视觉传入） */
@@ -62,8 +75,10 @@ interface FilterSheetProps {
   tags: Tag[];
   /** 打开时刻的已应用筛选（草稿种子） */
   initialFilters: ItemFilters;
-  /** 应用：父级只提交筛选、不负责关闭；面板自行播放关闭动画后回调 onClose */
-  onApply: (filters: ItemFilters) => void;
+  /** 打开时刻的视图模式（视图草稿种子，切片 14 阶段 5） */
+  initialViewKind: AgendaViewKind;
+  /** 应用：父级提交筛选 + 视图模式、不负责关闭；面板自行播放关闭动画后回调 onClose */
+  onApply: (filters: ItemFilters, viewKind: AgendaViewKind) => void;
   /** 关闭回调（反向动画结束后触发；父级置 visible=false 卸载 Modal） */
   onClose: () => void;
 }
@@ -83,6 +98,7 @@ export default function FilterSheet({
   categories,
   tags,
   initialFilters,
+  initialViewKind,
   onApply,
   onClose,
 }: FilterSheetProps) {
@@ -90,9 +106,14 @@ export default function FilterSheet({
 
   const [draft, setDraft] = useState<ItemFilters>(() => cloneFilters(EMPTY_ITEM_FILTERS));
 
-  // initialFilters 经 ref 转交，避免把草稿快照 effect 绑在父级 state 对象引用上
+  // 切片 14 阶段 5：视图模式草稿（打开时以 initialViewKind 为种子）
+  const [draftViewKind, setDraftViewKind] = useState<AgendaViewKind>('agenda');
+
+  // initialFilters / initialViewKind 经 ref 转交，避免把草稿快照 effect 绑在父级 state 对象引用上
   const initialFiltersRef = useRef(initialFilters);
   initialFiltersRef.current = initialFilters;
+  const initialViewKindRef = useRef(initialViewKind);
+  initialViewKindRef.current = initialViewKind;
 
   // 初始值即整屏高（面板在屏外）；关闭动画结束后回到屏外，循环打开不闪帧
   const translateY = useRef(new Animated.Value(Dimensions.get('window').height)).current;
@@ -105,6 +126,7 @@ export default function FilterSheet({
       return;
     }
     setDraft(cloneFilters(initialFiltersRef.current));
+    setDraftViewKind(initialViewKindRef.current);
     translateY.setValue(Dimensions.get('window').height);
     backdropOpacity.setValue(0);
     Animated.parallel([
@@ -147,9 +169,9 @@ export default function FilterSheet({
   }, [onClose, translateY, backdropOpacity]);
 
   const handleApply = useCallback(() => {
-    onApply(draft);
+    onApply(draft, draftViewKind);
     requestClose();
-  }, [draft, onApply, requestClose]);
+  }, [draft, draftViewKind, onApply, requestClose]);
 
   const toggleCategory = useCallback((categoryId: string) => {
     setDraft((prev) => ({
@@ -189,6 +211,8 @@ export default function FilterSheet({
 
   const handleReset = useCallback(() => {
     setDraft(cloneFilters(EMPTY_ITEM_FILTERS));
+    // 重置同时把视图切回日程（阶段 5：「重置」= 清筛选 + 恢复默认视图）
+    setDraftViewKind('agenda');
   }, []);
 
   return (
@@ -221,6 +245,26 @@ export default function FilterSheet({
           </View>
 
           <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+            {/* 切片 14 阶段 5：视图区（图标上、文字下；选中描边高亮） */}
+            <Text style={styles.sectionLabel}>视图</Text>
+            <View style={styles.viewRow}>
+              {VIEW_OPTIONS.map((option) => {
+                const selected = option.kind === draftViewKind;
+                return (
+                  <Pressable
+                    key={option.kind}
+                    style={[styles.viewOption, selected && styles.viewOptionSelected]}
+                    onPress={() => setDraftViewKind(option.kind)}
+                  >
+                    <Ionicons name={option.icon} size={20} color={selected ? '#111111' : '#999999'} />
+                    <Text style={[styles.viewOptionText, selected && styles.viewOptionTextSelected]}>
+                      {option.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
             <Text style={styles.sectionLabel}>分类</Text>
             <View style={styles.chipWrap}>
               {categories.map((category) => (
@@ -346,6 +390,33 @@ const styles = StyleSheet.create({
     color: '#888888',
     marginTop: 12,
     marginBottom: 8,
+  },
+  // 视图区（阶段 5）：四选项等宽一行，选中描边 + 浅灰底
+  viewRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  viewOption: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E0E0E0',
+    backgroundColor: '#FFFFFF',
+  },
+  viewOptionSelected: {
+    borderColor: '#111111',
+    backgroundColor: '#F5F5F5',
+  },
+  viewOptionText: {
+    fontSize: 12,
+    color: '#666666',
+  },
+  viewOptionTextSelected: {
+    color: '#111111',
+    fontWeight: '600',
   },
   chipWrap: {
     flexDirection: 'row',

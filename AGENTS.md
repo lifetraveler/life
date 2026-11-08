@@ -153,6 +153,9 @@ AGENTS.md       本文件
   不新增原生依赖，不修改 package.json 的 native 依赖。
 - 快速记录增强不修改 quick-add 路由的 deep link 约定（`life://quick-add`），
   只增加输入后行为（如保存后留在输入框、支持连续创建）。
+- （v0.14 阶段 5 注记，tasks/slice-14）内嵌录入框移除后，quick-add 落点改为
+  全屏新建页 `item/new`；上条「输入后行为」条款随之失效，deep link 约定不变，
+  详见 docs/contracts/ui.md「快速记录落点（v0.14，切片 14 阶段 5）」。
 
 ### 7.20 鸿蒙评估切片（v0.13）
 - 切片 13 为纯文档评估，不修改任何源码、不升级 SDK、不引入鸿蒙依赖。

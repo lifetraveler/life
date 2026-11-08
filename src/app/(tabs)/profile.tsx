@@ -13,21 +13,23 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
 
-import { itemRepository } from '../data';
-import { serializeExportData } from '../domain/export';
-import { buildIcs } from '../domain/ics/buildIcs';
-import { parseIcs } from '../domain/ics/parseIcs';
-import type { TagDisplayMode } from '../domain/settings';
-import { reminderScheduler } from '../notifications';
-import TagChip from '../ui/TagChip';
-import { getDeviceTzid } from '../ui/timeFormat';
+import { itemRepository } from '../../data';
+import { serializeExportData } from '../../domain/export';
+import { buildIcs } from '../../domain/ics/buildIcs';
+import { parseIcs } from '../../domain/ics/parseIcs';
+import type { TagDisplayMode } from '../../domain/settings';
+import { reminderScheduler } from '../../notifications';
+import TagChip from '../../ui/TagChip';
+import { getDeviceTzid } from '../../ui/timeFormat';
 import {
   setLastExportResult,
   setLastImportResult,
-} from '../ui/transferResultStore';
+} from '../../ui/transferResultStore';
 
 /**
- * 设置页（切片 8/9，tasks/slice-08.md 实现要求 4/5、tasks/slice-09.md 实现要求 3）：
+ * 「我的」Tab（切片 14 阶段 5：原 src/app/settings.tsx 移入 (tabs)/profile.tsx，
+ * 去导航头、顶部加大标题「我的」，toki_1.webp 底部第 4 入口）。
+ * 设置页正文（切片 8/9，tasks/slice-08.md 实现要求 4/5、tasks/slice-09.md 实现要求 3）：
  * - 导入 ICS：DocumentPicker 选文件 → parseIcs → importItemsInBatches → 结果页；
  *   导入完成后 fire-and-forget 触发一次 reconcile()（失败不阻断结果页）；
  * - 导出 ICS：listItemsForExport → buildIcs → 写入 cache 目录 → Sharing 分享 → 成功页；
@@ -250,9 +252,13 @@ export default function SettingsPage() {
   }, [busy]);
 
   return (
-    // 阶段 3 新增两节后内容超出屏幕高度（用户反馈「设置页无法下滑」）：
-    // 原为固定 View 列，四个节恰好满屏；改 ScrollView 使全部节可达。
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+    // 阶段 5：外层包一列，「我的」大标题替代导航头（(tabs) 布局 headerShown:false）
+    <View style={styles.page}>
+      {/* 「我的」大标题（阶段 5，toki_1.webp：我的页顶部标题） */}
+      <Text style={styles.pageTitle}>我的</Text>
+      {/* 阶段 3 新增两节后内容超出屏幕高度（用户反馈「设置页无法下滑」）：
+          原为固定 View 列，四个节恰好满屏；改 ScrollView 使全部节可达。 */}
+      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>分类与标签</Text>
         <Text style={styles.hint}>自定义预置分类与标签的颜色、图标。</Text>
@@ -366,10 +372,23 @@ export default function SettingsPage() {
         )}
       </View>
     </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  page: {
+    flex: 1,
+    backgroundColor: '#f5f5f5',
+    paddingTop: 48,
+  },
+  pageTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#111111',
+    paddingHorizontal: 16,
+    marginBottom: 12,
+  },
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
