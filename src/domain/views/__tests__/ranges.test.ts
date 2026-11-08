@@ -254,3 +254,127 @@ describe('测试时区隔离（结果与 process.env.TZ 无关）', () => {
     }
   });
 });
+
+/* ===== 切片 14 阶段 5b：getSevenDayWindow / getDayRange / getMonthRangeForCivil / shiftCivilMonth ===== */
+
+import {
+  getDayRange,
+  getMonthRangeForCivil,
+  getSevenDayWindow,
+  shiftAnchorDay,
+  shiftCivilMonth,
+} from '../ranges';
+
+describe('getSevenDayWindow（Asia/Shanghai，恒定 +8）', () => {
+  it('锚点当日 00:00 起，恰含 7 个民用日（6 天后 00:00 结束）', () => {
+    // 当地 2026-11-07 12:00+08
+    const anchor = Date.UTC(2026, 10, 7, 4, 0);
+    expect(getSevenDayWindow(anchor, 'Asia/Shanghai')).toEqual({
+      startMs: shanghaiMidnightUtc(2026, 11, 7),
+      endMs: shanghaiMidnightUtc(2026, 11, 14),
+    });
+  });
+
+  it('跨月边界（11-28 起 7 天 → 12-05）', () => {
+    const anchor = Date.UTC(2026, 10, 28, 10, 0) - 8 * 3_600_000;
+    expect(getSevenDayWindow(anchor, 'Asia/Shanghai')).toEqual({
+      startMs: shanghaiMidnightUtc(2026, 11, 28),
+      endMs: shanghaiMidnightUtc(2026, 12, 5),
+    });
+  });
+
+  it('跨年边界（12-29 起 7 天 → 次年 1-05）', () => {
+    const anchor = Date.UTC(2026, 11, 29, 8, 0) - 8 * 3_600_000;
+    expect(getSevenDayWindow(anchor, 'Asia/Shanghai')).toEqual({
+      startMs: shanghaiMidnightUtc(2026, 12, 29),
+      endMs: shanghaiMidnightUtc(2027, 1, 5),
+    });
+  });
+
+  it('与 resolveDayStart 交叉一致：startMs = 当日 00:00', () => {
+    const anchor = Date.UTC(2026, 10, 7, 4, 0);
+    const range = getSevenDayWindow(anchor, 'Asia/Shanghai');
+    expect(range.startMs).toBe(resolveCivilTimeToInstant('Asia/Shanghai', 2026, 11, 7, 0, 0));
+  });
+});
+
+describe('getSevenDayWindow（America/New_York，DST）', () => {
+  it('DST 切换日所在窗：窗内恰 7 个民用日但绝对时长 167 小时（11-01 EDT→EST）', () => {
+    // 窗口 2026-10-29 ~ 11-05 含 DST 结束（11-01 02:00 回拨 1 小时），
+    // 各日 00:00 仍由 resolveDayStart 取民用日界，10-29 为 EDT（-4），11-01 起为 EST（-5）。
+    const anchor = Date.UTC(2026, 9, 29, 12, 0) + 4 * 3_600_000; // 当地 10-29 12:00 EDT
+    expect(getSevenDayWindow(anchor, 'America/New_York')).toEqual({
+      startMs: nyMidnightEdtUtc(2026, 10, 29),
+      endMs: nyMidnightEstUtc(2026, 11, 5),
+    });
+  });
+});
+
+describe('getDayRange（Asia/Shanghai）', () => {
+  it('锚点所在日 00:00–次日 00:00', () => {
+    const anchor = Date.UTC(2026, 10, 7, 15, 0) - 8 * 3_600_000; // 当地 23:00
+    expect(getDayRange(anchor, 'Asia/Shanghai')).toEqual({
+      startMs: shanghaiMidnightUtc(2026, 11, 7),
+      endMs: shanghaiMidnightUtc(2026, 11, 8),
+    });
+  });
+
+  it('与 getTodayRange 同锚等价（today 语义由 getDayRange 参数化承接）', () => {
+    const anchor = Date.UTC(2026, 10, 7, 4, 0);
+    expect(getDayRange(anchor, 'Asia/Shanghai')).toEqual(getTodayRange(anchor, 'Asia/Shanghai'));
+  });
+});
+
+describe('getMonthRangeForCivil / shiftCivilMonth', () => {
+  it('getMonthRangeForCivil 与 getMonthRange 同月等价', () => {
+    const now = Date.UTC(2026, 10, 7, 4, 0);
+    expect(getMonthRangeForCivil('Asia/Shanghai', 2026, 11)).toEqual(getMonthRange(now, 'Asia/Shanghai'));
+  });
+
+  it('getMonthRangeForCivil：12 月跨年（2026-12 → 2027-01-01）', () => {
+    expect(getMonthRangeForCivil('Asia/Shanghai', 2026, 12)).toEqual({
+      startMs: shanghaiMidnightUtc(2026, 12, 1),
+      endMs: shanghaiMidnightUtc(2027, 1, 1),
+    });
+  });
+
+  it('shiftCivilMonth：同年内 ±1', () => {
+    expect(shiftCivilMonth({ year: 2026, month: 3 }, 1)).toEqual({ year: 2026, month: 4 });
+    expect(shiftCivilMonth({ year: 2026, month: 3 }, -1)).toEqual({ year: 2026, month: 2 });
+  });
+
+  it('shiftCivilMonth：跨年归一（2026-01 -1 → 2025-12；2025-12 +1 → 2026-01）', () => {
+    expect(shiftCivilMonth({ year: 2026, month: 1 }, -1)).toEqual({ year: 2025, month: 12 });
+    expect(shiftCivilMonth({ year: 2025, month: 12 }, 1)).toEqual({ year: 2026, month: 1 });
+  });
+
+  it('shiftCivilMonth：跨 13 个月（2026-01 -13 → 2024-12；2026-06 +13 → 2027-07）', () => {
+    expect(shiftCivilMonth({ year: 2026, month: 1 }, -13)).toEqual({ year: 2024, month: 12 });
+    expect(shiftCivilMonth({ year: 2026, month: 6 }, 13)).toEqual({ year: 2027, month: 7 });
+  });
+});
+
+describe('shiftAnchorDay（Asia/Shanghai，恒定 +8）', () => {
+  it('±1 / ±7 天民用日精确步进（返回新日 00:00）', () => {
+    const anchor = Date.UTC(2026, 10, 7, 4, 0); // 当地 2026-11-07 12:00
+    expect(shiftAnchorDay(anchor, 'Asia/Shanghai', 1)).toBe(shanghaiMidnightUtc(2026, 11, 8));
+    expect(shiftAnchorDay(anchor, 'Asia/Shanghai', -1)).toBe(shanghaiMidnightUtc(2026, 11, 6));
+    expect(shiftAnchorDay(anchor, 'Asia/Shanghai', 7)).toBe(shanghaiMidnightUtc(2026, 11, 14));
+    expect(shiftAnchorDay(anchor, 'Asia/Shanghai', -7)).toBe(shanghaiMidnightUtc(2026, 10, 31));
+  });
+});
+
+describe('shiftAnchorDay（America/New_York，DST）', () => {
+  it('25h 日（2026-03-08 春令时）±1 天不漂移：3-08 +1 → 3-09、3-08 -1 → 3-07', () => {
+    // 当地 2026-03-08 14:00 EDT（那天只有 23 个民用小时，绝对时长 23h）
+    const anchor = Date.UTC(2026, 2, 8, 18, 0);
+    expect(shiftAnchorDay(anchor, 'America/New_York', 1)).toBe(nyMidnightEdtUtc(2026, 3, 9));
+    expect(shiftAnchorDay(anchor, 'America/New_York', -1)).toBe(nyMidnightEstUtc(2026, 3, 7));
+  });
+
+  it('23h 日（2026-11-01 秋令时）±1 天不漂移：11-01 +1 → 11-02、11-02 -1 → 11-01', () => {
+    const anchor = Date.UTC(2026, 10, 1, 17, 0); // 当地 2026-11-01 12:00 EST（那天民用 24 小时、绝对 25h）
+    expect(shiftAnchorDay(anchor, 'America/New_York', 1)).toBe(nyMidnightEstUtc(2026, 11, 2));
+    expect(shiftAnchorDay(anchor, 'America/New_York', -1)).toBe(nyMidnightEdtUtc(2026, 10, 31));
+  });
+});

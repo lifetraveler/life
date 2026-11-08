@@ -68,6 +68,42 @@
   - 下方保留分类 Chip 和标签 Chip 的选择。
 - 点击“应用”后，不仅过滤数据，同时切换视图的渲染模式。
 
+### 阶段 5b：真机反馈迭代（统一顶栏与视图收敛，2026-11-09 用户拍板）
+
+#### 1. 统一顶栏
+- 计划页顶栏改为 `[‹ 标签 ›]` + 右侧 🔍（search-outline，进独立搜索页）/ 筛选（options-outline）/「今天」pill。
+- 标签随视图：日程=当前月（纯展示）；周=7 天窗日期；日=单日；月=当前月。
+- `‹ ›` 步进：周 ±7 天、日 ±1 天、月 ±1 月；日程视图纯展示。
+
+#### 2. 视图收敛为 4 个
+- 日程 / 周 / 月 / 日（删除「今日」视图选项）。
+- 「今天」按钮保留：日程定位今日分组、周/日锚点回今日、月回本月。
+
+#### 3. 周视图语义（今日起 7 天）
+- 计划页周视图 = 「今日起 7 天」滑动窗口（新纯函数 `getSevenDayWindow`）。
+- 横向滑动（PanResponder）±7 天，`‹ ›` 同步；点击某天进入日视图。
+- 原 `getWeekRange`（周一~周日）保留供 `/week` 独立页面（ui.md v0.7 契约不动）。
+
+#### 4. 日视图（纵向时间轴）
+- ScrollView + 每小时 64px；重叠事件聚类横向平分（纯函数 `layoutDayEvents` 带单测）。
+- 跨午夜事件当日裁剪；全天/无时间项放时间轴上方 chip 区；当前时刻画红线。
+
+#### 5. 月视图（富月历，react-native-calendars）
+- 引入 `react-native-calendars`（纯 JS 跨平台，允许依赖）。
+- FlatList 纵向无极双向滚动：每月一个日历 section，custom day 格渲染当日事件 chip ≤3 + 「+N」；周一开头；点格进日视图；「今天」滚回本月。
+- 开工前核对与 RN 0.81/新架构兼容；不兼容则回退自绘月网格（纯函数 itemsByDay 仍复用）。
+
+#### 6. 搜索独立页
+- 顶栏 🔍 进入 `src/app/search.tsx`（LIKE 语义不变，§7.18）。
+- 排序：有 startAt 按开始时间倒序在前；无时间按 createdAt 倒序在末尾。
+- 分页 50/批，滚至距底 20 条预取。
+
+#### 7. 筛选面板即时生效
+- FilterSheet 去草稿/应用按钮，点选条件即回调；重置移面板右上角（仅清筛选，不动视图）；X/点遮罩直接关闭；视图区 4 选项。
+
+#### 8. FAB 长按
+- 长按弹「闪电录入即将上线」（切片 15 占位）；短按跳 `/item/new` 不变。
+
 ### 阶段 6：小组件升级
 - 更新快照生成函数，携带 Category 颜色和 timeLabel。
 - 更新小组件 UI。
@@ -79,10 +115,11 @@
 - src/db/schema.ts, migrations.ts, ItemModel.ts, 新增 CategoryModel.ts, TagModel.ts, AppSettingsModel.ts
 - src/domain/relations/, src/domain/views/, src/domain/tags/
 - src/data/ItemRepository.ts, WatermelonItemRepository.ts, 新增 CategoryRepository.ts
-- src/app/（主页、设置、详情、编辑、标签管理）
+- src/app/（主页、设置、详情、编辑、标签管理、search.tsx）
 - src/ui/（TagChip, CategoryChip, 视图卡片等）
 - src/domain/widget/, src/widget/
 - src/domain/ics/, src/domain/systemCalendar/
+- package.json 新增依赖：react-native-calendars（阶段 5b 用户拍板，纯 JS 跨平台）
 
 ## 禁止修改/实现
 - 不修改 src/domain/recurrence/ 任何文件。
@@ -145,16 +182,27 @@
 17. **真机验证 - FAB 新建流程**：点击 FAB → 跳转全屏表单页 → 填写内容保存 → 自动返回计划页 → 列表立即刷新并展示新条目。
 18. **真机验证 - 筛选联动**：在面板里切到“周”并应用，主页数据必须切换到本周范围渲染；切回“日程”则恢复默认。在 Tab 之间来回切换，之前的筛选状态和列表位置不丢失。
 
+### 阶段 5b 验收
+19. `tsc` 零错误，`jest` 全过（含 `getSevenDayWindow`/`getDayRange`/`itemsByDay`/`layoutDayEvents` 新单测）。
+20. 顶栏：月视图 `‹ ›` 切月；周/日步进窗口；「今天」按钮各视图正确回位。
+21. 周视图横滑 ±7 天流畅；点击某天进入日视图。
+22. 日视图：重叠事件并排平分；跨午夜事件当日裁剪；全天项在上方 chip 区；红线在当前时刻。
+23. 月视图纵向无极滚动不丢视口；当日格 chip ≤3 + 「+N」；点格进日视图；周一开头。
+24. 搜索页：命中标题/内容/标签；排序符合阶段 5b-6；滚动分页正常。
+25. 筛选面板：点选即时生效；重置仅清筛选；X/遮罩关闭；视图 4 选项切换后主视图渲染模式同步。
+26. FAB 短按新建流程不回退（验收 17 持续有效）；长按出现占位提示。
+27. Tab 来回切换，筛选状态、视图模式、列表位置不丢失。
+
 ### 阶段 6 验收
-19. 桌面小组件展示任务时，左侧带有 Category 对应的颜色小圆点。
+28. 桌面小组件展示任务时，左侧带有 Category 对应的颜色小圆点。
 
 ### 阶段 7 验收
-20. 导入 ICS 时弹出预览页，包含事件标题、时间、是否重复。
-21. 取消勾选 2 条后，实际导入数量减少 2 条。
+29. 导入 ICS 时弹出预览页，包含事件标题、时间、是否重复。
+30. 取消勾选 2 条后，实际导入数量减少 2 条。
 
 ### 分支与提交
-22. 从最新 main 新建 task/slice-14，禁止一次性写完。每阶段完成后汇报，等确认再继续。
-23. push 遇 reset 加 HTTP/1.1。
+31. 从最新 main 新建 task/slice-14，禁止一次性写完。每阶段完成后汇报，等确认再继续。
+32. push 遇 reset 加 HTTP/1.1。
 
 ## 完成后输出
 - 各阶段的实际执行结果与自测情况。

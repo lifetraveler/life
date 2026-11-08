@@ -7,15 +7,17 @@
  * - 滑距固定为整屏高（不 onLayout 量面板高）：面板高度由内容决定（内部 ScrollView
  *   设 maxHeight 兜底，整体不超过约 80% 屏高），从整屏外滑入对任意高度都成立；
  * - 关闭走反向动画，动画结束后才回调 onClose（父级随后置 visible=false 卸载 Modal）；
- * - 草稿模型：visible 变 true 时从 initialFilters 快照（各数组浅拷贝，杜绝共享可变引用）；
- *   应用 = onApply(draft)（父级只提交筛选、不负责关面板）→ 面板自行播放关闭动画 → onClose；
- *   重置 = 清空草稿、面板不关；X / 遮罩 / 安卓返回键 = 丢弃草稿关闭；
+ * - **即时生效（阶段 5b，用户拍板）**：无草稿/应用模型——点条件或视图选项立即经
+ *   onChange(filters, viewKind) 上报父级（父级 setActiveFilters + setViewKind），
+ *   面板展示完全受控（props.filters / props.viewKind 即当前已应用值）；
+ *   X / 遮罩 / 安卓返回键 = 直接关闭（已生效的筛选保持）；
+ * - 「重置」移至面板右上角：仅清空筛选，不动视图（阶段 5b 拍板）；
  * - 纯 UI 组件：不直接访问 WatermelonDB / expo-notifications（AGENTS.md §4 受保护契约）；
- * - 切片 14 阶段 5：顶部新增「视图」区（日程/今天/周/月，toki_1.webp 图2——视图切换
- *   移入筛选面板）；应用 = onApply(draft, viewKind) 双参提交，重置 = 清筛选 + 视图回日程。
+ * - 切片 14 阶段 5b：顶部「视图」区收敛为 4 项（日程/周/月/日，「今日」移除，
+ *   AGENTS.md §7.21），点选即时切视图。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import {
   Animated,
   Dimensions,
@@ -59,12 +61,12 @@ const STATUS_OPTIONS: readonly { value: ItemStatus; label: string }[] = [
   { value: 'done', label: '已完成' },
 ];
 
-/** 视图选项（切片 14 阶段 5：视图切换移入筛选面板顶部；图标 @expo/vector-icons） */
+/** 视图选项（切片 14 阶段 5b：4 视图 = 日程/周/月/日，「今日」移除；图标 @expo/vector-icons） */
 const VIEW_OPTIONS: readonly { kind: AgendaViewKind; label: string; icon: ComponentProps<typeof Ionicons>['name'] }[] = [
   { kind: 'agenda', label: '日程', icon: 'list-outline' },
-  { kind: 'today', label: '今天', icon: 'today-outline' },
   { kind: 'week', label: '周', icon: 'calendar-clear-outline' },
   { kind: 'month', label: '月', icon: 'calendar-outline' },
+  { kind: 'day', label: '日', icon: 'sunny-outline' },
 ];
 
 interface FilterSheetProps {
@@ -73,60 +75,37 @@ interface FilterSheetProps {
   categories: Category[];
   /** 标签全集（TagChip 按 tagDisplayMode 渲染 emoji；空集显示「暂无标签」） */
   tags: Tag[];
-  /** 打开时刻的已应用筛选（草稿种子） */
-  initialFilters: ItemFilters;
-  /** 打开时刻的视图模式（视图草稿种子，切片 14 阶段 5） */
-  initialViewKind: AgendaViewKind;
-  /** 应用：父级提交筛选 + 视图模式、不负责关闭；面板自行播放关闭动画后回调 onClose */
-  onApply: (filters: ItemFilters, viewKind: AgendaViewKind) => void;
+  /** 当前已应用的筛选（即时生效：受控值） */
+  filters: ItemFilters;
+  /** 当前已应用的视图模式（即时生效：受控值，切片 14 阶段 5b） */
+  viewKind: AgendaViewKind;
+  /** 任一条件/视图变化：父级提交新筛选 + 视图模式、不负责关闭（即时生效） */
+  onChange: (filters: ItemFilters, viewKind: AgendaViewKind) => void;
   /** 关闭回调（反向动画结束后触发；父级置 visible=false 卸载 Modal） */
   onClose: () => void;
-}
-
-/** ItemFilters 快照（各数组浅拷贝） */
-function cloneFilters(filters: ItemFilters): ItemFilters {
-  return {
-    categoryIds: [...filters.categoryIds],
-    sourceTypes: [...filters.sourceTypes],
-    tagIds: [...filters.tagIds],
-    statuses: [...filters.statuses],
-  };
 }
 
 export default function FilterSheet({
   visible,
   categories,
   tags,
-  initialFilters,
-  initialViewKind,
-  onApply,
+  filters,
+  viewKind,
+  onChange,
   onClose,
 }: FilterSheetProps) {
   const tagDisplayMode = useTagDisplayMode();
-
-  const [draft, setDraft] = useState<ItemFilters>(() => cloneFilters(EMPTY_ITEM_FILTERS));
-
-  // 切片 14 阶段 5：视图模式草稿（打开时以 initialViewKind 为种子）
-  const [draftViewKind, setDraftViewKind] = useState<AgendaViewKind>('agenda');
-
-  // initialFilters / initialViewKind 经 ref 转交，避免把草稿快照 effect 绑在父级 state 对象引用上
-  const initialFiltersRef = useRef(initialFilters);
-  initialFiltersRef.current = initialFilters;
-  const initialViewKindRef = useRef(initialViewKind);
-  initialViewKindRef.current = initialViewKind;
 
   // 初始值即整屏高（面板在屏外）；关闭动画结束后回到屏外，循环打开不闪帧
   const translateY = useRef(new Animated.Value(Dimensions.get('window').height)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
   const closingRef = useRef(false);
 
-  // 打开：草稿快照 + 滑入动画
+  // 打开：滑入动画（受控值即最新筛选，无需快照种子）
   useEffect(() => {
     if (!visible) {
       return;
     }
-    setDraft(cloneFilters(initialFiltersRef.current));
-    setDraftViewKind(initialViewKindRef.current);
     translateY.setValue(Dimensions.get('window').height);
     backdropOpacity.setValue(0);
     Animated.parallel([
@@ -168,52 +147,77 @@ export default function FilterSheet({
     });
   }, [onClose, translateY, backdropOpacity]);
 
-  const handleApply = useCallback(() => {
-    onApply(draft, draftViewKind);
-    requestClose();
-  }, [draft, draftViewKind, onApply, requestClose]);
+  const toggleCategory = useCallback(
+    (categoryId: string) => {
+      onChange(
+        {
+          ...filters,
+          categoryIds: filters.categoryIds.includes(categoryId)
+            ? filters.categoryIds.filter((id) => id !== categoryId)
+            : [...filters.categoryIds, categoryId],
+        },
+        viewKind,
+      );
+    },
+    [filters, onChange, viewKind],
+  );
 
-  const toggleCategory = useCallback((categoryId: string) => {
-    setDraft((prev) => ({
-      ...prev,
-      categoryIds: prev.categoryIds.includes(categoryId)
-        ? prev.categoryIds.filter((id) => id !== categoryId)
-        : [...prev.categoryIds, categoryId],
-    }));
-  }, []);
+  const toggleTag = useCallback(
+    (tagId: string) => {
+      onChange(
+        {
+          ...filters,
+          tagIds: filters.tagIds.includes(tagId)
+            ? filters.tagIds.filter((id) => id !== tagId)
+            : [...filters.tagIds, tagId],
+        },
+        viewKind,
+      );
+    },
+    [filters, onChange, viewKind],
+  );
 
-  const toggleTag = useCallback((tagId: string) => {
-    setDraft((prev) => ({
-      ...prev,
-      tagIds: prev.tagIds.includes(tagId)
-        ? prev.tagIds.filter((id) => id !== tagId)
-        : [...prev.tagIds, tagId],
-    }));
-  }, []);
+  const toggleSource = useCallback(
+    (sourceType: ItemSourceType) => {
+      onChange(
+        {
+          ...filters,
+          sourceTypes: filters.sourceTypes.includes(sourceType)
+            ? filters.sourceTypes.filter((value) => value !== sourceType)
+            : [...filters.sourceTypes, sourceType],
+        },
+        viewKind,
+      );
+    },
+    [filters, onChange, viewKind],
+  );
 
-  const toggleSource = useCallback((sourceType: ItemSourceType) => {
-    setDraft((prev) => ({
-      ...prev,
-      sourceTypes: prev.sourceTypes.includes(sourceType)
-        ? prev.sourceTypes.filter((value) => value !== sourceType)
-        : [...prev.sourceTypes, sourceType],
-    }));
-  }, []);
+  const toggleStatus = useCallback(
+    (status: ItemStatus) => {
+      onChange(
+        {
+          ...filters,
+          statuses: filters.statuses.includes(status)
+            ? filters.statuses.filter((value) => value !== status)
+            : [...filters.statuses, status],
+        },
+        viewKind,
+      );
+    },
+    [filters, onChange, viewKind],
+  );
 
-  const toggleStatus = useCallback((status: ItemStatus) => {
-    setDraft((prev) => ({
-      ...prev,
-      statuses: prev.statuses.includes(status)
-        ? prev.statuses.filter((value) => value !== status)
-        : [...prev.statuses, status],
-    }));
-  }, []);
+  const selectViewKind = useCallback(
+    (kind: AgendaViewKind) => {
+      onChange(filters, kind);
+    },
+    [filters, onChange],
+  );
 
+  /** 重置（右上角）：仅清空筛选，不动视图（阶段 5b 拍板） */
   const handleReset = useCallback(() => {
-    setDraft(cloneFilters(EMPTY_ITEM_FILTERS));
-    // 重置同时把视图切回日程（阶段 5：「重置」= 清筛选 + 恢复默认视图）
-    setDraftViewKind('agenda');
-  }, []);
+    onChange(EMPTY_ITEM_FILTERS, viewKind);
+  }, [onChange, viewKind]);
 
   return (
     <Modal
@@ -224,7 +228,7 @@ export default function FilterSheet({
       onRequestClose={requestClose}
     >
       <View style={styles.root}>
-        {/* 全屏遮罩：点击关闭（丢弃草稿） */}
+        {/* 全屏遮罩：点击直接关闭（即时生效模式下无需丢弃草稿） */}
         <Pressable style={StyleSheet.absoluteFill} onPress={requestClose}>
           <Animated.View
             style={[
@@ -241,20 +245,22 @@ export default function FilterSheet({
               <Text style={styles.closeText}>✕</Text>
             </Pressable>
             <Text style={styles.headerTitle}>筛选</Text>
-            <View style={styles.headerSpacer} />
+            <Pressable hitSlop={12} onPress={handleReset} style={styles.resetButton}>
+              <Text style={styles.resetText}>重置</Text>
+            </Pressable>
           </View>
 
           <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
-            {/* 切片 14 阶段 5：视图区（图标上、文字下；选中描边高亮） */}
+            {/* 切片 14 阶段 5b：视图区（图标上、文字下；选中描边高亮；点选即时切视图） */}
             <Text style={styles.sectionLabel}>视图</Text>
             <View style={styles.viewRow}>
               {VIEW_OPTIONS.map((option) => {
-                const selected = option.kind === draftViewKind;
+                const selected = option.kind === viewKind;
                 return (
                   <Pressable
                     key={option.kind}
                     style={[styles.viewOption, selected && styles.viewOptionSelected]}
-                    onPress={() => setDraftViewKind(option.kind)}
+                    onPress={() => selectViewKind(option.kind)}
                   >
                     <Ionicons name={option.icon} size={20} color={selected ? '#111111' : '#999999'} />
                     <Text style={[styles.viewOptionText, selected && styles.viewOptionTextSelected]}>
@@ -271,7 +277,7 @@ export default function FilterSheet({
                 <CategoryChip
                   key={category.id}
                   category={category}
-                  selected={draft.categoryIds.includes(category.id)}
+                  selected={filters.categoryIds.includes(category.id)}
                   onPress={() => toggleCategory(category.id)}
                 />
               ))}
@@ -287,7 +293,7 @@ export default function FilterSheet({
                     key={tag.id}
                     tag={tag}
                     mode={tagDisplayMode}
-                    selected={draft.tagIds.includes(tag.id)}
+                    selected={filters.tagIds.includes(tag.id)}
                     onPress={() => toggleTag(tag.id)}
                   />
                 ))
@@ -300,7 +306,7 @@ export default function FilterSheet({
                 <TagChip
                   key={option.value}
                   label={option.label}
-                  selected={draft.sourceTypes.includes(option.value)}
+                  selected={filters.sourceTypes.includes(option.value)}
                   onPress={() => toggleSource(option.value)}
                 />
               ))}
@@ -312,21 +318,12 @@ export default function FilterSheet({
                 <TagChip
                   key={option.value}
                   label={option.label}
-                  selected={draft.statuses.includes(option.value)}
+                  selected={filters.statuses.includes(option.value)}
                   onPress={() => toggleStatus(option.value)}
                 />
               ))}
             </View>
           </ScrollView>
-
-          <View style={styles.footerRow}>
-            <Pressable style={styles.resetButton} onPress={handleReset}>
-              <Text style={styles.resetText}>重置</Text>
-            </Pressable>
-            <Pressable style={styles.applyButton} onPress={handleApply}>
-              <Text style={styles.applyText}>应用</Text>
-            </Pressable>
-          </View>
         </Animated.View>
       </View>
     </Modal>
@@ -373,12 +370,20 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#111111',
   },
-  headerSpacer: {
-    width: 32,
+  resetButton: {
+    height: 32,
+    paddingHorizontal: 10,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  resetText: {
+    fontSize: 13,
+    color: '#888888',
   },
   scroll: {
-    // 内容超出时滚动；上限保证面板整体（头部 ~52 + 底部按钮 ~68）约 80% 屏高以内
-    maxHeight: Dimensions.get('window').height * 0.58,
+    // 内容超出时滚动；上限保证面板整体（头部 ~52）约 80% 屏高以内
+    maxHeight: Dimensions.get('window').height * 0.6,
   },
   scrollContent: {
     paddingHorizontal: 16,
@@ -391,7 +396,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
     marginBottom: 8,
   },
-  // 视图区（阶段 5）：四选项等宽一行，选中描边 + 浅灰底
+  // 视图区（阶段 5b）：四选项等宽一行，选中描边 + 浅灰底
   viewRow: {
     flexDirection: 'row',
     gap: 8,
@@ -426,38 +431,5 @@ const styles = StyleSheet.create({
   emptyHint: {
     fontSize: 13,
     color: '#999999',
-  },
-  footerRow: {
-    flexDirection: 'row',
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    gap: 12,
-  },
-  resetButton: {
-    flex: 1,
-    height: 44,
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#CCCCCC',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
-  },
-  resetText: {
-    fontSize: 15,
-    color: '#333333',
-  },
-  applyButton: {
-    flex: 1,
-    height: 44,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#111111',
-  },
-  applyText: {
-    fontSize: 15,
-    color: '#FFFFFF',
-    fontWeight: '600',
   },
 });

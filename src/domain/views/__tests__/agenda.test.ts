@@ -152,31 +152,14 @@ describe('groupItemsForAgenda：待办组（无 startAt，agenda/week/month 视�
     expect(groups[0]?.items.map((it) => it.id)).toEqual(['a', 'b']);
   });
 
-  it('week/month 视图未安排项同样进待办组（不影响日期分组语义）', () => {
+  it('4 视图未安排项均进待办组（阶段 5b：today 并入行为随视图移除而失效）', () => {
     const unscheduled = makeItem({ id: 'u', startAt: null, createdAt: 1 });
-    for (const viewKind of ['week', 'month'] as const) {
+    for (const viewKind of ['agenda', 'week', 'month', 'day'] as const) {
       const groups = groupFor([unscheduled], { viewKind });
       expect(groups.map((g) => g.key)).toEqual(['unscheduled']);
       expect(groups[0]?.kind).toBe('unscheduled');
       expect(groups[0]?.label).toBe('待办');
     }
-  });
-});
-
-describe('groupItemsForAgenda：today 视图未安排项并入「今天」组', () => {
-  it('未安排项排在有 startAt 项之后，且不产生独立待办组', () => {
-    const groups = groupFor(
-      [
-        makeItem({ id: 'u', startAt: null, createdAt: 1 }),
-        makeItem({ id: 'tomorrow', startAt: NOV8_1200_SH, endAt: null }),
-        makeItem({ id: 's', startAt: NOV7_0900_SH, endAt: null }),
-      ],
-      { viewKind: 'today' },
-    );
-    expect(groups.map((g) => g.key)).toEqual(['2026-11-07', '2026-11-08']);
-    expect(groups[0]?.label).toBe('今天');
-    expect(groups[0]?.items.map((it) => it.id)).toEqual(['s', 'u']);
-    expect(groups[1]?.label).toBe('明天');
   });
 });
 

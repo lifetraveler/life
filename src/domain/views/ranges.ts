@@ -116,13 +116,82 @@ export function getWeekRange(nowMs: number, tzid: string): ViewTimeRange {
 export function getMonthRange(nowMs: number, tzid: string): ViewTimeRange {
   assertValidTimeZone(tzid);
   const parts = getZonedParts(nowMs, tzid);
-  const monthStart: CivilDate = { year: parts.year, month: parts.month, day: 1 };
+  return getMonthRangeForCivil(tzid, parts.year, parts.month);
+}
+
+/** 民用月份锚点（月视图无极滚动的最小状态：只有年与月）。 */
+export interface CivilMonth {
+  year: number;
+  /** 1..12 */
+  month: number;
+}
+
+/**
+ * 任意民用月份范围（切片 14 阶段 5b）：tzid 时区该月 1 日 00:00 至次月 1 日 00:00
+ * （[startMs, endMs)）。月视图按 CivilMonth 锚点渲染/滚动，不走 nowMs 推导。
+ */
+export function getMonthRangeForCivil(tzid: string, year: number, month: number): ViewTimeRange {
+  assertValidTimeZone(tzid);
+  const monthStart: CivilDate = { year, month, day: 1 };
   const nextMonthStart: CivilDate =
-    parts.month === 12
-      ? { year: parts.year + 1, month: 1, day: 1 }
-      : { year: parts.year, month: parts.month + 1, day: 1 };
+    month === 12 ? { year: year + 1, month: 1, day: 1 } : { year, month: month + 1, day: 1 };
   return {
     startMs: resolveDayStart(tzid, monthStart),
     endMs: resolveDayStart(tzid, nextMonthStart),
   };
+}
+
+/**
+ * 民用月份步进（切片 14 阶段 5b）：月份 ±delta（delta 可为任意整数），
+ * 跨年由纯日历推算归一（2026-01 -1 → 2025-12；2025-12 +1 → 2026-01）。
+ * 纯函数不触碰时间戳，无 DST 参与。
+ */
+export function shiftCivilMonth(anchor: CivilMonth, delta: number): CivilMonth {
+  const zeroBased = anchor.year * 12 + (anchor.month - 1) + delta;
+  const year = Math.floor(zeroBased / 12);
+  const month = (zeroBased % 12) + 1;
+  return { year, month };
+}
+
+/**
+ * 7 天滑动窗口（切片 14 阶段 5b，tasks/slice-14.md 阶段 5b-3）：tzid 时区
+ * 锚点所在民用日 00:00 起，至第 7 日 00:00（[startMs, endMs)，恰含 7 个民用日）。
+ * 与 getWeekRange（周一~周日，/week 页面契约）并存，语义互不影响。
+ */
+export function getSevenDayWindow(anchorMs: number, tzid: string): ViewTimeRange {
+  assertValidTimeZone(tzid);
+  const parts = getZonedParts(anchorMs, tzid);
+  const anchorDay: CivilDate = { year: parts.year, month: parts.month, day: parts.day };
+  return {
+    startMs: resolveDayStart(tzid, anchorDay),
+    endMs: resolveDayStart(tzid, addDays(anchorDay, 7)),
+  };
+}
+
+/**
+ * 单日范围（切片 14 阶段 5b，日视图）：tzid 时区锚点所在民用日 00:00 至
+ * 次日 00:00（[startMs, endMs)）。
+ */
+export function getDayRange(anchorMs: number, tzid: string): ViewTimeRange {
+  assertValidTimeZone(tzid);
+  const parts = getZonedParts(anchorMs, tzid);
+  const anchorDay: CivilDate = { year: parts.year, month: parts.month, day: parts.day };
+  return {
+    startMs: resolveDayStart(tzid, anchorDay),
+    endMs: resolveDayStart(tzid, addOneDay(anchorDay)),
+  };
+}
+
+/**
+ * 锚点民用日步进（切片 14 阶段 5b）：取锚点所在民用日 ±deltaDays 天，返回新日
+ * 00:00 的绝对时刻。经 civil 日推算而非毫秒加法——23/25 小时 DST 日上
+ * anchorMs ± 24h 可能停留在同一民用日（25h 日）或漂移两天，此处保证民用日
+ * 恰好步进 deltaDays 天。返回值为新日 00:00，民用日归属正确即可作锚点。
+ */
+export function shiftAnchorDay(anchorMs: number, tzid: string, deltaDays: number): number {
+  assertValidTimeZone(tzid);
+  const parts = getZonedParts(anchorMs, tzid);
+  const day: CivilDate = { year: parts.year, month: parts.month, day: parts.day };
+  const shifted = deltaDays >= 0 ? addDays(day, deltaDays) : subtractDays(day, -deltaDays);
+  return resolveDayStart(tzid, shifted);
 }

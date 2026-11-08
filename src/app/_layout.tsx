@@ -115,6 +115,7 @@ export default function RootLayout() {
         <Stack.Screen name="item/[id]/edit" options={{ title: '编辑' }} />
         {/* 切片 14 阶段 5：全屏新建页（计划页 FAB 与 quick-add 落点） */}
         <Stack.Screen name="item/new" options={{ title: '新建' }} />
+        <Stack.Screen name="search" options={{ headerShown: false }} />
         {/* 切片 10：life://quick-add 落点（纯重定向，无头瞬跳） */}
         <Stack.Screen name="quick-add" options={{ headerShown: false }} />
       </Stack>

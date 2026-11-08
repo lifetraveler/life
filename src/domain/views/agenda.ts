@@ -4,10 +4,11 @@
  * - 按天分组：key 为 tzid 下的民用日期 'YYYY-MM-DD'（复用 recurrence/civilTime 只读导出，
  *   不依赖 new Date 本地时区行为——§4.13 精神；本文件不修改 recurrence/ 任何文件）；
  * - 组标签：'今天' / '明天' / '周X D'（如 '周五 6'）；跨年日期为 'YYYY年M月D日'；
- * - 无 startAt 的项：agenda/week/month 视图进独立「待办」组（置顶）；today 视图并入
- *   「今天」组（任务卡「放在"今天"或"待办"分组（视当前视图而定）」）；
+ * - 无 startAt 的项：进独立「待办」组（置顶）。切片 14 阶段 5b 起 AgendaViewKind
+ *   收敛为 agenda/week/month/day，「今日」视图移除（/today 页面走 grouping.ts 的
+ *   groupItemsForView，本文件不再有「并入今天组」分支，viewKind 参数保留作视图语义扩展位）；
  * - 组内排序：有 startAt 的按 startAt 升序（并列按 createdAt 升序，再按 id 确定化），
- *   无 startAt 的按 createdAt 降序（并列按 id 确定化）；混合组（today 视图）有 startAt 的在前；
+ *   无 startAt 的按 createdAt 降序（并列按 id 确定化）；
  * - archived 项防御性排除（与 groupItemsForView 同一约定，查询层正常已排除）；
  * - 同一 Item 只进一个组（按 id 去重，首见保留）。
  */
@@ -16,12 +17,12 @@ import type { CivilDate } from '../recurrence/civilTime';
 import { addOneDay, formatLocalDate, getCivilWeekday, getZonedParts } from '../recurrence/civilTime';
 import type { ItemWithRelations } from '../relations/itemWithRelations';
 
-/** 视图种类（§7.21：日程 Agenda / 今日 / 本周 / 本月） */
-export type AgendaViewKind = 'agenda' | 'today' | 'week' | 'month';
+/** 视图种类（§7.21 阶段 5b 收敛：日程 / 周（今日起 7 天）/ 月 / 日） */
+export type AgendaViewKind = 'agenda' | 'week' | 'month' | 'day';
 
 export interface GroupItemsForAgendaInput {
   viewKind: AgendaViewKind;
-  /** 「现在」的绝对毫秒时刻（用于今天/明天标签与待办并入今日组的日期判定） */
+  /** 「现在」的绝对毫秒时刻（用于今天/明天组头标签的日期判定） */
   nowMs: number;
   /** 民用日期分桶的 IANA 时区（显式传入，不得依赖系统本地时区） */
   tzid: string;
@@ -99,12 +100,12 @@ export function groupItemsForAgenda(
     if (item.status === 'archived') {
       continue;
     }
-    if (item.startAt === null && input.viewKind !== 'today') {
+    if (item.startAt === null) {
       unscheduled.push(item);
       continue;
     }
-    // today 视图的未安排项并入「今天」组；其余按 startAt 的民用日期分桶。
-    const instant = item.startAt ?? input.nowMs;
+    // 按 startAt 的民用日期分桶。
+    const instant = item.startAt;
     const parts = getZonedParts(instant, input.tzid);
     const key = formatLocalDate(parts);
     const bucket = byDay.get(key);
