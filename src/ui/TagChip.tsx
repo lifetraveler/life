@@ -1,4 +1,5 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import type { ViewStyle } from 'react-native';
 
 import type { TagDisplayMode } from '../domain/settings';
 import { formatTagDisplay } from '../domain/tags/tagDisplay';
@@ -28,6 +29,11 @@ interface TagChipProps {
   onRemove?: () => void;
   /** 传入则整个 chip 可点击（用于点击复用已有标签 / 筛选面板） */
   onPress?: () => void;
+  /**
+   * 多选选中态（阶段 4 筛选面板）：true=黑描边；false=弱化（透明同宽描边+降低不透明度，
+   * 保证选中/未选中切换时尺寸不跳）；不传 = 既有展示视觉（无描边、不弱化）。
+   */
+  selected?: boolean;
 }
 
 /** 无自定义颜色时的默认中性配色（沿用切片 2 既有视觉，调用点零视觉漂移） */
@@ -38,7 +44,7 @@ const NEUTRAL_TEXT = '#3730a3';
  * 标签 chip：纯展示组件（tasks/slice-14.md 阶段 2 视觉增强）。
  * 数据由调用方传入，不接触 Repository / 数据库 / WatermelonDB。
  */
-export default function TagChip({ tag, label, mode = 'text', onRemove, onPress }: TagChipProps) {
+export default function TagChip({ tag, label, mode = 'text', onRemove, onPress, selected }: TagChipProps) {
   const text = tag ? formatTagDisplay(tag, mode) : (label ?? '');
 
   let backgroundColor = NEUTRAL_BG;
@@ -51,8 +57,15 @@ export default function TagChip({ tag, label, mode = 'text', onRemove, onPress }
     }
   }
 
+  const chipStyles: ViewStyle[] = [styles.chip, { backgroundColor }];
+  if (selected === true) {
+    chipStyles.push(styles.chipSelected);
+  } else if (selected === false) {
+    chipStyles.push(styles.chipUnselected);
+  }
+
   const body = (
-    <View style={[styles.chip, { backgroundColor }]}>
+    <View style={chipStyles}>
       <Text style={[styles.label, { color: textColor }]}>{text}</Text>
       {onRemove ? (
         <Pressable hitSlop={8} onPress={onRemove} style={styles.removeButton}>
@@ -79,6 +92,15 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 3,
+  },
+  chipSelected: {
+    borderWidth: 2,
+    borderColor: '#111111',
+  },
+  chipUnselected: {
+    borderWidth: 2,
+    borderColor: 'transparent',
+    opacity: 0.45,
   },
   label: {
     fontSize: 12,

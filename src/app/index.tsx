@@ -1,4 +1,22 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+/**
+ * 主页（切片 14 阶段 4 重构：tasks/slice-14.md 阶段 4 / AGENTS.md §7.21）。
+ *
+ * - 顶栏：左=分段视图切换（日程/今日/本周/本月，选中黑底白字胶囊）；
+ *   右=筛选图标（纯 View 手绘两行滑杆，存在激活筛选时右上角红点提示）；
+ * - 数据链：observeItemsWithTags 单订阅（默认列表，§7.23 ItemWithRelations）→
+ *   视图范围谓词（today/week/month 用 ranges 纯函数；startAt=null 恒通过进「待办」组）→
+ *   filterItems（激活筛选，维度内 OR、维度间 AND）→ groupItemsForAgenda 按天分组 →
+ *   FlatList 摊平渲染（header|item 两类行）；本月视图组序倒序（按日期从晚到早）；
+ * - 卡片：左侧 4px 分类色条 + Emoji + 标题 + 时间段（formatAgendaTimeRange），
+ *   点击进详情页 /item/<id>（task 卡 life://item/<id> 深链同一路由）；
+ * - 保留切片 3 搜索（SearchInput，防抖 300ms + 竞态序号）、切片 12 quick-add
+ *   聚焦契约与返回键草稿判定、创建表单（默认折叠为一行入口，深链命中自动展开）；
+ * - 搜索模式：结果跨视图（不限当前视图范围）按日程视图全量分组，筛选持续生效；
+ * - 行内「转为任务/添加标签」入口由编辑页承接（同等能力）；「归档」入口移至详情页
+ *   （用户确认，2026-11-08）；旧 /today /week 页面原样保留不删。
+ */
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BackHandler,
   FlatList,
@@ -12,20 +30,43 @@ import {
 import { Link, useRouter, useFocusEffect } from 'expo-router';
 
 import { itemRepository } from '../data';
+import type { Category } from '../domain/category';
 import type { ItemType } from '../domain/item';
-import type { ItemWithTags, Tag } from '../domain/tag';
+import { formatLocalDate, getZonedParts } from '../domain/recurrence/civilTime';
+import type { ItemWithRelations } from '../domain/relations/itemWithRelations';
+import type { Tag } from '../domain/tag';
+import { groupItemsForAgenda } from '../domain/views/agenda';
+import type { AgendaViewKind } from '../domain/views/agenda';
+import { EMPTY_ITEM_FILTERS, filterItems, hasActiveFilters } from '../domain/views/filters';
+import type { ItemFilters } from '../domain/views/filters';
+import { getMonthRange, getTodayRange, getWeekRange } from '../domain/views/ranges';
 import EmptyState from '../ui/EmptyState';
+import FilterSheet from '../ui/FilterSheet';
 import SearchInput from '../ui/SearchInput';
-import { TYPE_LABELS, formatTimestamp } from '../ui/display';
+import { TYPE_LABELS } from '../ui/display';
 import TagChip from '../ui/TagChip';
-import { useTagDisplayMode } from '../ui/useTagDisplayMode';
 import { consumeTitleFocusRequest } from '../ui/focusRequestStore';
 import { isQuickAddDraftEmpty } from '../ui/quickAddDraft';
+import { formatAgendaTimeRange, getDeviceTzid } from '../ui/timeFormat';
 
 const ITEM_TYPES: readonly ItemType[] = ['note', 'task', 'event'];
 
 /** 搜索防抖间隔（任务卡：300ms） */
 const SEARCH_DEBOUNCE_MS = 300;
+
+/** 视图切换选项（§7.21：日程 Agenda / 今日 / 本周 / 本月） */
+const VIEW_OPTIONS: readonly { kind: AgendaViewKind; label: string }[] = [
+  { kind: 'agenda', label: '日程' },
+  { kind: 'today', label: '今日' },
+  { kind: 'week', label: '本周' },
+  { kind: 'month', label: '本月' },
+];
+
+/** 合法分类色（数据异常回退约定 repository.md v0.14） */
+const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
+
+/** 分类色缺失/非法时卡片色条回退灰 */
+const CARD_STRIPE_FALLBACK = '#DDDDDD';
 
 /** 输入按中/英文逗号切分：返回应立即创建的标签名与剩余未完成文本 */
 function splitTagInput(raw: string): { completed: string[]; rest: string } {
@@ -50,21 +91,67 @@ function collectTagNames(rawNames: readonly string[], existing: readonly string[
   return result;
 }
 
+/** FlatList 行模型：组头（含今天高亮）或卡片 */
+interface AgendaRowHeader {
+  kind: 'header';
+  key: string;
+  label: string;
+  isToday: boolean;
+  count: number;
+}
+
+interface AgendaRowItem {
+  kind: 'item';
+  key: string;
+  item: ItemWithRelations;
+}
+
+type AgendaRow = AgendaRowHeader | AgendaRowItem;
+
+/** Agenda 卡片（任务卡：左侧 4px 分类色条 + Emoji + 标题 + 时间段；点击进详情） */
+function AgendaItemCard({
+  item,
+  tzid,
+  onPress,
+}: {
+  item: ItemWithRelations;
+  tzid: string;
+  onPress: (itemId: string) => void;
+}) {
+  const timeLabel = formatAgendaTimeRange(item, tzid);
+  const stripeColor =
+    item.category?.color && HEX_COLOR_PATTERN.test(item.category.color)
+      ? item.category.color
+      : CARD_STRIPE_FALLBACK;
+  const emoji = item.category?.emoji ?? null;
+  return (
+    <Pressable style={styles.card} onPress={() => onPress(item.id)}>
+      <View style={[styles.cardStripe, { backgroundColor: stripeColor }]} />
+      <View style={styles.cardBody}>
+        <Text style={styles.cardTitle} numberOfLines={2}>
+          {emoji ? `${emoji} ${item.title}` : item.title}
+        </Text>
+        {timeLabel ? <Text style={styles.cardTime}>{timeLabel}</Text> : null}
+      </View>
+    </Pressable>
+  );
+}
+
 export default function IndexScreen() {
   const router = useRouter();
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [selectedType, setSelectedType] = useState<ItemType>('note');
-  const [items, setItems] = useState<ItemWithTags[]>([]);
+  const [items, setItems] = useState<ItemWithRelations[]>([]);
   const [allTags, setAllTags] = useState<Tag[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
 
   // 创建表单的标签输入：未提交的待绑定标签
   const [pendingTags, setPendingTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState('');
 
-  // 行内「添加标签」编辑器状态：当前展开的 Item id + 输入框文本
-  const [editingTagsForId, setEditingTagsForId] = useState<string | null>(null);
-  const [rowTagInput, setRowTagInput] = useState('');
+  // 阶段 4：创建表单默认折叠为一行入口（quick-add 深链命中时展开）
+  const [formExpanded, setFormExpanded] = useState(false);
 
   // 切片 12（ui.md v0.12 快速记录增强）：标题输入聚焦（quick-add 落地）与
   // 返回键收键盘判定所需。
@@ -75,16 +162,45 @@ export default function IndexScreen() {
   // 约定：searchInput 为空串 = 默认列表模式；非空（含纯空白）= 搜索模式。
   // 纯空白输入必须显示空结果而非回落默认列表（任务卡 5d）。
   const [searchInput, setSearchInput] = useState('');
-  const [searchResults, setSearchResults] = useState<ItemWithTags[]>([]);
+  const [searchResults, setSearchResults] = useState<ItemWithRelations[]>([]);
 
   // 竞态保护：每次新的搜索输入/重放递增序号，过期响应一律丢弃（任务卡 4）。
   const searchSeqRef = useRef(0);
 
-  // 切片 14 阶段 3：标签展示样式（设置页全局切换）
-  const tagDisplayMode = useTagDisplayMode();
+  // 阶段 4：视图切换 + 筛选
+  const [viewKind, setViewKind] = useState<AgendaViewKind>('agenda');
+  const [activeFilters, setActiveFilters] = useState<ItemFilters>(EMPTY_ITEM_FILTERS);
+  const [filterSheetVisible, setFilterSheetVisible] = useState(false);
+
+  // 视图时间坐标：挂载时固化（today.tsx 同款模式）——页面存续期间「今天」不漂移。
+  const [viewTime] = useState(() => {
+    const tzid = getDeviceTzid();
+    return { tzid, nowMs: Date.now() };
+  });
 
   useEffect(() => itemRepository.observeItemsWithTags(setItems), []);
   useEffect(() => itemRepository.observeTags(setAllTags), []);
+
+  // 分类视觉：挂载时取一次；每次打开筛选面板再现取（设置页改色后即生效）
+  const refreshCategories = useCallback((): void => {
+    void itemRepository
+      .getCategories()
+      .then((loaded) => {
+        setCategories(loaded);
+      })
+      .catch((error: unknown) => {
+        console.warn('[slice-14] getCategories failed:', error);
+      });
+  }, []);
+
+  useEffect(() => {
+    refreshCategories();
+  }, [refreshCategories]);
+
+  const openFilterSheet = useCallback((): void => {
+    refreshCategories();
+    setFilterSheetVisible(true);
+  }, [refreshCategories]);
 
   const canSave = title.trim().length > 0;
 
@@ -168,14 +284,15 @@ export default function IndexScreen() {
   }, [canSave, content, pendingTags, selectedType, title]);
 
   // 切片 12（ui.md v0.12 快速记录增强）：quick-add 深链 replace('/') 落地后
-  // 聚焦标题输入。聚焦请求是模块级一次性信号（quick-add.tsx 置位，此处消费
-  // 复位）；useFocusEffect 每次回到主页都触发，100ms 延迟避开路由切换动画期
-  // TextInput 尚未挂稳的问题（冷启动深链尤甚）。
+  // 展开创建表单并聚焦标题输入。聚焦请求是模块级一次性信号（quick-add.tsx 置位，
+  // 此处消费复位）；useFocusEffect 每次回到主页都触发，100ms 延迟避开路由切换
+  // 动画期 TextInput 尚未挂稳的问题（冷启动深链尤甚）。
   useFocusEffect(
     useCallback(() => {
       if (!consumeTitleFocusRequest()) {
         return;
       }
+      setFormExpanded(true);
       const timer = setTimeout(() => {
         titleInputRef.current?.focus();
       }, 100);
@@ -211,259 +328,251 @@ export default function IndexScreen() {
     };
   }, [content, pendingTags, tagInput, title]);
 
-  const handleConvertToTask = useCallback((itemId: string): void => {
-    void itemRepository
-      .updateItem(itemId, { type: 'task' })
-      .catch((error: unknown) => {
-        console.error('updateItem failed:', error);
-      });
-  }, []);
-
-  // 归档：默认列表由 observeItemsWithTags 自动移除；搜索模式下立即重放当前关键词。
-  const handleArchive = useCallback((itemId: string): void => {
-    void itemRepository
-      .archiveItem(itemId)
-      .then(() => {
-        if (searchInput.length > 0) {
-          runSearch(searchInput);
-        }
-      })
-      .catch((error: unknown) => {
-        console.error('archiveItem failed:', error);
-      });
-  }, [runSearch, searchInput]);
-
-  const handleRemoveTag = useCallback((itemId: string, tagId: string): void => {
-    void itemRepository
-      .removeTagFromItem(itemId, tagId)
-      .catch((error: unknown) => {
-        console.error('removeTagFromItem failed:', error);
-      });
-  }, []);
-
-  const handleAddTagToItem = useCallback((itemId: string, tagName: string): void => {
-    void itemRepository
-      .addTagToItem(itemId, tagName)
-      .then(() => {
-        setRowTagInput('');
-      })
-      .catch((error: unknown) => {
-        console.error('addTagToItem failed:', error);
-      });
-  }, []);
-
-  const toggleTagEditor = useCallback((itemId: string): void => {
-    setEditingTagsForId((current) => {
-      if (current === itemId) {
-        setRowTagInput('');
-        return null;
-      }
-      return itemId;
-    });
-  }, []);
-
-  // 行内编辑器：输入中出现逗号时立即提交前面的标签
-  const handleRowTagInputChange = useCallback((raw: string): void => {
-    const { completed, rest } = splitTagInput(raw);
-    if (editingTagsForId !== null && completed.length > 0) {
-      const itemId = editingTagsForId;
-      void (async () => {
-        for (const tagName of collectTagNames(completed, [])) {
-          await itemRepository.addTagToItem(itemId, tagName);
-        }
-      })().catch((error: unknown) => {
-        console.error('addTagToItem failed:', error);
-      });
-    }
-    setRowTagInput(rest);
-  }, [editingTagsForId]);
-
-  // 行内编辑器：回车提交当前输入
-  const submitRowTag = useCallback((itemId: string): void => {
-    if (rowTagInput.trim().length > 0) {
-      handleAddTagToItem(itemId, rowTagInput);
-      return;
-    }
-    setRowTagInput('');
-  }, [handleAddTagToItem, rowTagInput]);
-
-  /** 「已有标签」复用建议：所有标签减去本项已绑定的 */
-  const suggestTagsFor = useCallback((record: ItemWithTags): Tag[] => {
-    const boundIds = new Set(record.tags.map((tag) => tag.id));
-    return allTags.filter((tag) => !boundIds.has(tag.id));
-  }, [allTags]);
-
-  const renderItem = useCallback(({ item }: { item: ItemWithTags }) => {
-    const suggestions = suggestTagsFor(item);
-    const editing = editingTagsForId === item.id;
-    return (
-      <View style={styles.row}>
-        <Pressable onPress={() => router.push(`/item/${item.id}`)}>
-          <Text style={styles.rowTitle}>{item.title}</Text>
-          <Text style={styles.rowMeta}>
-            {TYPE_LABELS[item.type]} · {formatTimestamp(item.createdAt)}
-          </Text>
-        </Pressable>
-        <View style={styles.tagRow}>
-          {item.tags.map((tag) => (
-            <TagChip
-              key={tag.id}
-              tag={tag}
-              mode={tagDisplayMode}
-              onRemove={() => handleRemoveTag(item.id, tag.id)}
-            />
-          ))}
-        </View>
-        <View style={styles.actionRow}>
-          {item.type === 'note' ? (
-            <Pressable
-              style={styles.actionButton}
-              onPress={() => handleConvertToTask(item.id)}
-            >
-              <Text style={styles.actionText}>转为任务</Text>
-            </Pressable>
-          ) : null}
-          <Pressable
-            style={styles.actionButton}
-            onPress={() => handleArchive(item.id)}
-          >
-            <Text style={styles.actionText}>归档</Text>
-          </Pressable>
-          <Pressable
-            style={[styles.actionButton, editing && styles.actionButtonActive]}
-            onPress={() => toggleTagEditor(item.id)}
-          >
-            <Text style={styles.actionText}>{editing ? '收起标签' : '添加标签'}</Text>
-          </Pressable>
-        </View>
-        {editing ? (
-          <View style={styles.tagEditor}>
-            <TextInput
-              style={styles.tagInput}
-              value={rowTagInput}
-              onChangeText={handleRowTagInputChange}
-              onSubmitEditing={() => submitRowTag(item.id)}
-              placeholder="标签名（回车或逗号确认）"
-              returnKeyType="done"
-            />
-            {suggestions.length > 0 ? (
-              <>
-                <Text style={styles.suggestLabel}>已有标签（点击复用）：</Text>
-                <View style={styles.tagRow}>
-                  {suggestions.map((tag) => (
-                    <TagChip
-                      key={tag.id}
-                      tag={tag}
-                      mode={tagDisplayMode}
-                      onPress={() => handleAddTagToItem(item.id, tag.name)}
-                    />
-                  ))}
-                </View>
-              </>
-            ) : null}
-          </View>
-        ) : null}
-      </View>
-    );
-  }, [editingTagsForId, handleAddTagToItem, handleArchive, handleConvertToTask, handleRemoveTag,
-    handleRowTagInputChange, rowTagInput, router, submitRowTag, suggestTagsFor, tagDisplayMode,
-    toggleTagEditor]);
+  const openItemDetail = useCallback(
+    (itemId: string): void => {
+      router.push(`/item/${itemId}`);
+    },
+    [router],
+  );
 
   const searching = searchInput.length > 0;
-  const displayedItems = searching ? searchResults : items;
+  const filtersActive = hasActiveFilters(activeFilters);
+
+  // 视图时间范围：agenda=全量；today/week/month 用纯函数（[start, end) 左闭右开）
+  const viewRange = useMemo(() => {
+    if (viewKind === 'agenda') {
+      return null;
+    }
+    if (viewKind === 'today') {
+      return getTodayRange(viewTime.nowMs, viewTime.tzid);
+    }
+    if (viewKind === 'week') {
+      return getWeekRange(viewTime.nowMs, viewTime.tzid);
+    }
+    return getMonthRange(viewTime.nowMs, viewTime.tzid);
+  }, [viewKind, viewTime]);
+
+  // 「今天」民用日期键（组头高亮判定，与 agenda 分组键同源：civilTime）
+  const todayKey = useMemo(
+    () => formatLocalDate(getZonedParts(viewTime.nowMs, viewTime.tzid)),
+    [viewTime],
+  );
+
+  // 数据链：范围谓词（agenda/搜索不限范围；startAt=null 恒通过）→ 筛选 → 分组
+  const agendaGroups = useMemo(() => {
+    const baseItems = searching ? searchResults : items;
+    const ranged =
+      !searching && viewRange !== null
+        ? baseItems.filter(
+            (item) =>
+              item.startAt === null ||
+              (item.startAt >= viewRange.startMs && item.startAt < viewRange.endMs),
+          )
+        : baseItems;
+    const filtered = filterItems(ranged, activeFilters);
+    return groupItemsForAgenda(filtered, {
+      // 搜索结果跨视图呈现（不限当前视图范围），固定按日程视图全量分组
+      viewKind: searching ? 'agenda' : viewKind,
+      nowMs: viewTime.nowMs,
+      tzid: viewTime.tzid,
+    });
+  }, [activeFilters, items, searchResults, searching, viewKind, viewRange, viewTime]);
+
+  // 本月视图组序倒序（按日期从晚到早承载「本月」范围；搜索模式除外）
+  const displayedGroups = useMemo(() => {
+    if (viewKind === 'month' && !searching) {
+      return [...agendaGroups].reverse();
+    }
+    return agendaGroups;
+  }, [agendaGroups, searching, viewKind]);
+
+  // 摊平为 FlatList 行：组头 + 组内卡片
+  const rows = useMemo<AgendaRow[]>(() => {
+    const result: AgendaRow[] = [];
+    for (const group of displayedGroups) {
+      result.push({
+        kind: 'header',
+        key: `header-${group.key}`,
+        label: group.label,
+        isToday: group.kind === 'day' && group.key === todayKey,
+        count: group.items.length,
+      });
+      for (const itemRecord of group.items) {
+        result.push({ kind: 'item', key: `item-${group.key}-${itemRecord.id}`, item: itemRecord });
+      }
+    }
+    return result;
+  }, [displayedGroups, todayKey]);
+
+  const emptyMessage = useMemo(() => {
+    if (searching) {
+      return '无匹配结果';
+    }
+    if (viewKind === 'today') {
+      return '今天没有安排';
+    }
+    if (viewKind === 'week') {
+      return '本周没有安排';
+    }
+    if (viewKind === 'month') {
+      return '本月没有安排';
+    }
+    return '暂无日程';
+  }, [searching, viewKind]);
+
+  const rowKeyExtractor = useCallback((row: AgendaRow): string => row.key, []);
+
+  const renderRow = useCallback(
+    ({ item: row }: { item: AgendaRow }) => {
+      if (row.kind === 'header') {
+        return (
+          <View style={styles.groupHeader}>
+            <View style={[styles.groupHeaderPill, row.isToday && styles.groupHeaderPillToday]}>
+              <Text style={[styles.groupHeaderText, row.isToday && styles.groupHeaderTextToday]}>
+                {row.label}
+              </Text>
+            </View>
+            <Text style={styles.groupHeaderCount}>{row.count}</Text>
+          </View>
+        );
+      }
+      return <AgendaItemCard item={row.item} tzid={viewTime.tzid} onPress={openItemDetail} />;
+    },
+    [openItemDetail, viewTime.tzid],
+  );
 
   return (
     <View style={styles.container}>
-      <Text style={styles.sectionLabel}>新建记录</Text>
-      <TextInput
-        style={styles.titleInput}
-        ref={titleInputRef}
-        value={title}
-        onChangeText={setTitle}
-        placeholder="标题（必填）"
-      />
-      <TextInput
-        style={styles.contentInput}
-        value={content}
-        onChangeText={setContent}
-        placeholder="内容（可选）"
-        multiline
-      />
-      <View style={styles.typeRow}>
-        {ITEM_TYPES.map((itemType) => {
-          const selected = itemType === selectedType;
-          return (
-            <Pressable
-              key={itemType}
-              style={[styles.typeButton, selected && styles.typeButtonSelected]}
-              onPress={() => setSelectedType(itemType)}
-            >
-              <Text style={[styles.typeText, selected && styles.typeTextSelected]}>
-                {TYPE_LABELS[itemType]}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
-      <TextInput
-        style={styles.titleInput}
-        value={tagInput}
-        onChangeText={handleTagInputChange}
-        onSubmitEditing={handleTagInputSubmit}
-        placeholder="标签（回车或逗号确认，可多个）"
-        returnKeyType="done"
-      />
-      {pendingTags.length > 0 ? (
-        <View style={styles.tagRow}>
-          {pendingTags.map((tagName) => (
-            <TagChip
-              key={tagName}
-              label={tagName}
-              onRemove={() => removePendingTag(tagName)}
-            />
-          ))}
+      {/* 顶栏：左视图切换 + 右筛选图标（激活筛选时红点） */}
+      <View style={styles.topBar}>
+        <View style={styles.viewSwitcher}>
+          {VIEW_OPTIONS.map((option) => {
+            const selected = option.kind === viewKind;
+            return (
+              <Pressable
+                key={option.kind}
+                style={[styles.viewTab, selected && styles.viewTabSelected]}
+                onPress={() => setViewKind(option.kind)}
+              >
+                <Text style={[styles.viewTabText, selected && styles.viewTabTextSelected]}>
+                  {option.label}
+                </Text>
+              </Pressable>
+            );
+          })}
         </View>
-      ) : null}
-      <Pressable
-        style={[styles.saveButton, !canSave && styles.saveButtonDisabled]}
-        disabled={!canSave}
-        onPress={handleSave}
-      >
-        <Text style={styles.saveButtonText}>保存</Text>
-      </Pressable>
-      <View style={styles.listHeaderRow}>
-        <Text style={styles.sectionLabel}>已有记录</Text>
-        <View style={styles.listHeaderLinks}>
-          <Link href="/today" asChild>
-            <Pressable hitSlop={8}>
-              <Text style={styles.archivedLink}>今日</Text>
-            </Pressable>
-          </Link>
-          <Link href="/archived" asChild>
-            <Pressable hitSlop={8}>
-              <Text style={styles.archivedLink}>已归档</Text>
-            </Pressable>
-          </Link>
-          <Link href="/settings" asChild>
-            <Pressable hitSlop={8}>
-              <Text style={styles.archivedLink}>设置</Text>
-            </Pressable>
-          </Link>
-        </View>
+        <Pressable hitSlop={8} style={styles.filterButton} onPress={openFilterSheet}>
+          <View style={styles.filterIcon}>
+            <View style={styles.filterIconLine}>
+              <View style={styles.filterIconKnob} />
+            </View>
+            <View style={styles.filterIconLine}>
+              <View style={[styles.filterIconKnob, styles.filterIconKnobEnd]} />
+            </View>
+          </View>
+          {filtersActive ? <View style={styles.filterDot} /> : null}
+        </Pressable>
       </View>
-      <SearchInput
-        value={searchInput}
-        onChangeText={setSearchInput}
+
+      <SearchInput value={searchInput} onChangeText={setSearchInput} />
+
+      {/* 链接行：原「今日」链接由顶栏「今日」视图取代；已归档/设置保留 */}
+      <View style={styles.linksRow}>
+        <Link href="/archived" asChild>
+          <Pressable hitSlop={8}>
+            <Text style={styles.linkText}>已归档</Text>
+          </Pressable>
+        </Link>
+        <Link href="/settings" asChild>
+          <Pressable hitSlop={8}>
+            <Text style={styles.linkText}>设置</Text>
+          </Pressable>
+        </Link>
+      </View>
+
+      {/* 创建表单：默认折叠为一行入口 */}
+      {formExpanded ? (
+        <View style={styles.formBlock}>
+          <TextInput
+            style={styles.titleInput}
+            ref={titleInputRef}
+            value={title}
+            onChangeText={setTitle}
+            placeholder="标题（必填）"
+          />
+          <TextInput
+            style={styles.contentInput}
+            value={content}
+            onChangeText={setContent}
+            placeholder="内容（可选）"
+            multiline
+          />
+          <View style={styles.typeRow}>
+            {ITEM_TYPES.map((itemType) => {
+              const selected = itemType === selectedType;
+              return (
+                <Pressable
+                  key={itemType}
+                  style={[styles.typeButton, selected && styles.typeButtonSelected]}
+                  onPress={() => setSelectedType(itemType)}
+                >
+                  <Text style={[styles.typeText, selected && styles.typeTextSelected]}>
+                    {TYPE_LABELS[itemType]}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <TextInput
+            style={styles.titleInput}
+            value={tagInput}
+            onChangeText={handleTagInputChange}
+            onSubmitEditing={handleTagInputSubmit}
+            placeholder="标签（回车或逗号确认，可多个）"
+            returnKeyType="done"
+          />
+          {pendingTags.length > 0 ? (
+            <View style={styles.tagRow}>
+              {pendingTags.map((tagName) => (
+                <TagChip key={tagName} label={tagName} onRemove={() => removePendingTag(tagName)} />
+              ))}
+            </View>
+          ) : null}
+          <Pressable
+            style={[styles.saveButton, !canSave && styles.saveButtonDisabled]}
+            disabled={!canSave}
+            onPress={handleSave}
+          >
+            <Text style={styles.saveButtonText}>保存</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <Pressable style={styles.formEntry} onPress={() => setFormExpanded(true)}>
+          <Text style={styles.formEntryText}>＋ 新建记录</Text>
+        </Pressable>
+      )}
+
+      <FlatList<AgendaRow>
+        style={styles.list}
+        data={rows}
+        renderItem={renderRow}
+        keyExtractor={rowKeyExtractor}
+        ListEmptyComponent={<EmptyState message={emptyMessage} />}
+        contentContainerStyle={rows.length === 0 ? styles.listEmpty : undefined}
       />
-      <FlatList<ItemWithTags>
-        data={displayedItems}
-        renderItem={renderItem}
-        keyExtractor={(record) => record.id}
-        ListEmptyComponent={
-          searching
-            ? <EmptyState message="无匹配结果" />
-            : <EmptyState message="暂无记录" />
-        }
+
+      {/* 筛选面板：应用=父级只提交筛选（实时过滤），关闭动画由面板自管 */}
+      <FilterSheet
+        visible={filterSheetVisible}
+        categories={categories}
+        tags={allTags}
+        initialFilters={activeFilters}
+        onApply={(draft) => {
+          setActiveFilters(draft);
+        }}
+        onClose={() => {
+          setFilterSheetVisible(false);
+        }}
       />
     </View>
   );
@@ -476,10 +585,99 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 48,
   },
-  sectionLabel: {
-    fontSize: 16,
+  // 顶栏
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  viewSwitcher: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    flexShrink: 1,
+    gap: 6,
+  },
+  viewTab: {
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  viewTabSelected: {
+    backgroundColor: '#111111',
+  },
+  viewTabText: {
+    fontSize: 13,
+    color: '#333333',
+  },
+  viewTabTextSelected: {
+    color: '#ffffff',
     fontWeight: '600',
-    marginBottom: 8,
+  },
+  filterButton: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filterIcon: {
+    gap: 3,
+  },
+  filterIconLine: {
+    width: 16,
+    height: 2,
+    borderRadius: 1,
+    backgroundColor: '#CCCCCC',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+  },
+  filterIconKnob: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#111111',
+    marginLeft: 2,
+  },
+  filterIconKnobEnd: {
+    marginLeft: 8,
+  },
+  filterDot: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#E53935',
+  },
+  // 链接行
+  linksRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 16,
+    marginTop: 8,
+    marginBottom: 10,
+  },
+  linkText: {
+    fontSize: 13,
+    color: '#2563eb',
+  },
+  // 创建表单（折叠入口 + 展开块）
+  formEntry: {
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: '#cccccc',
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  formEntryText: {
+    fontSize: 14,
+    color: '#666666',
+  },
+  formBlock: {
+    marginBottom: 14,
   },
   titleInput: {
     borderWidth: 1,
@@ -532,7 +730,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingVertical: 12,
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 4,
   },
   saveButtonDisabled: {
     opacity: 0.4,
@@ -541,68 +739,67 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: '600',
   },
-  row: {
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e5e5e5',
+  // Agenda 列表
+  list: {
+    flex: 1,
   },
-  rowTitle: {
-    fontSize: 15,
-    marginBottom: 2,
+  listEmpty: {
+    flexGrow: 1,
+    justifyContent: 'center',
   },
-  rowMeta: {
-    fontSize: 12,
-    color: '#888888',
-    marginBottom: 6,
-  },
-  actionRow: {
+  groupHeader: {
     flexDirection: 'row',
+    alignItems: 'center',
     gap: 8,
-    marginBottom: 4,
+    marginTop: 24,
+    marginBottom: 8,
   },
-  actionButton: {
-    borderWidth: 1,
-    borderColor: '#cccccc',
-    borderRadius: 6,
+  groupHeaderPill: {
+    borderRadius: 999,
     paddingHorizontal: 10,
-    paddingVertical: 4,
+    paddingVertical: 3,
+    backgroundColor: '#F0F0F0',
   },
-  actionButtonActive: {
-    borderColor: '#2563eb',
+  groupHeaderPillToday: {
+    backgroundColor: '#111111',
   },
-  actionText: {
-    fontSize: 12,
+  groupHeaderText: {
+    fontSize: 13,
+    fontWeight: '600',
     color: '#333333',
   },
-  tagEditor: {
-    marginTop: 6,
-    marginBottom: 4,
+  groupHeaderTextToday: {
+    color: '#ffffff',
   },
-  tagInput: {
-    borderWidth: 1,
-    borderColor: '#cccccc',
-    borderRadius: 6,
+  groupHeaderCount: {
+    fontSize: 12,
+    color: '#999999',
+  },
+  card: {
+    flexDirection: 'row',
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#ECECEC',
+    backgroundColor: '#FAFAFA',
+    marginBottom: 8,
+    overflow: 'hidden',
+  },
+  cardStripe: {
+    width: 4,
+  },
+  cardBody: {
+    flex: 1,
+    paddingVertical: 10,
     paddingHorizontal: 10,
-    paddingVertical: 6,
-    marginBottom: 6,
   },
-  suggestLabel: {
-    fontSize: 11,
+  cardTitle: {
+    fontSize: 15,
+    color: '#111111',
+    lineHeight: 20,
+  },
+  cardTime: {
+    fontSize: 12,
     color: '#888888',
-    marginBottom: 4,
-  },
-  listHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  listHeaderLinks: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 16,
-  },
-  archivedLink: {
-    fontSize: 13,
-    color: '#2563eb',
+    marginTop: 3,
   },
 });

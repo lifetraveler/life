@@ -1,4 +1,4 @@
-import { EMPTY_ITEM_FILTERS, filterItems } from '../filters';
+import { EMPTY_ITEM_FILTERS, filterItems, hasActiveFilters } from '../filters';
 import type { ItemFilters } from '../filters';
 import type { ItemWithRelations } from '../../relations/itemWithRelations';
 import type { Tag } from '../../tag';
@@ -57,9 +57,13 @@ function withTags(tagIds: string[]): ItemFilters {
   return { ...EMPTY_ITEM_FILTERS, tagIds };
 }
 
+function withStatuses(statuses: ItemFilters['statuses']): ItemFilters {
+  return { ...EMPTY_ITEM_FILTERS, statuses };
+}
+
 describe('filterItems：空 filters', () => {
   it('EMPTY_ITEM_FILTERS 全维度为空', () => {
-    expect(EMPTY_ITEM_FILTERS).toEqual({ categoryIds: [], sourceTypes: [], tagIds: [] });
+    expect(EMPTY_ITEM_FILTERS).toEqual({ categoryIds: [], sourceTypes: [], tagIds: [], statuses: [] });
   });
 
   it('空 filters 全过：返回新数组、保持输入顺序与元素引用', () => {
@@ -71,7 +75,7 @@ describe('filterItems：空 filters', () => {
   });
 
   it('EMPTY_ITEM_FILTERS 与字面量全空 filters 等价', () => {
-    const literal: ItemFilters = { categoryIds: [], sourceTypes: [], tagIds: [] };
+    const literal: ItemFilters = { categoryIds: [], sourceTypes: [], tagIds: [], statuses: [] };
     expect(filterItems(ALL, EMPTY_ITEM_FILTERS)).toEqual(filterItems(ALL, literal));
   });
 
@@ -112,17 +116,61 @@ describe('filterItems：单维度多值 OR', () => {
 describe('filterItems：跨维度 AND', () => {
   it('分类 AND 标签：只保留同时命中的项', () => {
     // work-ics 是 work 分类但没有 t-work 标签，被排除
-    const filters: ItemFilters = { categoryIds: ['work'], sourceTypes: [], tagIds: ['t-work'] };
+    const filters: ItemFilters = { categoryIds: ['work'], sourceTypes: [], tagIds: ['t-work'], statuses: [] };
     expect(ids(filterItems(ALL, filters))).toEqual(['work-local']);
   });
 
   it('三维 AND：分类 + 来源 + 标签交集', () => {
-    const filters: ItemFilters = { categoryIds: ['work'], sourceTypes: ['ics'], tagIds: ['t-life'] };
+    const filters: ItemFilters = { categoryIds: ['work'], sourceTypes: ['ics'], tagIds: ['t-life'], statuses: [] };
     expect(ids(filterItems(ALL, filters))).toEqual(['work-ics']);
   });
 
   it('维度命中但另一维度无命中 → 空数组', () => {
     expect(filterItems(ALL, withCategory(['health']))).toEqual([]);
     expect(filterItems([WORK_LOCAL], withTags(['t-other']))).toEqual([]);
+  });
+});
+
+describe('filterItems：状态维度（阶段 4，§7.21）', () => {
+  const DONE_ITEM = makeItem({ id: 'work-local-done', categoryId: 'work', status: 'done' });
+
+  it('statuses 命中任一即通过（active 全过）', () => {
+    expect(ids(filterItems(ALL, withStatuses(['active'])))).toEqual([
+      'work-local',
+      'work-ics',
+      'study-system',
+      'other-local',
+    ]);
+  });
+
+  it("statuses=['done'] 只保留已完成项", () => {
+    expect(ids(filterItems([WORK_LOCAL, DONE_ITEM], withStatuses(['done'])))).toEqual([
+      'work-local-done',
+    ]);
+  });
+
+  it('statuses 多值 OR：active + done 全过', () => {
+    expect(ids(filterItems([WORK_LOCAL, DONE_ITEM], withStatuses(['active', 'done'])))).toEqual([
+      'work-local',
+      'work-local-done',
+    ]);
+  });
+
+  it('状态 AND 分类：已完成 + work 分类交集', () => {
+    const filters: ItemFilters = { categoryIds: ['work'], sourceTypes: [], tagIds: [], statuses: ['done'] };
+    expect(ids(filterItems([WORK_LOCAL, DONE_ITEM], filters))).toEqual(['work-local-done']);
+  });
+});
+
+describe('hasActiveFilters（阶段 4：筛选图标小红点判定）', () => {
+  it('全空 filters 为 false', () => {
+    expect(hasActiveFilters(EMPTY_ITEM_FILTERS)).toBe(false);
+  });
+
+  it('任一维度非空为 true', () => {
+    expect(hasActiveFilters(withCategory(['work']))).toBe(true);
+    expect(hasActiveFilters(withSources(['ics']))).toBe(true);
+    expect(hasActiveFilters(withTags(['t-work']))).toBe(true);
+    expect(hasActiveFilters(withStatuses(['done']))).toBe(true);
   });
 });

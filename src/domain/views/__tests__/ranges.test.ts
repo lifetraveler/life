@@ -1,4 +1,5 @@
 import {
+  getMonthRange,
   getTodayRange,
   getWeekRange,
 } from '../ranges';
@@ -146,10 +147,62 @@ describe('getWeekRange（周一起点）', () => {
   });
 });
 
+describe('getMonthRange（切片 14 阶段 4：本月视图）', () => {
+  it('Asia/Shanghai：月中取当月 1 日至次月 1 日', () => {
+    const now = Date.UTC(2026, 2, 18, 12, 0) - 8 * 3_600_000; // 当地 2026-03-18 12:00
+    expect(getMonthRange(now, 'Asia/Shanghai')).toEqual({
+      startMs: shanghaiMidnightUtc(2026, 3, 1),
+      endMs: shanghaiMidnightUtc(2026, 4, 1),
+    });
+  });
+
+  it('Asia/Shanghai：当天即 1 日', () => {
+    const now = Date.UTC(2026, 2, 1, 4, 0) - 8 * 3_600_000; // 当地 2026-03-01 04:00
+    expect(getMonthRange(now, 'Asia/Shanghai')).toEqual({
+      startMs: shanghaiMidnightUtc(2026, 3, 1),
+      endMs: shanghaiMidnightUtc(2026, 4, 1),
+    });
+  });
+
+  it('跨年：12 月 → 次年 1 月', () => {
+    const now = Date.UTC(2025, 11, 31, 15, 0) - 8 * 3_600_000; // 当地 2025-12-31 23:00
+    expect(getMonthRange(now, 'Asia/Shanghai')).toEqual({
+      startMs: shanghaiMidnightUtc(2025, 12, 1),
+      endMs: shanghaiMidnightUtc(2026, 1, 1),
+    });
+  });
+
+  it('2 月（平年 28 天）边界', () => {
+    const now = Date.UTC(2026, 1, 15, 12, 0) - 8 * 3_600_000; // 当地 2026-02-15（2026 平年）
+    expect(getMonthRange(now, 'Asia/Shanghai')).toEqual({
+      startMs: shanghaiMidnightUtc(2026, 2, 1),
+      endMs: shanghaiMidnightUtc(2026, 3, 1),
+    });
+  });
+
+  it('America/New_York：DST 月（3 月）起点 EST、终点 EDT，范围短 1 小时', () => {
+    const now = Date.UTC(2026, 2, 20, 16, 0); // 当地 2026-03-20 12:00 EDT
+    const range = getMonthRange(now, 'America/New_York');
+    expect(range).toEqual({
+      startMs: nyMidnightEstUtc(2026, 3, 1), // 3-01 仍在 EST（2026 DST 3-08 起）
+      endMs: nyMidnightEdtUtc(2026, 4, 1),
+    });
+    expect(range.endMs - range.startMs).toBe(31 * 24 * 3_600_000 - 3_600_000);
+  });
+
+  it('与 resolveCivilTimeToInstant 交叉一致', () => {
+    const now = Date.UTC(2026, 10, 8, 2, 0) - 8 * 3_600_000; // 当地 2026-11-08 10:00
+    const range = getMonthRange(now, 'Asia/Shanghai');
+    expect(range.startMs).toBe(resolveCivilTimeToInstant('Asia/Shanghai', 2026, 11, 1, 0, 0));
+    expect(range.endMs).toBe(resolveCivilTimeToInstant('Asia/Shanghai', 2026, 12, 1, 0, 0));
+  });
+});
+
 describe('非法 tzid', () => {
   it('非 IANA 或固定偏移抛错', () => {
     expect(() => getTodayRange(0, 'Not/AZone')).toThrow(/time zone/i);
     expect(() => getWeekRange(0, '+08:00')).toThrow(/IANA/);
+    expect(() => getMonthRange(0, 'Not/AZone')).toThrow(/time zone/i);
   });
 });
 

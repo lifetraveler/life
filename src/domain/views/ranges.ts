@@ -106,3 +106,23 @@ export function getWeekRange(nowMs: number, tzid: string): ViewTimeRange {
     endMs: resolveDayStart(tzid, addDays(monday, 7)),
   };
 }
+
+/**
+ * 本月范围（切片 14 阶段 4，tasks/slice-14.md「本月视图数据范围必须是本月」）：
+ * tzid 时区当月 1 日 00:00 至次月 1 日 00:00（[startMs, endMs)）。
+ * 语义与 getTodayRange / getWeekRange 一致：显式 tzid、左闭右开、
+ * 月界为纯日历推算（12 月 → 次年 1 月），DST 行为继承 resolveDayStart。
+ */
+export function getMonthRange(nowMs: number, tzid: string): ViewTimeRange {
+  assertValidTimeZone(tzid);
+  const parts = getZonedParts(nowMs, tzid);
+  const monthStart: CivilDate = { year: parts.year, month: parts.month, day: 1 };
+  const nextMonthStart: CivilDate =
+    parts.month === 12
+      ? { year: parts.year + 1, month: 1, day: 1 }
+      : { year: parts.year, month: parts.month + 1, day: 1 };
+  return {
+    startMs: resolveDayStart(tzid, monthStart),
+    endMs: resolveDayStart(tzid, nextMonthStart),
+  };
+}
