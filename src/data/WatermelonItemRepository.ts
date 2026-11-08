@@ -716,6 +716,15 @@ export class WatermelonItemRepository implements ItemRepository {
     };
   }
 
+  /** 切片 14 阶段 3（契约外扩展，先例同 getCategories）：一次性取全部标签；供视觉保存后显式刷新。 */
+  async listTags(): Promise<Tag[]> {
+    const models = await this.db
+      .get<TagModel>(TAGS_TABLE)
+      .query(Q.sortBy('created_at', 'asc'))
+      .fetch();
+    return models.map(toDomainTag);
+  }
+
   /** 契约外扩展（见接口注释）：按 id 取 Item，不存在返回 null（调度器用于完成/归档判定）。 */
   async getItem(id: string): Promise<Item | null> {
     const models = await this.db

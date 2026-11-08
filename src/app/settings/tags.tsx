@@ -48,6 +48,11 @@ export default function TagSettingsPage() {
       setSavingId(tag.id);
       try {
         await itemRepository.updateTagVisuals(tag.id, patch);
+        // 验收修复：updateTagVisuals 后 observeTags 的响应式发射在本机型上偶发不触发
+        //（水合行的 color/emoji 变化未即时推送），保存后显式拉取一次，与分类管理页
+        // 「保存后 await load()」同一模式，保证列表即时反映新视觉。
+        const fresh = await itemRepository.listTags();
+        setTags(fresh);
         setExpandedId(null);
       } catch (err) {
         console.warn('[slice-14] 标签视觉保存失败', err);

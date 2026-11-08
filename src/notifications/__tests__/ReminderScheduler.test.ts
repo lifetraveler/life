@@ -201,6 +201,10 @@ class FakeRepository implements ItemRepository {
     throw new Error('FakeRepository: observeTags 未实现');
   }
 
+  async listTags(): Promise<Tag[]> {
+    throw new Error('FakeRepository: listTags 未实现');
+  }
+
   async createItem(_input: CreateItemInput): Promise<Item> {
     throw new Error('FakeRepository: createItem 未实现');
   }

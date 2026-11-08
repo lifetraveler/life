@@ -25,7 +25,7 @@ export default function ColorPalette({ selected, onSelect, disabled = false }: C
         return (
           <Pressable
             key={color}
-            style={[styles.swatch, isSelected && styles.swatchSelected]}
+            style={[styles.swatch, { backgroundColor: color }, isSelected && styles.swatchSelected]}
             onPress={() => onSelect(color)}
             disabled={disabled}
             accessibilityLabel={`颜色 ${color}`}

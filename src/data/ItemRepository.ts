@@ -161,6 +161,8 @@ export interface ItemRepository {
   listArchivedItemsWithTags(): Promise<ItemWithRelations[]>;
   observeItemsWithTags(onNext: (items: ItemWithRelations[]) => void): () => void;
   observeTags(onNext: (tags: Tag[]) => void): () => void;
+  /** 切片 14 阶段 3（契约外文档化扩展，先例同 getCategories）：一次性取全部标签（created_at 升序）。 */
+  listTags(): Promise<Tag[]>;
   getItem(id: string): Promise<Item | null>;
 
   // —— 切片 6：Item 时间字段（AGENTS.md §4.24，签名冻结）——
