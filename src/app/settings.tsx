@@ -1,5 +1,13 @@
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Sharing from 'expo-sharing';
@@ -242,7 +250,9 @@ export default function SettingsPage() {
   }, [busy]);
 
   return (
-    <View style={styles.container}>
+    // 阶段 3 新增两节后内容超出屏幕高度（用户反馈「设置页无法下滑」）：
+    // 原为固定 View 列，四个节恰好满屏；改 ScrollView 使全部节可达。
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>分类与标签</Text>
         <Text style={styles.hint}>自定义预置分类与标签的颜色、图标。</Text>
@@ -355,7 +365,7 @@ export default function SettingsPage() {
           </Text>
         )}
       </View>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -363,6 +373,8 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
+  },
+  content: {
     padding: 16,
     gap: 20,
   },
