@@ -90,6 +90,27 @@ const NOT_ARCHIVED = Q.where('status', Q.notEq('archived'));
 const SORT_BY_UPDATED_DESC = Q.sortBy('updated_at', 'desc');
 
 /**
+ * 行内字段级变化也要发射的列清单：WatermelonDB 的 Query.observe() 只在「匹配集合成员」
+ * 变化时发射（processChangeSet 按记录集合 diff）；行内 update（如新增保存链第二步
+ * updateItemTime 的时间字段、设置页改 Tag/Category 颜色）成员不变，observe() 不发射，
+ * 必须用 observeWithColumns 按列订阅。切片 14 阶段 5h 真机实锤（P5Hwk2 时间落库但
+ * 列表永远停在「无时间」中态）后统一修正。
+ */
+const ITEM_WATCH_COLUMNS = [
+  'title',
+  'content',
+  'type',
+  'status',
+  'start_at',
+  'end_at',
+  'all_day',
+  'category_id',
+  'priority',
+];
+const TAG_WATCH_COLUMNS = ['name', 'color', 'emoji'];
+const CATEGORY_WATCH_COLUMNS = ['name', 'color', 'emoji', 'priority'];
+
+/**
  * WatermelonDB Query.observe()（rxjs Observable）只用到 subscribe 的最小结构。
  * 声明为独立接口避免运行时 import rxjs（本工程无 rxjs 直接依赖）。
  */
@@ -424,10 +445,11 @@ export class WatermelonItemRepository implements ItemRepository {
       this.db
         .get<ItemModel>(ITEMS_TABLE)
         .query(Q.sortBy('created_at', 'desc'))
-        .observe(),
+        // 列订阅：编辑页改标题/内容/时间属行内字段更新（成员不变），observe() 不发射
+        .observeWithColumns(ITEM_WATCH_COLUMNS),
       this.itemTagsJoinQuery().observe(),
-      this.allTagsQuery().observe(),
-      this.allCategoriesQuery().observe(),
+      this.allTagsQuery().observeWithColumns(TAG_WATCH_COLUMNS),
+      this.allCategoriesQuery().observeWithColumns(CATEGORY_WATCH_COLUMNS),
       joinItemsWithRelations,
       onNext,
     );
@@ -678,10 +700,13 @@ export class WatermelonItemRepository implements ItemRepository {
         // 与 listItemsWithTags 同语义：默认列表（§4.7 未归档 + 未删除，§4.8 updatedAt 降序），
         // 否则归档后行内仍滞留在观察列表中。
         .query(NOT_ARCHIVED, SORT_BY_UPDATED_DESC)
-        .observe(),
+        // Query.observe() 只在匹配集合成员变化时发射；行内字段更新（成员不变）不发射。
+        // 新增保存链是 createItem → updateItemTime 两步写，第二步的时间字段（start_at 等）
+        // 属成员不变的字段级变化——真机实锤列表永远停在「无时间」中态。必须列订阅捕获。
+        .observeWithColumns(ITEM_WATCH_COLUMNS),
       this.itemTagsJoinQuery().observe(),
-      this.allTagsQuery().observe(),
-      this.allCategoriesQuery().observe(),
+      this.allTagsQuery().observeWithColumns(TAG_WATCH_COLUMNS),
+      this.allCategoriesQuery().observeWithColumns(CATEGORY_WATCH_COLUMNS),
       joinItemsWithRelations,
       onNext,
     );
@@ -706,7 +731,8 @@ export class WatermelonItemRepository implements ItemRepository {
     const subscription = this.db
       .get<TagModel>(TAGS_TABLE)
       .query(Q.sortBy('created_at', 'asc'))
-      .observe()
+      // 列订阅：设置页改标签颜色/Emoji 属行内字段更新（成员不变），observe() 不发射
+      .observeWithColumns(TAG_WATCH_COLUMNS)
       .subscribe((models) => {
         onNext(models.map(toDomainTag));
       });
@@ -1200,8 +1226,8 @@ export class WatermelonItemRepository implements ItemRepository {
         'all_day',
       ]),
       this.itemTagsJoinQuery().observe(),
-      this.allTagsQuery().observe(),
-      this.allCategoriesQuery().observe(),
+      this.allTagsQuery().observeWithColumns(TAG_WATCH_COLUMNS),
+      this.allCategoriesQuery().observeWithColumns(CATEGORY_WATCH_COLUMNS),
       joinItemsWithRelations,
       onNext,
     );
@@ -1213,8 +1239,8 @@ export class WatermelonItemRepository implements ItemRepository {
       // status 翻转虽会移出集合（成员变化必发射），列订阅保证一致语义。
       this.overdueQuery(nowMs).observeWithColumns(['status', 'end_at']),
       this.itemTagsJoinQuery().observe(),
-      this.allTagsQuery().observe(),
-      this.allCategoriesQuery().observe(),
+      this.allTagsQuery().observeWithColumns(TAG_WATCH_COLUMNS),
+      this.allCategoriesQuery().observeWithColumns(CATEGORY_WATCH_COLUMNS),
       joinItemsWithRelations,
       onNext,
     );
@@ -1230,8 +1256,8 @@ export class WatermelonItemRepository implements ItemRepository {
       // 仍统一用 observeWithColumns 与另两个视图订阅保持同一语义口径（防御性）。
       this.unscheduledCreatedInRangeQuery(rangeStartMs, rangeEndMs).observeWithColumns(['status']),
       this.itemTagsJoinQuery().observe(),
-      this.allTagsQuery().observe(),
-      this.allCategoriesQuery().observe(),
+      this.allTagsQuery().observeWithColumns(TAG_WATCH_COLUMNS),
+      this.allCategoriesQuery().observeWithColumns(CATEGORY_WATCH_COLUMNS),
       joinItemsWithRelations,
       onNext,
     );

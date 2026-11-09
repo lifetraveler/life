@@ -96,8 +96,21 @@ export function MonthCalendarView({
     },
   ).current;
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 50 }).current;
-  // 定位（今天回位/年月选择）：jumpKey 变化 → scrollToIndex 到目标月页；页未测量时
-  // onScrollToIndexFailed 等 400ms（月历页高约 400px，重挂一帧后测量完成）重试。
+  // 阶段 5g：定位（今天回位/年月选择）改「key 重挂 + initialScrollIndex 渲染期定位」——
+  // 旧方案（页窗口重置 effect + 80ms 后 scrollToIndex）会在重置后的首帧把视口留在
+  // 旧位置（用户看到先闪 9 月再跳 11 月）；重挂让 data 与定位同一轮渲染完成，无中间态。
+  // jump effect 保留作重挂后的精修（initialScrollIndex 是平均页高估算，5/6 行月份有偏差）。
+  const jumpIndex = useMemo(() => {
+    if (jumpKey === 0 || jumpToMonth === null) {
+      return undefined;
+    }
+    const index = months.findIndex(
+      (month) => month.year === jumpToMonth.year && month.month === jumpToMonth.month,
+    );
+    return index >= 0 ? index : undefined;
+    // jumpToMonth 经 ref 语义随 jumpKey 一起变化，此处只依赖 jumpKey
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jumpKey, months]);
   useEffect(() => {
     if (jumpToMonth === null || jumpKey === 0) {
       return;
@@ -179,9 +192,13 @@ export function MonthCalendarView({
 
   return (
     <FlatList<CivilMonth>
+      // 阶段 5g：jumpKey 变化 → key 变化重挂（配合 initialScrollIndex 同帧定位，
+      // 消除「先闪旧月再跳目标月」的中间态；普通滚动不触发 jumpKey，不受影响）
+      key={`month-list-${jumpKey}`}
       ref={listRef}
       style={styles.list}
       data={flatListData}
+      initialScrollIndex={jumpIndex}
       keyExtractor={pageKeyExtractor}
       renderItem={renderMonth}
       maintainVisibleContentPosition={{ minIndexForVisible: 1 }}

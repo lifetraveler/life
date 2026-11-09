@@ -215,6 +215,22 @@
 - 前两条用户 bug（学习不并排/周视图不展示）复现时数据链与 4-lane 布局实测
   正常，未复现（疑为旧状态/anchor 不在当天），待用户再报。
 
+### 阶段 5h：真机回归修复 3（2026-11-09 用户 3 bug，真机复验通过）
+- 新增带时间项落进「待办」、再操作一下旧项才「挪到对应日」：根因=WatermelonDB
+  `Query.observe()` 只在「匹配集合成员」变化时发射（processChangeSet 按记录集合
+  diff），行内字段更新（成员不变）不发射。新增保存链是 createItem → updateItemTime
+  两步写，第二步的时间字段属成员不变的字段级变化，列表永远停在「无时间」中态；
+  用户后来编辑改时间（updateItem 路径同为字段级）才触发一次「挪动」错觉。
+  修复：observeItemsWithTags / observeItems / observeTags / categories 订阅全部改
+  observeWithColumns 列订阅（ITEM_WATCH_COLUMNS / TAG_WATCH_COLUMNS /
+  CATEGORY_WATCH_COLUMNS，item_tags join 表保持 observe()——关联增删本就是成员变化）。
+- 周视图新增数据要「操作下一条才加载上一条」：同一根因（同一订阅源），同修复。
+- 月历点「今天」先闪 9 月再跳：页窗口重置 effect 与 80ms scrollToIndex 之间存在
+  视口中间态；改 key 重挂 + initialScrollIndex 渲染期定位（同 agenda 5g 方案），
+  jump effect 保留作重挂后精修，onScrollToIndexFailed 400ms 重试兜底。
+- 真机闭环：P5Hwk/P5Hwk2/P5Hwk3 三条带时间项保存后均直接落位「今天」组；
+  月历滚远（停顿后）点「今天」一次直达本月页。
+
 ### 阶段 6：小组件升级
 - 更新快照生成函数，携带 Category 颜色和 timeLabel。
 - 更新小组件 UI。
@@ -344,6 +360,12 @@
     今日组贴顶；从 prepend 出的远月（如 7 月）点「今天」同样跳回贴顶。
 59. 日程视图下滑到列表顶可连续 prepend 前几个月名行（10→9→8→7…），左上标签
     随生效月联动；列表末尾有一屏左右留白（今日组贴顶的滚动余量）。
+
+### 阶段 5h 验收
+60. `tsc` 零错误，`jest` 全过（492）。
+61. 新增带时间的条目保存后立即出现在对应日期组（不再先进「待办」）；在编辑页
+    修改时间保存后列表即时更新；日程/周/日/月视图一致。
+62. 月历滚远后点「今天」直接显示本月页（无先闪旧月的中间态）。
 
 ### 阶段 6 验收
 41. 桌面小组件展示任务时，左侧带有 Category 对应的颜色小圆点。
