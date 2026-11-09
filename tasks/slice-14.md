@@ -237,9 +237,46 @@
   标签「11月」无 9 月闪现；估算跳先过冲（11 月尾+12 月中转）~0.4s，~0.8s 即位
   今天组贴顶。
 
-### 阶段 6：小组件升级
-- 更新快照生成函数，携带 Category 颜色和 timeLabel。
-- 更新小组件 UI。
+### 阶段 6：小组件升级（适配新数据关系）
+
+#### 目标
+让桌面小组件不仅展示任务标题和时间，还能展示该任务关联的 Category 颜色点。
+
+#### 核心要求
+1. **快照 Schema 升级**：
+   - 修改 `src/domain/widget/snapshot.ts` 中的快照类型。
+   - 为每个 Item 增加 `categoryColor: string | null` 字段（取值自 `ItemWithRelations.category?.color`，缺省回退 `#9E9E9E`）。
+   - 由于阶段 5 已将“无时间的待办”移出主列表，小组件的“今日待办”数据源需调整：仅拉取今天有过期/已安排的任务（不再包含无时间的纯待办，除非它今天到期）。
+2. **小组件 UI 更新**：
+   - 修改 `src/widget/TodayWidget.tsx`。
+   - 在每一项的最左侧渲染一个 8x8 的彩色圆点或 2px 的竖条，使用 `categoryColor` 作为背景色。
+3. **刷新时机验证**：
+   - 由于 WatermelonDB 的 `observe` 不监听行内字段更新，需确认在修改了 Item 的 category、或修改了 Category 的颜色后，小组件快照能否在 App 运行期间正确重新生成并推送到桌面。
+
+#### 实现记录（2026-11-09）
+
+- 阶段 5（commit 6ad24f5）已提前落地大半：快照条目 `categoryColor` 字段
+  （snapshot.ts，`item.category?.color ?? null` 原样携带）；WidgetSnapshotWriter
+  narrowEntry 兼容旧快照（无字段 → null）；TodayWidget 已渲染 8×8 色点；快照
+  单测覆盖取色透传与 null。数据源经 5h 收窄为「今日已安排 + 过期」
+  （scheduledInRangeQuery 要求 start_at 非空，无时间纯待办不进快照；§7.16 冻结
+  语义，不加待办区）。
+- A｜新增 `src/domain/widget/categoryDot.ts`：`WIDGET_DEFAULT_CATEGORY_COLOR`
+  常量 + `resolveCategoryDotColor()`（合法 #RRGGBB 原样透传，null/非法回退
+  `#9E9E9E`，与主页色条 AgendaItemCard FALLBACK_BAR_COLOR 同规则）；widget/index.ts
+  转出；TodayWidget.tsx 色点改调该函数（回退不再用 palette muted）。
+- B｜`WatermelonItemRepository` 的 observeScheduledItemsInRange / observeOverdueItems
+  item 源由手写列清单（scheduled=['status','start_at','end_at','all_day']、
+  overdue=['status','end_at']）统一改为 `observeWithColumns(ITEM_WATCH_COLUMNS)`
+  （含 category_id 与 title）——修复「改任务分类 / 改标题后快照与视图列表不刷新」；
+  改 Category 颜色的刷新链路 5h 已修（CATEGORY_WATCH_COLUMNS），此处补发射单测锁住。
+- C｜新增 `src/domain/widget/__tests__/categoryDot.test.ts`（默认色常量、透传、
+  null/非法回退）；viewQueries.test.ts 新增 2 条发射用例：行内改 categoryId →
+  重发射并水合新分类色；updateCategoryVisuals 改色 → 重发射
+  （FIFO waiters + sleep(500) 超时兜底，同既有发射测试模式）。
+- D｜`npx tsc --noEmit` 零错误；`npx jest --runInBand` 40 套件 499 用例全过
+  （原 492 + 新增 7）。
+
 
 ### 阶段 7：导入预览
 - 拦截 ICS 和系统日历导入，进入预览勾选页，确认后批量落库。
@@ -390,8 +427,19 @@
 65. 日程/周/日/月主视图列表不再混入无时间条目。
 66. `tsc` 零错误，`jest` 全过。
 
+#### 阶段 6 验收标准
+1. `tsc` 零错误，`jest` 全过。快照生成单测需覆盖 `categoryColor` 的取色和默认回退逻辑。
+2. **真机验证**：在 App 里建一条关联“工作”（黑色）的任务，加入今日。桌面小组件刷新后，该任务左侧带黑色圆点。
+3. **真机验证**：在设置里把“工作”分类改为红色，回到首页触发一次快照刷新，桌面小组件上的圆点变成红色。
+
 ### 阶段 6 验收
-41. 桌面小组件展示任务时，左侧带有 Category 对应的颜色小圆点。
+67. `tsc` 零错误，`jest` 全过（499）。快照 `categoryColor` 取色/回退有单测
+    （快照用例 7 + categoryDot.test.ts 5 例 + viewQueries 发射 2 例）。
+68. 真机验证（用户执行）：建一条关联「工作」的带时间任务加入今日，小组件刷新后
+    左侧出现对应色圆点（注：预置 work 色为 #E57373 红，原卡「黑色」系 presets
+    定稿前文案，以实际预置色为准）。
+69. 真机验证（用户执行）：设置里改「工作」分类颜色 → 回首页触发快照刷新 →
+    小组件圆点变色；改某条任务的分类，同样确认色点跟随新分类（B 步修复项）。
 
 ### 阶段 7 验收
 42. 导入 ICS 时弹出预览页，包含事件标题、时间、是否重复。

@@ -14,3 +14,7 @@ export type {
   WidgetSnapshotEntry,
   BuildTodayWidgetSnapshotInput,
 } from './snapshot';
+export {
+  WIDGET_DEFAULT_CATEGORY_COLOR,
+  resolveCategoryDotColor,
+} from './categoryDot';

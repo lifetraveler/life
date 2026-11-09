@@ -10,6 +10,7 @@ import TagModel from '../../db/models/TagModel';
 import { schema } from '../../db/schema';
 import { WatermelonItemRepository } from '../WatermelonItemRepository';
 import type { Item } from '../../domain/item';
+import type { ItemWithRelations } from '../../domain/relations/itemWithRelations';
 import type { ItemWithTags } from '../../domain/tag';
 
 /**
@@ -260,6 +261,92 @@ describe('listScheduledItemsInRange', () => {
         ['a-early', 'done'],
         ['b-late', 'active'],
       ]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it('observeScheduledItemsInRange：行内改 categoryId 触发重发射并水合新分类色（阶段 6）', async () => {
+    const repository = makeRepository();
+    const created = await createItems(repository, [
+      { title: 'categorized', startAt: 1_500, endAt: null },
+    ]);
+
+    // FIFO 等待队列与同步首发射处理同上（发射值取完整 ItemWithRelations 断言 category）。
+    const waiters: Array<(value: ItemWithRelations[]) => void> = [];
+    const next = (): Promise<ItemWithRelations[]> =>
+      new Promise<ItemWithRelations[]>((resolve) => {
+        waiters.push(resolve);
+      });
+    const onNext = (items: ItemWithRelations[]): void => {
+      const waiter = waiters.shift();
+      waiter?.(items);
+    };
+
+    const initialPromise = next();
+    const recolorPromise = next();
+    const unsubscribe = repository.observeScheduledItemsInRange(RS, RE, onNext);
+    try {
+      // createItem 未传 categoryId → 默认 other（预置色 #9E9E9E）
+      const initial = await initialPromise;
+      expect(initial[0]?.category?.id).toBe('other');
+      expect(initial[0]?.category?.color).toBe('#9E9E9E');
+
+      // Query.observe() 只在匹配集合成员变化时发射（processChangeSet）；改 categoryId
+      // 不改变成员资格，必须依赖 observeWithColumns(ITEM_WATCH_COLUMNS 含 category_id)
+      // 捕获字段级变化（阶段 6：小组件快照数据源订阅缺 category_id 时色点停留旧色）。
+      await repository.updateItem(created[0].id, { categoryId: 'work' });
+      const recolored = await Promise.race([
+        recolorPromise,
+        sleep(500).then((): 'timeout' => 'timeout'),
+      ]);
+      if (recolored === 'timeout') {
+        throw new Error('categoryId change did not trigger re-emission');
+      }
+      expect(recolored[0]?.category?.id).toBe('work');
+      expect(recolored[0]?.category?.color).toBe('#E57373');
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it('observeScheduledItemsInRange：修改 Category 颜色触发重发射（阶段 6 快照刷新链路）', async () => {
+    const repository = makeRepository();
+    const created = await createItems(repository, [
+      { title: 'on-work', startAt: 1_500, endAt: null },
+    ]);
+    await repository.updateItem(created[0].id, { categoryId: 'work' });
+
+    // FIFO 等待队列与同步首发射处理同上。
+    const waiters: Array<(value: ItemWithRelations[]) => void> = [];
+    const next = (): Promise<ItemWithRelations[]> =>
+      new Promise<ItemWithRelations[]>((resolve) => {
+        waiters.push(resolve);
+      });
+    const onNext = (items: ItemWithRelations[]): void => {
+      const waiter = waiters.shift();
+      waiter?.(items);
+    };
+
+    const initialPromise = next();
+    const recolorPromise = next();
+    const unsubscribe = repository.observeScheduledItemsInRange(RS, RE, onNext);
+    try {
+      const initial = await initialPromise;
+      expect(initial[0]?.category?.color).toBe('#E57373');
+
+      // categories 行的行内字段更新（改色不改集合）：依赖 combineLatest4 第 4 源
+      // allCategoriesQuery().observeWithColumns(CATEGORY_WATCH_COLUMNS) 捕获，
+      // snapshotBridge 借此在改分类色后重写小组件快照。
+      await repository.updateCategoryVisuals('work', { color: '#FF0000' });
+      const recolored = await Promise.race([
+        recolorPromise,
+        sleep(500).then((): 'timeout' => 'timeout'),
+      ]);
+      if (recolored === 'timeout') {
+        throw new Error('category color change did not trigger re-emission');
+      }
+      expect(recolored[0]?.category?.color).toBe('#FF0000');
     } finally {
       unsubscribe();
     }

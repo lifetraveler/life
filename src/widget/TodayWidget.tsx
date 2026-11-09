@@ -9,7 +9,9 @@
  * - 亮/暗双色由 WidgetRepresentation { light, dark } 承载（切片 10 采用双色表示），
  *   本组件以 palette prop 切换同一套布局的配色；
  * - 条目行（§7.21 v0.14 阶段 5）= FlexWidget 行（flexDirection row + alignItems center）：
- *   左侧分类色点（8×8 圆，categoryColor 经合法 #RRGGBB 校验，非法/无分类回退 muted 灰）+
+ *   左侧分类色点（8×8 圆，categoryColor 经合法 #RRGGBB 校验，非法/无分类回退默认灰
+ *   '#9E9E9E'——阶段 6 起与本机制统一走 domain/widget/categoryDot 解析，不再用 palette
+ *   muted）+
  *   内层 FlexWidget { width: 0, flex: 1 }（库 JS 层把 flex 映射为原生 LinearLayout weight，
  *   FlexWidget.js convertFlexStyle；flexShrink 仅存在于 TS 类型、运行时无实现，不可用）+
  *   内部 TextWidget（时间标签 + 标题）width match_parent + maxLines 1 + truncate 'END'
@@ -27,6 +29,7 @@
 import { FlexWidget, TextWidget } from 'react-native-android-widget';
 import type { ColorProp, HexColor } from 'react-native-android-widget';
 import type { WidgetSnapshot, WidgetSnapshotEntry } from '../domain/widget';
+import { resolveCategoryDotColor } from '../domain/widget';
 
 export type TodayWidgetPaletteName = 'light' | 'dark';
 
@@ -57,9 +60,6 @@ const PALETTES: Record<TodayWidgetPaletteName, TodayWidgetPalette> = {
     accentText: '#14110C',
   },
 };
-
-/** 合法分类色（数据异常回退约定 repository.md v0.14，与主页卡片色条同一规则） */
-const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
 
 interface WidgetRow {
   entry: WidgetSnapshotEntry;
@@ -116,11 +116,9 @@ export function TodayWidget({ snapshot, palette }: TodayWidgetProps) {
           />
         ) : (
           rows.map(({ entry, overdue }) => {
-            // 运行时已用 HEX_COLOR_PATTERN 校验 #RRGGBB 前缀，收窄为 HexColor 模板字面量类型
-            const dotColor: ColorProp =
-              entry.categoryColor !== null && HEX_COLOR_PATTERN.test(entry.categoryColor)
-                ? (entry.categoryColor as HexColor)
-                : colors.muted;
+            // 解析规则在 domain/widget/categoryDot（可单测）：合法 #RRGGBB 透传，
+            // null/非法回退 '#9E9E9E'（与主页卡片色条同一默认灰），恒为合法 HexColor 形态
+            const dotColor: ColorProp = resolveCategoryDotColor(entry.categoryColor) as HexColor;
             return (
               <FlexWidget
                 key={entry.id}

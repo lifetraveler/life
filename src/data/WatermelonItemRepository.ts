@@ -1216,15 +1216,14 @@ export class WatermelonItemRepository implements ItemRepository {
     onNext: (items: ItemWithRelations[]) => void,
   ): () => void {
     return combineLatest4(
-      this.scheduledInRangeQuery(rangeStartMs, rangeEndMs).observeWithColumns([
-        // Query.observe() 只在匹配集合成员变化时发射（processChangeSet），status 在
-        // active|done 之间翻转不改变成员资格（仍匹配 scheduled 条件），但会改变
-        // done-last 排序与行展示——必须按列订阅才能捕获字段级变化。
-        'status',
-        'start_at',
-        'end_at',
-        'all_day',
-      ]),
+      // ITEM_WATCH_COLUMNS（含 category_id / title）列订阅：Query.observe() 只在匹配集合
+      // 成员变化时发射（processChangeSet），行内字段级更新（改分类/改标题/status 在
+      // active|done 间翻转——后者不改变 scheduled 成员资格但改变 done-last 排序与行展示）
+      // 必须按列订阅才能捕获（阶段 5h 实锤；阶段 6 补 category_id，改分类后小组件快照
+      // 与视图色条才能刷新）。
+      this.scheduledInRangeQuery(rangeStartMs, rangeEndMs).observeWithColumns(
+        ITEM_WATCH_COLUMNS,
+      ),
       this.itemTagsJoinQuery().observe(),
       this.allTagsQuery().observeWithColumns(TAG_WATCH_COLUMNS),
       this.allCategoriesQuery().observeWithColumns(CATEGORY_WATCH_COLUMNS),
@@ -1235,9 +1234,10 @@ export class WatermelonItemRepository implements ItemRepository {
 
   observeOverdueItems(nowMs: number, onNext: (items: ItemWithRelations[]) => void): () => void {
     return combineLatest4(
-      // end_at 在过期集合内变化（仍是过去时刻）不改变成员资格但改变 endAt↑ 排序；
-      // status 翻转虽会移出集合（成员变化必发射），列订阅保证一致语义。
-      this.overdueQuery(nowMs).observeWithColumns(['status', 'end_at']),
+      // 同上改 ITEM_WATCH_COLUMNS 列订阅（阶段 6 补 category_id / title）：end_at 在过期
+      // 集合内变化（仍是过去时刻）不改变成员资格但改变 endAt↑ 排序；status 翻转虽会移出
+      // 集合（成员变化必发射），列订阅保证一致语义。
+      this.overdueQuery(nowMs).observeWithColumns(ITEM_WATCH_COLUMNS),
       this.itemTagsJoinQuery().observe(),
       this.allTagsQuery().observeWithColumns(TAG_WATCH_COLUMNS),
       this.allCategoriesQuery().observeWithColumns(CATEGORY_WATCH_COLUMNS),
