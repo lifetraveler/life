@@ -630,36 +630,33 @@ export default function PlanScreen() {
         (row) => row.kind === 'header' && row.key === `header-${target.civilKey}`,
       );
       if (rowIndex >= 0) {
+        // 不重挂（阶段 5h：重挂后 FlatList 首帧从 offset 0 渲染，窗口首页=9 月，
+        // 400ms 定位 timer 前闪旧月）。scrollToOffset 估算不依赖行测量，可立即执行；
+        // 120ms 后精修等估算跳落地。
+        listRef.current?.scrollToOffset({
+          offset: Math.max(0, rowIndex * AGENDA_MONTH_HEADER_BLOCK),
+          animated: false,
+        });
         const timer = setTimeout(() => {
-          // Fabric 实锤（5g）：scrollToIndex 对 window 外未测量行静默无效果（不滚、
-          // 也不触发 onScrollToIndexFailed）——先按平均行高估算 offset 把窗口推近，
-          // 目标行渲染测量后用 measureInWindow 实测窗口坐标精修贴顶
-          // （Android item 内 onLayout.y 是 transform 局部值，不可用）。
-          listRef.current?.scrollToOffset({
-            offset: Math.max(0, rowIndex * AGENDA_MONTH_HEADER_BLOCK),
-            animated: false,
-          });
-          setTimeout(() => {
-            const header = todayHeaderRef.current;
-            const wrap = agendaListWrapRef.current;
-            if (header && wrap) {
-              header.measureInWindow((hx, hy) => {
-                wrap.measureInWindow((wx, wy) => {
-                  const targetOffset = lastAgendaOffsetRef.current + (hy - wy);
-                  listRef.current?.scrollToOffset({
-                    offset: Math.max(0, targetOffset),
-                    // animated:true：Android 实测（5g）小步程序滚动（<60px）会被
-                    // FlatList 忽略（est 大跳有效、精修小跳无效），动画滚动不受影响
-                    animated: true,
-                  });
+          const header = todayHeaderRef.current;
+          const wrap = agendaListWrapRef.current;
+          if (header && wrap) {
+            header.measureInWindow((hx, hy) => {
+              wrap.measureInWindow((wx, wy) => {
+                const targetOffset = lastAgendaOffsetRef.current + (hy - wy);
+                listRef.current?.scrollToOffset({
+                  offset: Math.max(0, targetOffset),
+                  // animated:true：Android 实测（5g）小步程序滚动（<60px）会被
+                  // FlatList 忽略（est 大跳有效、精修小跳无效），动画滚动不受影响
+                  animated: true,
                 });
               });
-            } else {
-              listRef.current?.scrollToIndex({ index: rowIndex, viewPosition: 0, animated: false });
-            }
-          }, 120);
+            });
+          } else {
+            listRef.current?.scrollToIndex({ index: rowIndex, viewPosition: 0, animated: false });
+          }
           agendaJumpTargetRef.current = null;
-        }, 400);
+        }, 120);
         return () => clearTimeout(timer);
       }
       // 首帧 agendaRows 可能为空（observer 未推送）——不清目标，等 rows 到位后本
@@ -678,7 +675,7 @@ export default function PlanScreen() {
         animated: false,
       });
       agendaJumpTargetRef.current = null;
-    }, 400);
+    }, 120);
     return () => clearTimeout(timer);
   }, [agendaJumpKey, agendaPages, agendaRows, viewKind]);
 
@@ -1167,7 +1164,6 @@ export default function PlanScreen() {
            外层 View 供 measureInWindow 取列表窗口坐标（今日组精修定位用） */
         <View ref={agendaListWrapRef} style={styles.listWrapper}>
           <FlatList<AgendaRow>
-            key={`agenda-${agendaJumpKey}`}
             ref={listRef}
             style={styles.list}
             data={agendaRows}
