@@ -1,20 +1,22 @@
-【切片14 · 阶段5d 完成】2026-11-09 13:15
+切片14 阶段5f 完成状态（2026-11-09）
 
-■ 5 条反馈全部落地（提交 63fd8ba + 修正 23ddfa8）
-1. 顶栏标签统一：四视图只显月（本年「11月」/非本年「2025年11月」）；年月选择器从标签正下方弹出；联动=月切月/日同月同日/周周序不变（目标月同序自然周周一）/agenda 定位该月首组。
-2. 间距标准：日视图时间轴顶部 16px（SECTION_GAP=16，后续模块间距沿用此标准值）。
-3. 动效：周条整周切换方向性平移淡入（36px/150ms）；日视图切日平移淡入（40px/200ms）。
-4. 滑动语义（按拍板）：7天头横滑=整周±1（自然周恒落周一）；周视图内容区横滑=选中日±1（整周态=整周±1）；日视图横滑=切前后日；选中日出周界自动整周切换。
-5. 月历：空格子无框空白；额外发现并修复——react-native-calendars 自带英文月头（October 2026）用 customHeader={()=>null} 压掉。
+【任务】阶段5e 汇报后用户报 3 个 bug，已全部修复并真机复验通过。
 
-■ 验证
-- tsc 0 错误；jest 39 套件 492 测试全过（新增自然周域层 8 用例）；expo-doctor 16/18（2 项为既有基线）。
-- 真机（MuMu）已验证：标签统一+选择器弹出位置、选 12 月联动周视图（12/21~12/27 周序保持）、自然周条 一9~日15、内容区横滑 9→10 不切周、7天头横滑整周切换、日视图间距+横滑 21→22、月历空格无框+英文头消失。
+【3 bug 修复明细】
+1. 日视图 00:00 标签被裁一半
+   - 根因：时间轴 gutter 标签 top=hour*HOUR_PX-6，hour=0 时 top=-6，被 Android clipChildren 裁掉上半。
+   - 修复：src/ui/DayTimelineView.tsx:128 top 改 Math.max(0, hour*HOUR_PX-6)。
+   - 真机：11-09/11-10 顶部 00:00 标签完整（f1d/f2c 截图）。
+2. 跨天任务只显示第一天（11-09 13:45 ~ 11-10 13:45 的任务在 11-10 不显示）
+   - 根因：plan.tsx dayTimeline 过滤只收 startAt 在当日内的项。
+   - 修复：改「与当日区间相交」startAt<endMs && (endAt??startAt)>startMs；layoutDayEvents 的 0..1440 裁剪把后续日呈现为 00:00 到结束时刻。
+   - 真机：11-10 时间轴出现「测试内容」块 00:00-13:45（跨午夜裁剪+相交过滤）✓。
+3. 月历左上标签不随滚动联动 + 点今天定位后仍露上月
+   - 修复：src/ui/MonthCalendarView.tsx 增加 onVisibleMonthChange（FlatList onViewableItemsChanged 首可见页回调）+ jumpToMonth/jumpKey 定位（scrollToIndex + onScrollToIndexFailed 400ms 重试，不做「跳近似位置」——highestMeasuredFrameIndex=0 会滚回顶）；plan.tsx monthDayItems 改全量 itemsByDay（联动切月不影响各月 chip）、goToday/applyMonthPick month 分支接入 jumpMonthTo。
+   - 真机：滚到 2027年2月→标签同步「2027年2月」✓；点今天→11月页贴顶无残留 ✓。
 
-■ 提交
-- 63fd8ba feat(s14): 阶段5d 真机反馈迭代3——顶栏标签统一与年月联动/自然周与滑动语义/切换动效/月历空格去框
-- 23ddfa8 fix(s14): 阶段5d 收尾——压掉月历自带英文月头(customHeader=null)
+【验证】tsc 0 错误；jest 39 套件 492 全过；真机 MuMu(127.0.0.1:16384) 三 bug 复验截图 f1d/f2b/f2c/f3c/f3d 全过。
 
-■ 备注
-- 月历进入时 FlatList 视口停在上月缓冲页（非锚点月首屏），属既有行为（5b/5c 起如此），用户未报问题未改动；如需可后续加"进入月视图滚到锚点月"。
-- 真机验收 44-49 清单留用户复验。
+【提交】feat(s14): 阶段5f 真机回归修复——00:00裁切/跨天任务/月历标签联动与今天定位（含 3 张 bug 参考图入库）。
+
+【遗留/风险】无新增。真机验收 54-56 留用户。

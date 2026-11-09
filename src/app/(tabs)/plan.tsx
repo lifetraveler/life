@@ -410,25 +410,35 @@ export default function PlanScreen() {
 
   // 月历数据：锚点月范围内、经筛选后的条目按民用日分桶（月历格 chip 用；
   // 无 startAt 的待办天然不进格子）。agendaGroups 的分组结果对月历无用，独立计算。
+  // 月历 chip 分桶（阶段 5e 改全量）：标签联动会把 anchorMonth 切到视口月，若按
+  // anchorMonth 过滤，翻页后其它月 chip 会空掉——全量分桶一次算好，各页共享。
   const monthDayItems = useMemo(() => {
-    if (viewKind !== 'month' || viewRange === null) {
+    if (viewKind !== 'month') {
       return new Map<string, ItemWithRelations[]>();
     }
-    const ranged = items.filter(
-      (item) =>
-        item.startAt !== null && item.startAt >= viewRange.startMs && item.startAt < viewRange.endMs,
-    );
-    return itemsByDay(filterItems(ranged, activeFilters), viewTime.tzid);
-  }, [activeFilters, items, viewKind, viewRange, viewTime.tzid]);
+    return itemsByDay(filterItems(items, activeFilters), viewTime.tzid);
+  }, [activeFilters, items, viewKind, viewTime.tzid]);
+
+  // 月历定位（阶段 5e）：今天回位/年月选择时 scrollToIndex 到目标月页
+  const [monthJumpKey, setMonthJumpKey] = useState(0);
+  const monthJumpTargetRef = useRef<CivilMonth | null>(null);
+  const jumpMonthTo = useCallback((target: CivilMonth): void => {
+    monthJumpTargetRef.current = target;
+    setMonthJumpKey((n) => n + 1);
+  }, []);
 
   // 日视图时间轴布局：当日范围内经筛选的条目 → layoutDayEvents（阶段 5b）
   const dayTimeline = useMemo(() => {
     if (viewKind !== 'day' || viewRange === null) {
       return null;
     }
+    // 与当日区间「相交」即入选（5e 后补）：跨天任务在后续日也要呈现——
+    // layoutDayEvents 内部会把块裁剪到 0..1440，第二天呈现为 00:00 到结束时刻。
     const ranged = items.filter(
       (item) =>
-        item.startAt !== null && item.startAt >= viewRange.startMs && item.startAt < viewRange.endMs,
+        item.startAt !== null &&
+        item.startAt < viewRange.endMs &&
+        (item.endAt ?? item.startAt) > viewRange.startMs,
     );
     const filtered = filterItems(ranged, activeFilters);
     return {
@@ -661,6 +671,7 @@ export default function PlanScreen() {
     if (viewKind === 'month') {
       const parts = getZonedParts(viewTime.nowMs, viewTime.tzid);
       setAnchorMonth({ year: parts.year, month: parts.month });
+      jumpMonthTo({ year: parts.year, month: parts.month });
       return;
     }
     const parts = getZonedParts(viewTime.nowMs, viewTime.tzid);
@@ -779,6 +790,7 @@ export default function PlanScreen() {
       setMonthPickerVisible(false);
       if (viewKind === 'month') {
         setAnchorMonth({ year, month });
+        jumpMonthTo({ year, month });
         return;
       }
       if (viewKind === 'day') {
@@ -1036,6 +1048,9 @@ export default function PlanScreen() {
           onSelectDay={selectCalendarDay}
           onPrependMonth={prependMonthPage}
           onAppendMonth={appendMonthPage}
+          onVisibleMonthChange={setAnchorMonth}
+          jumpToMonth={monthJumpTargetRef.current}
+          jumpKey={monthJumpKey}
         />
       ) : viewKind === 'day' && dayTimeline !== null ? (
         /* 日视图：纵向时间轴 + 全天/待办 chip 区（阶段 5b）；横滑切前后日（阶段 5c 任务 3） */

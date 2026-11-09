@@ -186,6 +186,18 @@
   prepend 后 350ms 将生效月同步到新顶页（lastPrependedRef）。
 - 「待办」组（startAt 为 null 的条目）仅在 agenda 视图显示，week/day 视图过滤。
 
+### 阶段 5f：真机回归修复（2026-11-09 用户 3 bug，提交后真机复验通过）
+- 00:00 标签被裁一半：日时间轴 gutter 标签 top 改 Math.max(0, hour*HOUR_PX-6)
+  （负偏移被 Android clipChildren 裁掉）。
+- 跨天任务只显示第一天：dayTimeline 过滤改「与当日区间相交」
+  （startAt < endMs && (endAt ?? startAt) > startMs），layoutDayEvents 的
+  0..1440 裁剪把后续日呈现为 00:00 到结束时刻（11-10 显示 00:00-13:45 块）。
+- 月历左上标签不随滚动联动 + 今天定位露上月：MonthCalendarView 增加
+  onVisibleMonthChange（FlatList onViewableItemsChanged 首可见页回调）与
+  jumpToMonth/jumpKey 定位（scrollToIndex + onScrollToIndexFailed 400ms 重试，
+  不做「跳近似位置」——highestMeasuredFrameIndex=0 会滚回顶）；计划页
+  monthDayItems 改全量 itemsByDay（联动切月不影响各页 chip）。
+
 ### 阶段 6：小组件升级
 - 更新快照生成函数，携带 Category 颜色和 timeLabel。
 - 更新小组件 UI。
@@ -301,6 +313,13 @@
     左上标签随视口月联动（含 overscroll 后无滚动事件场景）；年月选择器选任意月
     （含无数据月）都能定位到该月名行。
 53. 「待办」组仅出现在日程视图；周/日视图不显示。
+
+### 阶段 5f 验收
+54. `tsc` 零错误，`jest` 全过。
+55. 日视图时间轴 00:00 标签完整显示（不被裁切）；跨天任务在开始日后的每一天
+    都有时间块（呈现为 00:00 到结束时刻，跨午夜裁剪）。
+56. 月历视图滚动翻月时左上标签随视口月联动（跨年显年）；点「今天」后 11 月页
+    贴顶（无上月残留）。
 
 ### 阶段 6 验收
 41. 桌面小组件展示任务时，左侧带有 Category 对应的颜色小圆点。

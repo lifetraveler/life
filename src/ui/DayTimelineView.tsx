@@ -125,7 +125,7 @@ export function DayTimelineView({
   const gutterLabels = useMemo(
     () =>
       HOUR_LABELS.map((label, hour) => (
-        <Text key={label} style={[styles.hourLabel, { top: hour * HOUR_PX - 6 }]}>
+        <Text key={label} style={[styles.hourLabel, { top: Math.max(0, hour * HOUR_PX - 6) }]}>
           {label}
         </Text>
       )),

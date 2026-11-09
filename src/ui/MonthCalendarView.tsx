@@ -8,10 +8,13 @@
  *   「+N」；今天日号圈高亮；
  * - 点格子 → onSelectDay(civilKey)（civilKey='YYYY-MM-DD'，与 itemsByDay/todayKey 同键）；
  * - 数据由调用方传入 itemsByDay 的分桶结果（本组件不接触 Repository）；
+ * - 阶段 5e：视口首可见页经 onVisibleMonthChange 回调计划页（左上标签随滚动联动）；
+ *   jumpToMonth+jumpKey 变化时 scrollToIndex 定位到目标月页（今天回位/年月选择），
+ *   失败（页未测量）走 onScrollToIndexFailed 等 400ms 行测量完成后重试；
  * - 周条/列表的「‹ ›步进、今天回位」仍由计划页顶栏承担，本组件不重复实现。
  */
 
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useRef, useMemo } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Calendar } from 'react-native-calendars';
 import type { DateData } from 'react-native-calendars';
@@ -38,6 +41,12 @@ interface MonthCalendarViewProps {
   onPrependMonth: () => void;
   /** 向下补页（append 下一月） */
   onAppendMonth: () => void;
+  /** 视口首可见页变化（滚动联动，计划页用于更新左上标签） */
+  onVisibleMonthChange?: (month: CivilMonth) => void;
+  /** 定位目标月（配合 jumpKey；null=无定位） */
+  jumpToMonth?: CivilMonth | null;
+  /** 定位序号：变化时执行一次定位 */
+  jumpKey?: number;
 }
 
 interface CalendarCellProps extends Omit<DayProps, 'date'> {
@@ -70,7 +79,42 @@ export function MonthCalendarView({
   onSelectDay,
   onPrependMonth,
   onAppendMonth,
+  onVisibleMonthChange,
+  jumpToMonth = null,
+  jumpKey = 0,
 }: MonthCalendarViewProps) {
+  const listRef = useRef<FlatList<CivilMonth> | null>(null);
+  // onVisibleMonthChange 用 ref 中转：回调每次渲染都是新函数时 FlatList prop 不抖动
+  const visibleChangeRef = useRef(onVisibleMonthChange);
+  visibleChangeRef.current = onVisibleMonthChange;
+  const handleViewableItemsChanged = useRef(
+    (info: { viewableItems: Array<{ item: CivilMonth; isViewable: boolean }> }) => {
+      const first = info.viewableItems.find((entry) => entry.isViewable)?.item;
+      if (first) {
+        visibleChangeRef.current?.(first);
+      }
+    },
+  ).current;
+  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 50 }).current;
+  // 定位（今天回位/年月选择）：jumpKey 变化 → scrollToIndex 到目标月页；页未测量时
+  // onScrollToIndexFailed 等 400ms（月历页高约 400px，重挂一帧后测量完成）重试。
+  useEffect(() => {
+    if (jumpToMonth === null || jumpKey === 0) {
+      return;
+    }
+    const index = months.findIndex(
+      (month) => month.year === jumpToMonth.year && month.month === jumpToMonth.month,
+    );
+    if (index < 0) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      listRef.current?.scrollToIndex({ index, viewPosition: 0, animated: false });
+    }, 80);
+    return () => clearTimeout(timer);
+    // jumpToMonth 经 ref 语义随 jumpKey 一起变化，此处只依赖 jumpKey
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jumpKey, months]);
   const renderCell = useCallback(
     (cellProps: CalendarCellProps) => {
       const { date, state } = cellProps;
@@ -135,11 +179,21 @@ export function MonthCalendarView({
 
   return (
     <FlatList<CivilMonth>
+      ref={listRef}
       style={styles.list}
       data={flatListData}
       keyExtractor={pageKeyExtractor}
       renderItem={renderMonth}
       maintainVisibleContentPosition={{ minIndexForVisible: 1 }}
+      onViewableItemsChanged={handleViewableItemsChanged}
+      viewabilityConfig={viewabilityConfig}
+      onScrollToIndexFailed={(info) => {
+        // 目标页未测量时不做「跳近似位置」（highestMeasuredFrameIndex=0 会滚回顶部），
+        // 等测量完成后一次性定位
+        setTimeout(() => {
+          listRef.current?.scrollToIndex({ index: info.index, viewPosition: 0, animated: false });
+        }, 400);
+      }}
       onStartReached={onPrependMonth}
       // 阈值收紧到 0.5（阶段 5c 修复「月视图空白格子」）：1.5 时初始单页挂载会连发
       // prepend（offset 0 触发一次，prepend 后视口距顶仍 <1.5 屏再触发一次），视口被
