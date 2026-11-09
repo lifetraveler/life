@@ -1,7 +1,8 @@
 /**
  * 富月历视图（切片 14 阶段 5b，tasks/slice-14.md 阶段 5b-5）：
  * - 纵向 FlatList 无极双向滚动：每月一页（react-native-calendars 的 Calendar，
- *   周一开头 firstDay=1、隐藏自带箭头与英文星期表头，星期表头/月名自行渲染为中文）；
+ *   周一开头 firstDay=1、隐藏自带箭头与英文星期表头，星期表头/月名自行渲染为中文；
+ *   customHeader=null 压掉自带英文月头（October 2026，5d 真机发现）；
  *   向上 prepend 上一月经 maintainVisibleContentPosition 保持视口；
  * - 自定义格子（dayComponent）：日号 + 当日 chip（≤3，分类色条 + 标题一行截断）+
  *   「+N」；今天日号圈高亮；
@@ -119,6 +120,7 @@ export function MonthCalendarView({
           hideArrows={true}
           hideDayNames={true}
           hideExtraDays={true}
+          customHeader={() => null}
           dayComponent={renderCell}
           style={styles.calendar}
         />
