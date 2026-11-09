@@ -380,6 +380,39 @@
     小组件（回前台或等待去抖刷新）该条目从原日期组消失、出现在明天组；
     超过一屏可上下滑动；快速记录按钮两页均可见可点。
 
+### 小组件升级 7b-修复：列表视口塌缩（2026-11-10，用户真机反馈）
+
+#### 现象（用户截图 tasks/小组件bug.png）
+小组件列表「宽度没填满整个宽度，上下长度也没沾满到快速添加按钮上方」：行内容
+约在 72% 宽处截断、5 行后到按钮间大片空白、滚动区异常（滚动条出现且可滚）。
+
+#### 诊断链（决定性证据）
+- 排除 JS/测量侧：原生插桩（node_modules RNWidget.addCollectionView 临时 Log）
+  实测 ListWidget 节点 layout 矩形 4 次渲染全部 = 366×330px（全高全宽）——
+  JS 树的 weight 展开与测量正确。
+- 定位宿主侧：`uiautomator dump` 读 launcher 真实视图层级——
+  ListView 实际 bounds = [482,936][754,1151] = **272×215px**（应为 366×330）；
+  其上 rn_widget_collection_container = 312×381px（应为 406×496），两层恰为
+  应有值的 **76.8%**（312/406=381/496，等比）。
+- 根因：库 S+ 分支（RNWidget.addCollectionViews）用 RemoteViews
+  setViewLayoutWidth/Height 给容器写显式 dp（getWidgetWidth/Height=203×248dp）；
+  宿主 launcher（MuMu12 + Lawnchair）按自身 density（实测等效 ~1.536，
+  而 App 侧 density=2.0）换算该 dp → 容器 203×248×(1.536/2)=156×190.5dp=
+  312×381px，整个列表塌缩：行位图 366px 宽被压进 272px 视口（宽度不满）、
+  视口 215px < 内容 235px（出现滚动条与空旷观感）。
+
+#### 修复
+- patch（node_modules/react-native-android-widget/.../RNWidget.java）：禁用
+  S+ 分支的 setViewLayoutWidth/Height（`if (false && …)`+注释），容器回到
+  rn_widget.xml 的 match_parent=宿主尺寸（与密度无关，即库 pre-S 行为）。
+  存档：patches/react-native-android-widget-splus-container-size.patch
+  （npm install 后需 `git apply` 重打；是否改用 patch-package 由用户拍板，
+  见遗留披露）。
+- 验证（uiautomator 复测）：今日页与周页 ListView bounds 均 = 366×329px；
+  截图确认行满宽、7 条全可见、空白消失、无异常滚动条。
+- 备注：JS 侧零改动（tsc/jest 不受影响）；本机构建链 JDK17
+  （F:\code\tools\jdk17\jdk-17.0.21+9，原 JAVA_HOME 指向已删除目录）。
+
 ### 阶段 7：导入预览
 - 拦截 ICS 和系统日历导入，进入预览勾选页，确认后批量落库。
 
