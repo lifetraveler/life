@@ -20,7 +20,10 @@ const TAB_ICONS: Record<'flash' | 'items' | 'plan' | 'profile', { selected: Ioni
  * 底部 Tab 导航布局（切片 14 阶段 5，tasks/toki_1.webp 图1）：
  * - 4 个入口：闪电（占位，闪电添加留给切片 15）/ 事项（占位）/
  *   计划（主视图，原 index.tsx 移入）/ 我的（原设置页移入）；
- * - initialRouteName="plan"：启动落在计划页，根路由 '/' 命中 (tabs) 默认页；
+ * - initialRouteName="plan"：启动落在计划页；
+ * - index（阶段 5c 补）：重导出 plan，使根 URL life:// 可匹配（桌面图标 /
+ *   dev launcher 默认打开根路径，缺 index 会 Unmatched Route）；
+ *   href:null 隐藏其 Tab 项，底部仍只显示 4 个入口；
  * - headerShown:false：计划页不渲染导航头（验收 16：无"life"标题），
  *   各 Tab 页自管顶部留白与标题；
  * - expo-router Tab 默认不卸载非活动屏：计划页的视图模式、筛选、搜索、
@@ -29,6 +32,7 @@ const TAB_ICONS: Record<'flash' | 'items' | 'plan' | 'profile', { selected: Ioni
 export default function TabsLayout() {
   return (
     <Tabs initialRouteName="plan" screenOptions={{ headerShown: false }}>
+      <Tabs.Screen name="index" options={{ href: null }} />
       <Tabs.Screen
         name="flash"
         options={{
