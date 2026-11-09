@@ -1,36 +1,18 @@
-# 切片14 阶段5h 完成状态（2026-11-09 18:17）
+# 切片14 阶段5h 追加（2026-11-09 18:42）
 
-## 本轮修复（用户 3 bug，全部真机复验通过）
-1. **新增带时间项落进「待办」、旧项像被「挪到对应日」**——已修复
-2. **周视图新增数据要操作下一条才显示**——同根因，已修复
-3. **月历点「今天」先闪 9 月再跳**——已修复
-
-## 根因与修复
-### bug1+2（同一根因，WatermelonDB 订阅语义）
-- 根因：`Query.observe()` 只在「匹配集合成员」变化时发射；行内字段更新（成员不变）
-  不发射。新增保存链=createItem → updateItemTime 两步写，第二步的时间字段属成员
-  不变的字段级变化 → 列表永远停在「无时间」中态（进待办组）；用户后来编辑改时间
-  才触发一次更新，看起来像「挪到对应的日里」。
-- 修复：observeItemsWithTags / observeItems / observeTags / categories 订阅全部改
-  observeWithColumns 列订阅（ITEM_WATCH_COLUMNS / TAG_WATCH_COLUMNS /
-  CATEGORY_WATCH_COLUMNS；item_tags join 表保持 observe()——关联增删本就是成员变化）。
-- 文件：src/data/WatermelonItemRepository.ts
-
-### bug3（月历跳月中间态）
-- 修复：MonthCalendarView 定位改 key 重挂 + initialScrollIndex 渲染期定位
-  （同 agenda 5g 方案），消除「页窗口重置 → 80ms 后才 scrollToIndex」的视口中间态。
-- 文件：src/ui/MonthCalendarView.tsx
-
-## 真机闭环验证（MuMu 127.0.0.1:16384）
-- P5Hwk/P5Hwk2/P5Hwk3 三条带时间项保存后均**直接落位「今天」组**（不再先进待办）
-- 待办组只剩真无时间项 ✓
-- 月历滚远（停顿后）点「今天」一次直达本月页，无闪跳 ✓
-- 注：滚动惯性未停止时立即 tap 会被吞（操作时机，非 bug）
+## agenda 点今天闪旧月瞬态修复
+- 现象（用户）：点「今天」后先跳 9 月再回今天——瞬态约 0.4-1s，此前截图间隔 2.5s 漏捕。
+- 根因：FlatList key 重挂（jumpKey 进 key）后首帧从 offset 0 渲染，4 页窗口首月=9 月，
+  400ms 定位 timer 期间一直显示列表顶。
+- 修复：去 key 重挂；scrollToOffset 估算不依赖行测量，由 400ms timer 改为立即执行，
+  120ms measureInWindow 精修保留（plan.tsx）。
+- 连拍验证（点击后每 ~0.4s 一帧）：全程左上标签「11月」，无 9 月闪现；
+  估算跳过冲（11月尾+12月中转）~0.4s，~0.8s 即位今天组贴顶，~1.6s 稳定。
 
 ## 验证
-- tsc 0 错误；jest 39 套件 492 全过；expo-doctor 16/18（2 失败=基线告警）
-- 提交 c9de2f4「fix(s14): 阶段5h 真机回归修复3——观察订阅列级修正(新增时间字段丢渲染)与月历跳月重挂定位」（4 文件 +109/−32）
-- 任务卡「阶段 5h」小节+验收 60-62 已记录
+- tsc 0 错误；jest 492/492 全过
+- 提交 c429556（含 .tmp-shots 截图清理+gitignore）
+- 任务卡阶段 5h 追加记录+验收 63
 
 ## 提交序列
-74e0a1c(5e) → 6292259(5f) → 4658d6d(5g) → c9de2f4(5h)
+74e0a1c(5e) → 6292259(5f) → 4658d6d(5g) → c9de2f4(5h) → c429556(5h 追加)
