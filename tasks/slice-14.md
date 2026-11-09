@@ -170,6 +170,22 @@
   Calendar 传 `customHeader={() => null}` 整体替换头部组件（该库 headerStyle
   prop 传入后组件内部并不消费，无法用样式压扁）。
 
+### 阶段 5e：真机反馈迭代 4（2026-11-09 用户 3 条反馈，方案 m01618/确认 m01619）
+- 周条 chip 定高（height 62）、「今天」黑点改 absolute 定位——切日后选择框高度不再跳动。
+- agenda 重构为「3 月窗口」无限列表：agendaPages 初始 4 页（生效月前 2 页缓冲）、
+  每页首行为月名标题行（agendaRows 生成），onScroll/onScrollEndDrag 在 offset<50 时
+  prepend 上月、onEndReached append 下月（各 1200ms 防重入）；左上标签=生效月随视口联动；
+  年月选择器选月=重置窗口+jumpKey 重挂+scrollToOffset 定位到该月名行（无数据也生效）。
+- 定位实现教训（真机/Fabric 实锤）：initialScrollIndex 估算不稳定且失败时会触发
+  onScrollToIndexFailed 兜底把视口拉回 offset 0，同时伴随窗口渲染残废（组头在卡片行
+  缺失）；effect 内 setState 改自身 deps 会触发 cleanup 清掉延迟滚动 timer；scrollTo*
+  失败被 logcat 管道失效（MuMu logcat 无 ReactNativeJS 输出）误导多轮。最终方案：
+  月名行定高（marginTop 28 + height 53 + marginBottom 4 = 85px/块），
+  offset = 目标页序 × 85 精确 scrollToOffset。
+- overscroll 标签联动死角：Android 滚动到顶后 overscroll 不再发 onScroll，
+  prepend 后 350ms 将生效月同步到新顶页（lastPrependedRef）。
+- 「待办」组（startAt 为 null 的条目）仅在 agenda 视图显示，week/day 视图过滤。
+
 ### 阶段 6：小组件升级
 - 更新快照生成函数，携带 Category 颜色和 timeLabel。
 - 更新小组件 UI。
@@ -277,6 +293,14 @@
 47. 滑动语义：7 天头横滑=整周 ±1；周视图内容区横滑=选中日 ±1（整周态=整周 ±1）；日视图横滑=切前后日；选中日出周界时周条整体切换。
 48. 周条与日视图切换有方向性平移动效；日视图 00:00 不再与上方工具栏重合（顶部 16px 间距）。
 49. 月历无项目格子无框空白；有项目格子 chip 背景正常；自带英文月头（October 2026）不显示。
+
+### 阶段 5e 验收
+50. `tsc` 零错误，`jest` 全过。
+51. 周视图/日视图切日后 7 天栏选择框高度不变（今天黑点 absolute）。
+52. agenda：上下滑翻月无边界（下滑 prepend 上月、上滑 append 下月，一滑一页）；
+    左上标签随视口月联动（含 overscroll 后无滚动事件场景）；年月选择器选任意月
+    （含无数据月）都能定位到该月名行。
+53. 「待办」组仅出现在日程视图；周/日视图不显示。
 
 ### 阶段 6 验收
 41. 桌面小组件展示任务时，左侧带有 Category 对应的颜色小圆点。

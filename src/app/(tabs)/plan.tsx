@@ -36,6 +36,11 @@
  *   （整周态=整周 ±7），7 天头横滑=整周 ±7；选中日走出当前自然周时周条整体切换；
  *   ④周条/日视图切换平移动效（Animated，150/200ms）；⑤月历空格子去框；
  *   ⑥日视图顶部与周条拉开 16px（区块间距标准值 SECTION_GAP=16）。
+ * - 阶段 5e（真机反馈迭代 4）：①agenda 重构为月窗口——3 月窗口（生效月±1）无边界
+ *   滚动（prepend/append 同月历模式），每页首行月名标题行，左上标签=生效月随视口联动，
+ *   年月选择器选月=重置窗口并定位该月标题行（无数据也生效），「待办」组跟随生效月页首；
+ *   ②周/日视图不再混入无时间待办（「待办」组仅日程视图显示）；③周条 chip 定高+
+ *   今天黑点绝对定位（修复选中切日时行高跳动）。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -50,7 +55,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import type { ViewToken } from 'react-native';
+import type { NativeScrollEvent, NativeSyntheticEvent, ViewToken } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -95,6 +100,8 @@ const CARD_STRIPE_FALLBACK = '#DDDDDD';
  * 后续新模块沿用该值（用户要求参考成熟设计模式定标准）。
  */
 const SECTION_GAP = 16;
+// agenda 月名行整块高度（marginTop 28 + height 53 + marginBottom 4），定位 offset 用
+const AGENDA_MONTH_HEADER_BLOCK = 85;
 
 /** FlatList 行模型：组头（含今天高亮）或卡片 */
 interface AgendaRowHeader {
@@ -103,6 +110,8 @@ interface AgendaRowHeader {
   label: string;
   isToday: boolean;
   count: number;
+  /** 阶段 5e：月名标题行（agenda 月窗口每页首行，定位/联动锚点恒存在） */
+  isMonthHeader?: boolean;
 }
 
 interface AgendaRowItem {
@@ -172,6 +181,15 @@ export default function PlanScreen() {
     return { tzid, nowMs: Date.now() };
   });
 
+  /** 年月标签（阶段 5c 任务 0；阶段 5e 前移供月窗口行复用）：今年只显「11月」，非今年显「2027年1月」。 */
+  const monthLabelOf = useCallback(
+    (year: number, month: number): string => {
+      const now = getZonedParts(viewTime.nowMs, viewTime.tzid);
+      return year === now.year ? `${month}月` : `${year}年${month}月`;
+    },
+    [viewTime],
+  );
+
   // 阶段 5b 锚点：week/day 用 anchorMs（民用日锚点），month 用 anchorMonth（民用月锚点）。
   // 「今天」pill / 周条横滑 / 顶栏 ‹ › 都只改锚点；viewTime 保持固化供回位与「今天」判定。
   const [anchorMs, setAnchorMs] = useState(() => viewTime.nowMs);
@@ -221,6 +239,86 @@ export default function PlanScreen() {
     });
   }, []);
 
+  // —— 阶段 5e agenda 月窗口：与月历同款分页模式 ——
+  // 窗口=[生效月±1]（生效月=agendaTopMonth），上下滑到边缘自动 prepend/append，无边界。
+  const [agendaPages, setAgendaPages] = useState<CivilMonth[]>(() => {
+    const parts = getZonedParts(Date.now(), getDeviceTzid());
+    const current: CivilMonth = { year: parts.year, month: parts.month };
+    // 顶部多留一页缓冲：data 顶恰为生效月时 offset 恒 0、Android overscroll 不发
+    // onScroll，prepend 守卫会永远收不到触发（5e 死锁实锤）；2 页缓冲保证下滑必产生
+    // 滚动事件，链条自启动。
+    return [
+      shiftCivilMonth(current, -2),
+      shiftCivilMonth(current, -1),
+      current,
+      shiftCivilMonth(current, 1),
+    ];
+  });
+  useEffect(() => {
+    // 生效月不在窗口时（年月选择器远跳/今天回位）重置为 [前, 当前, 后]
+    setAgendaPages((prev) => {
+      const target = `${agendaTopMonth.year}-${agendaTopMonth.month}`;
+      if (prev.some((page) => `${page.year}-${page.month}` === target)) {
+        return prev;
+      }
+      return [
+        shiftCivilMonth(agendaTopMonth, -1),
+        agendaTopMonth,
+        shiftCivilMonth(agendaTopMonth, 1),
+      ];
+    });
+  }, [agendaTopMonth]);
+
+  // prepend/append 期间 viewability 联动暂停：插入页会触发一次以缓冲页为首行的
+  // 回调，若不忽略会把「生效月」错移到缓冲页（5e 实测曾连环 prepend 到 2024）。
+  const isPrependingRef = useRef(false);
+  // 最近一次 prepend 的新顶页：overscroll 后无滚动事件，viewability 不会再来，
+  // handleAgendaScroll 用它在防重入窗后把「生效月」同步到新顶页（标签联动）。
+  const lastPrependedRef = useRef<CivilMonth | null>(null);
+  // append 防重入（见 appendAgendaPage 注释）
+  const isAppendingRef = useRef(false);
+  // 不做 prepend 锚定（不用 mVCP、不补偿 offset）：滚到顶触发 prepend 是用户主动
+  // 行为，新页自然顶到 y=0 才是「无缝看上月」；任何锚定都会形成「顶部黑洞」锁死。
+  const prependAgendaPage = useCallback((): void => {
+    isPrependingRef.current = true;
+    // 1200ms：慢滑手势本身约 1.2s，拖动中 y<50 的 onScroll 会连发多帧——窗口小于
+    // 手势时长时一次滑动会连续 prepend 2-3 页（实测），拉齐手势时长后一滑一页。
+    setTimeout(() => {
+      isPrependingRef.current = false;
+    }, 1200);
+    const first = agendaPages[0];
+    if (!first) {
+      return;
+    }
+    const candidate = shiftCivilMonth(first, -1);
+    if (agendaPages.some((page) => page.year === candidate.year && page.month === candidate.month)) {
+      return;
+    }
+    lastPrependedRef.current = candidate;
+    setAgendaPages([candidate, ...agendaPages]);
+  }, [agendaPages]);
+
+  const appendAgendaPage = useCallback((): void => {
+    if (isAppendingRef.current) {
+      return;
+    }
+    isAppendingRef.current = true;
+    // 与 prepend 同款防重入（1200ms）：尾部空月页只有一个月名行高，onEndReached
+    // 在滚动中反复满足阈值时（0.5 屏）会连发 append——实测上滑 3 次连翻到 2027-06。
+    setTimeout(() => {
+      isAppendingRef.current = false;
+    }, 1200);
+    setAgendaPages((prev) => {
+      const last = prev[prev.length - 1];
+      if (!last) {
+        return prev;
+      }
+      const candidate = shiftCivilMonth(last, 1);
+      return prev.some((page) => page.year === candidate.year && page.month === candidate.month)
+        ? prev
+        : [...prev, candidate];
+    });
+  }, []);
   useEffect(() => itemRepository.observeItemsWithTags(setItems), []);
   useEffect(() => itemRepository.observeTags(setAllTags), []);
 
@@ -289,7 +387,9 @@ export default function PlanScreen() {
     [viewTime],
   );
 
-  // 数据链：范围谓词（agenda 不限范围；startAt=null 恒通过）→ 筛选 → 分组
+  // 数据链：范围谓词（agenda 不限范围；startAt=null 恒通过）→ 筛选 → 分组。
+  // 阶段 5e：周/日视图（含周单日态）不再混入无时间待办——它们是"某天"的视图，
+  // 「待办」组仅在日程视图显示。
   const agendaGroups = useMemo(() => {
     const ranged =
       viewRange !== null
@@ -299,7 +399,8 @@ export default function PlanScreen() {
               (item.startAt >= viewRange.startMs && item.startAt < viewRange.endMs),
           )
         : items;
-    const filtered = filterItems(ranged, activeFilters);
+    const scoped = viewKind === 'agenda' ? ranged : ranged.filter((item) => item.startAt !== null);
+    const filtered = filterItems(scoped, activeFilters);
     return groupItemsForAgenda(filtered, {
       viewKind,
       nowMs: viewTime.nowMs,
@@ -385,6 +486,130 @@ export default function PlanScreen() {
     return result;
   }, [displayedGroups, todayKey]);
 
+  // —— 阶段 5e：agenda 月窗口数据 ——
+  // 每页=月名标题行（恒存在，供定位与标签联动）+ 该月按日分组行；
+  // 「待办」组（无时间项）跟随生效月（agendaTopMonth）页首。
+  const agendaRows = useMemo<AgendaRow[]>(() => {
+    if (viewKind !== 'agenda') {
+      return [];
+    }
+    const result: AgendaRow[] = [];
+    const todoSource = filterItems(
+      items.filter((item) => item.startAt === null),
+      activeFilters,
+    );
+    for (const page of agendaPages) {
+      result.push({
+        kind: 'header',
+        key: `month-${page.year}-${page.month}`,
+        label: monthLabelOf(page.year, page.month),
+        isToday: false,
+        count: 0,
+        isMonthHeader: true,
+      });
+      if (
+        page.year === agendaTopMonth.year &&
+        page.month === agendaTopMonth.month &&
+        todoSource.length > 0
+      ) {
+        const todoGroups = groupItemsForAgenda(todoSource, {
+          viewKind: 'agenda',
+          nowMs: viewTime.nowMs,
+          tzid: viewTime.tzid,
+        });
+        for (const group of todoGroups) {
+          result.push({
+            kind: 'header',
+            key: `header-${group.key}`,
+            label: group.label,
+            isToday: false,
+            count: group.items.length,
+          });
+          for (const itemRecord of group.items) {
+            result.push({
+              kind: 'item',
+              key: `item-${group.key}-${itemRecord.id}`,
+              civilKey: group.key,
+              item: itemRecord,
+            });
+          }
+        }
+      }
+      const range = getMonthRangeForCivil(viewTime.tzid, page.year, page.month);
+      const ranged = items.filter(
+        (item) =>
+          item.startAt !== null && item.startAt >= range.startMs && item.startAt < range.endMs,
+      );
+      const groups = groupItemsForAgenda(filterItems(ranged, activeFilters), {
+        viewKind: 'agenda',
+        nowMs: viewTime.nowMs,
+        tzid: viewTime.tzid,
+      });
+      for (const group of groups) {
+        result.push({
+          kind: 'header',
+          key: `header-${group.key}`,
+          label: group.label,
+          isToday: group.kind === 'day' && group.key === todayKey,
+          count: group.items.length,
+        });
+        for (const itemRecord of group.items) {
+          result.push({
+            kind: 'item',
+            key: `item-${group.key}-${itemRecord.id}`,
+            civilKey: group.key,
+            item: itemRecord,
+          });
+        }
+      }
+    }
+    return result;
+  }, [
+    activeFilters,
+    agendaPages,
+    agendaTopMonth,
+    items,
+    monthLabelOf,
+    todayKey,
+    viewKind,
+    viewTime,
+  ]);
+
+  // agenda 定位（年月选择器/今天 pill/冷启动）：jumpKey 进 FlatList key 触发重挂载
+  // 重置窗口，再命令式 scrollToOffset 到目标月名行顶。不用 initialScrollIndex——
+  // Fabric 实测其估算定位不稳定、失败还会走 onScrollToIndexFailed 兜底把视口拉回
+  // offset 0（5e 实锤）。offset 用月名行定高块精确计算：非生效月页只有 1 个月名行，
+  // 目标行 index = pages 里的页序号，offset = index × 块高。
+  const initialJumpParts = getZonedParts(viewTime.nowMs, viewTime.tzid);
+  const agendaJumpTargetRef = useRef<CivilMonth | null>({
+    year: initialJumpParts.year,
+    month: initialJumpParts.month,
+  });
+  const [agendaJumpKey, setAgendaJumpKey] = useState(1);
+  useEffect(() => {
+    if (viewKind !== 'agenda') {
+      return;
+    }
+    const target = agendaJumpTargetRef.current;
+    if (target === null) {
+      return;
+    }
+    const index = agendaPages.findIndex(
+      (page) => page.year === target.year && page.month === target.month,
+    );
+    if (index < 0) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      listRef.current?.scrollToOffset({
+        offset: index * AGENDA_MONTH_HEADER_BLOCK,
+        animated: false,
+      });
+      agendaJumpTargetRef.current = null;
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [agendaJumpKey, agendaPages, viewKind]);
+
   const emptyMessage = useMemo(() => {
     if (viewKind === 'week') {
       // 阶段 5c 周双态；阶段 5d 整周态=自然周语义
@@ -405,14 +630,7 @@ export default function PlanScreen() {
     [viewTime.tzid],
   );
 
-  /** 年月标签（阶段 5c 任务 0）：今年只显「11月」，非今年显「2027年1月」。 */
-  const monthLabelOf = useCallback(
-    (year: number, month: number): string => {
-      const now = getZonedParts(viewTime.nowMs, viewTime.tzid);
-      return year === now.year ? `${month}月` : `${year}年${month}月`;
-    },
-    [viewTime],
-  );
+  /** 年月标签：见上方 monthLabelOf（阶段 5e 前移到 viewTime 之后）。 */
 
   /**
    * 顶栏标签（阶段 5d 统一）：四视图一律只显民用月——本年「11月」/非本年「2025年11月」。
@@ -434,7 +652,7 @@ export default function PlanScreen() {
     setAnchorMonth((prev) => shiftCivilMonth(prev, dir));
   }, []);
 
-  /** 「今天」pill：agenda 滚动定位今日分组；week/day 锚点回今日；month 回本月。 */
+  /** 「今天」pill：agenda 回本月窗口并定位月名行；week/day 锚点回今日；month 回本月。 */
   const goToday = useCallback((): void => {
     if (viewKind === 'week' || viewKind === 'day') {
       setAnchorMs(viewTime.nowMs);
@@ -445,11 +663,43 @@ export default function PlanScreen() {
       setAnchorMonth({ year: parts.year, month: parts.month });
       return;
     }
-    const index = rows.findIndex((row) => row.kind === 'header' && row.key === `header-${todayKey}`);
-    if (index >= 0) {
-      listRef.current?.scrollToIndex({ index, viewPosition: 0, animated: true });
-    }
-  }, [rows, todayKey, viewKind, viewTime]);
+    const parts = getZonedParts(viewTime.nowMs, viewTime.tzid);
+    const target: CivilMonth = { year: parts.year, month: parts.month };
+    setAgendaTopMonth(target);
+    setAgendaPages([
+      shiftCivilMonth(target, -2),
+      shiftCivilMonth(target, -1),
+      target,
+      shiftCivilMonth(target, 1),
+    ]);
+    agendaJumpTargetRef.current = target;
+    setAgendaJumpKey((n) => n + 1);
+  }, [viewKind, viewTime]);
+
+  // prepend 守卫（阶段 5e）：不用 onStartReached——mVCP 锚定后视口恒停在锚行顶
+  // （距顶≈一个月名行高 89px），onStartReached 的 0.5 屏阈值会持续满足形成无限
+  // prepend；改在 onScroll 里判 offset<50（<月名行高，仅用户真滚到 9 月行顶才触发），
+  // isPrependingRef 防重入，去重由 prependAgendaPage 内部保证。
+  const handleAgendaScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      if (isPrependingRef.current) {
+        return;
+      }
+      if (event.nativeEvent.contentOffset.y < 50) {
+        prependAgendaPage();
+        // overscroll 死角：prepend 后视口顶=新页月名行（offset 0），之后不会再有
+        // 滚动事件触发 viewability——防重入窗（300ms）结束后把生效月同步到新顶页。
+        const candidate = lastPrependedRef.current;
+        if (candidate !== null) {
+          const month = candidate;
+          setTimeout(() => {
+            setAgendaTopMonth(month);
+          }, 350);
+        }
+      }
+    },
+    [prependAgendaPage],
+  );
 
   /** 「周」pill（阶段 5c 任务 6）：单日态 ↔ 整周态切换；仅周视图渲染。 */
   const toggleWeekMode = useCallback((): void => {
@@ -543,30 +793,39 @@ export default function PlanScreen() {
         setAnchorMs(resolveDayStart(viewTime.tzid, monday));
         return;
       }
-      // agenda：滚动到该月第一组（civilKey 零填充 YYYY-MM-DD，前缀匹配 'YYYY-MM-'；
-      // 「待办」组（无时间项）key 非日期形态被正则排除）
-      const prefix = `${year}-${month < 10 ? `0${month}` : month}-`;
-      const index = rows.findIndex(
-        (row) =>
-          row.kind === 'header' &&
-          row.key.startsWith(`header-${prefix}`) &&
-          /^header-\d{4}-\d{2}-/.test(row.key),
-      );
-      if (index >= 0) {
-        listRef.current?.scrollToIndex({ index, viewPosition: 0, animated: true });
-      }
+      // agenda（阶段 5e 月窗口）：生效月切到目标月，同步重置窗口（本轮渲染即含目标
+      // 月名行），jumpKey 重挂载 + scrollToOffset 定位——无论该月有无数据都生效。
+      const picked: CivilMonth = { year, month };
+      setAgendaTopMonth(picked);
+      setAgendaPages([
+        shiftCivilMonth(picked, -2),
+        shiftCivilMonth(picked, -1),
+        picked,
+        shiftCivilMonth(picked, 1),
+      ]);
+      agendaJumpTargetRef.current = picked;
+      setAgendaJumpKey((n) => n + 1);
     },
-    [anchorMs, partsOf, rows, viewKind, viewTime],
+    [viewKind],
   );
 
   /** agenda 标签跟随（阶段 5c 任务 1）：取首可见行的民用日，更新顶栏月份。 */
   const handleViewableItemsChanged = useRef(
     (info: { viewableItems: ViewToken[]; changed: ViewToken[] }) => {
+      if (isPrependingRef.current) {
+        return;
+      }
       const first = info.viewableItems[0]?.item as AgendaRow | undefined;
       if (!first) {
         return;
       }
-      const civilKey = first.kind === 'header' ? first.key.slice('header-'.length) : first.civilKey;
+      // 月名行 key='month-YYYY-MM'；日期组头 key='header-YYYY-MM-DD'；待办组头='header-unscheduled'
+      const civilKey =
+        first.kind === 'header'
+          ? first.key.startsWith('month-')
+            ? `${first.key.slice('month-'.length)}-01`
+            : first.key.slice('header-'.length)
+          : first.civilKey;
       const monthPart = civilKey.slice(0, 7); // 'YYYY-MM'
       const [yearPart, monthDigits] = monthPart.split('-');
       const year = Number(yearPart);
@@ -621,6 +880,14 @@ export default function PlanScreen() {
   const renderRow = useCallback(
     ({ item: row }: { item: AgendaRow }) => {
       if (row.kind === 'header') {
+        if (row.isMonthHeader === true) {
+          // 阶段 5e：月名标题行（agenda 月窗口每页首行，比日期组头醒目）
+          return (
+            <View style={styles.monthHeaderRow}>
+              <Text style={styles.monthHeaderText}>{row.label}</Text>
+            </View>
+          );
+        }
         return (
           <View style={styles.groupHeader}>
             <View style={[styles.groupHeaderPill, row.isToday && styles.groupHeaderPillToday]}>
@@ -795,14 +1062,34 @@ export default function PlanScreen() {
             onViewableItemsChanged={handleViewableItemsChanged}
             viewabilityConfig={viewabilityConfig}
             onScrollToIndexFailed={(info) => {
-              // 分组行未渲染完成时先跳近似位置再重试（RN 官方建议模式）
-              listRef.current?.scrollToOffset({ offset: info.highestMeasuredFrameIndex * 72, animated: false });
+              // 官方建议的「先跳近似位置」在这里有害：highestMeasuredFrameIndex 为 0
+              // 时等于滚回顶部，抹掉 initialScrollIndex 的定位（5e 实锤）。改为等行
+              // 测量完成后一次性 scrollToIndex。
               setTimeout(() => {
-                listRef.current?.scrollToIndex({ index: info.index, viewPosition: 0, animated: true });
-              }, 50);
+                listRef.current?.scrollToIndex({ index: info.index, viewPosition: 0, animated: false });
+              }, 400);
             }}
           />
         </View>
+      ) : viewKind === 'agenda' ? (
+        /* 日程视图（阶段 5e 月窗口）：3 月窗口无边界滚动，标签随视口联动 */
+        <FlatList<AgendaRow>
+          key={`agenda-${agendaJumpKey}`}
+          ref={listRef}
+          style={styles.list}
+          data={agendaRows}
+          renderItem={renderRow}
+          keyExtractor={rowKeyExtractor}
+          onEndReached={appendAgendaPage}
+          onEndReachedThreshold={0.5}
+          onScroll={handleAgendaScroll}
+          onScrollEndDrag={handleAgendaScroll}
+          scrollEventThrottle={16}
+          ListEmptyComponent={<EmptyState message={emptyMessage} />}
+          contentContainerStyle={agendaRows.length === 0 ? styles.listEmpty : undefined}
+          onViewableItemsChanged={handleViewableItemsChanged}
+          viewabilityConfig={viewabilityConfig}
+        />
       ) : (
         <FlatList<AgendaRow>
           ref={listRef}
@@ -979,7 +1266,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 3,
-    paddingVertical: 8,
+    // 阶段 5e：定高——「今天」黑点改绝对定位后不再参与布局，行高不随选中/黑点增减变化
+    height: 62,
     borderRadius: 12,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#ECECEC',
@@ -1009,10 +1297,26 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   weekStripTodayDot: {
+    // 阶段 5e：绝对定位不占布局（chip 已定高），避免今天黑点撑高整行
+    position: 'absolute',
+    bottom: 5,
+    alignSelf: 'center',
     width: 4,
     height: 4,
     borderRadius: 2,
     backgroundColor: '#111111',
+  },
+  // 阶段 5e：agenda 月窗口的月名标题行（每页首行）
+  monthHeaderRow: {
+    marginTop: 28,
+    marginBottom: 4,
+    // 定高：定位 offset=index×块高(85) 的前提（见 agenda 定位 effect）
+    height: 53,
+  },
+  monthHeaderText: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111111',
   },
   // 链接行（阶段 5c 删除：已归档入口移入筛选面板）
   // Agenda 列表
