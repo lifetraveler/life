@@ -14,7 +14,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
 
-import { itemRepository, widgetSnapshotWriter } from '../../data';
+import { itemRepository } from '../../data';
 import { serializeExportData } from '../../domain/export';
 import { buildIcs } from '../../domain/ics/buildIcs';
 import { parseIcs } from '../../domain/ics/parseIcs';
@@ -22,7 +22,7 @@ import type { AppSettings, TagDisplayMode } from '../../domain/settings';
 import { reminderScheduler } from '../../notifications';
 import TagChip from '../../ui/TagChip';
 import { getDeviceTzid } from '../../ui/timeFormat';
-import { refreshTodayWidgets } from '../../widget';
+import { refreshWidgetDataNow } from '../../widget';
 import {
   setLastExportResult,
   setLastImportResult,
@@ -156,7 +156,9 @@ export default function SettingsPage() {
   /**
    * 阶段 7a：小组件显示开关切换。乐观更新 → updateSettings → 成功后手动触发一次
    * 小组件快照重写 + requestWidgetUpdate（fire-and-forget，失败仅 warn——快照刷新
-   * 失败不影响设置保存本身）；失败回滚 + 页内提示（不用 Alert）。
+   * 失败不影响设置保存本身）。阶段 7b 起改走 refreshWidgetDataNow 统一管线：
+   * 今日+周两张快照都重写并按页状态渲染（开关只影响今日页，但渲染必须保持在
+   * 用户当前停留的页上，不能让开关把周页顶回今日页）。
    */
   const handleWidgetFlagChange = useCallback(
     async (
@@ -172,17 +174,7 @@ export default function SettingsPage() {
       try {
         await itemRepository.updateSettings({ [key]: value });
         setWidgetError(null);
-        const nowMs = Date.now();
-        const written = await widgetSnapshotWriter.writeSnapshotFromRepository(
-          nowMs,
-          getDeviceTzid(),
-        );
-        if (written) {
-          const snapshot = widgetSnapshotWriter.readSnapshot();
-          if (snapshot !== null) {
-            await refreshTodayWidgets(snapshot);
-          }
-        }
+        await refreshWidgetDataNow('settings-toggle');
       } catch (error) {
         console.warn('[slice-14] 小组件显示开关保存失败', error);
         setWidgetFlags(previous);

@@ -88,8 +88,11 @@ function toOverdueEntry(item: ItemWithRelations): WidgetSnapshotEntry {
   };
 }
 
-/** 已安排项：allDay → '全天'；startAt null（防御）→ '未安排'；否则 tzid 下 'HH:mm'。 */
-function toScheduledEntry(item: ItemWithRelations, tzid: string): WidgetSnapshotEntry {
+/**
+ * 已安排项：allDay → '全天'；startAt null（防御）→ '未安排'；否则 tzid 下 'HH:mm'。
+ * 阶段 7b 起导出：周快照（weekSnapshot.ts）的条目与此同构，共用同一 mapper。
+ */
+export function toScheduledEntry(item: ItemWithRelations, tzid: string): WidgetSnapshotEntry {
   let timeLabel: string;
   if (item.allDay) {
     timeLabel = '全天';
@@ -149,5 +152,38 @@ export function buildTodayWidgetSnapshot(
     generatedAt: input.nowMs,
     tzid: input.tzid,
     groups: { overdue, scheduled, todos },
+  };
+}
+
+/**
+ * 快照单条最小形状收窄（切片 14 阶段 7b 从 WidgetSnapshotWriter 下沉到 domain：
+ * 今日快照与周快照的读取端共用同一份；数据源是我们自己写入的 JSON，但
+ * SharedPreferences 仍可能被旧版本/手工改动污染，此处防御）。
+ * id/title/type/timeLabel/status 必须是 string；categoryColor 阶段 5 起新增，
+ * 宽松读（undefined/null → null，其余字段仍严格）。
+ */
+export function narrowSnapshotEntry(value: unknown): WidgetSnapshotEntry | null {
+  if (typeof value !== 'object' || value === null) {
+    return null;
+  }
+  const e = value as Record<string, unknown>;
+  const legacyColor = e.categoryColor;
+  if (
+    typeof e.id !== 'string'
+    || typeof e.title !== 'string'
+    || typeof e.type !== 'string'
+    || typeof e.timeLabel !== 'string'
+    || typeof e.status !== 'string'
+    || !(legacyColor === undefined || legacyColor === null || typeof legacyColor === 'string')
+  ) {
+    return null;
+  }
+  return {
+    id: e.id,
+    title: e.title,
+    type: e.type as WidgetSnapshotEntry['type'],
+    timeLabel: e.timeLabel,
+    status: e.status as WidgetSnapshotEntry['status'],
+    categoryColor: legacyColor === undefined ? null : legacyColor,
   };
 }

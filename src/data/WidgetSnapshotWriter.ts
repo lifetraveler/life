@@ -3,9 +3,13 @@
  * - 桥接通道：WidgetSnapshotStore 本地 Expo 模块（modules/widget-snapshot-store，方案 A，
  *   用户开工确认；react-native-android-widget 自身无任何存储 API）；
  * - 键：WIDGET_SNAPSHOT_PREFS_KEY（'widget_today_snapshot_v1'，AGENTS §7.16 冻结）；
+ *   阶段 7b 新增周快照键 WIDGET_WEEK_SNAPSHOT_PREFS_KEY（'widget_week_snapshot_v1'）
+ *   与页状态键 WIDGET_PAGE_STATE_PREFS_KEY（'widget_page_state_v1'，docs/proposals/
+ *   slice-14-widget-phase7.md 已确认）；
  * - 数据来源：消费切片 7 视图查询 listOverdueItems / listScheduledItemsInRange（签名冻结）
- *   与阶段 7a 的 listUnscheduledItems，经 buildTodayWidgetSnapshot 纯函数生成；
- *   本类不查询、不重复实现分组；过期/待办两组是否拉取由 app_settings 小组件开关决定；
+ *   与阶段 7a 的 listUnscheduledItems，经 buildTodayWidgetSnapshot / buildWeekWidgetSnapshot
+ *   纯函数生成；本类不查询、不重复实现分组；过期/待办两组是否拉取由 app_settings
+ *   小组件开关决定；
  * - Repository 接口不变（repository.md 冻结）；本类挂在 src/data/ 但不是 Repository 实现；
  * - 所有失败（原生模块缺失、写入失败、JSON 异常）捕获记录并返回失败态，不向上抛：
  *   小组件刷新失败不影响 App 主流程（任务卡实现要求）。
@@ -14,9 +18,22 @@
 import { getTodayRange } from '../domain/views/ranges';
 import {
   buildTodayWidgetSnapshot,
+  narrowSnapshotEntry,
   WIDGET_SNAPSHOT_PREFS_KEY,
 } from '../domain/widget';
 import type { WidgetSnapshot } from '../domain/widget';
+import {
+  buildWeekWidgetSnapshot,
+  getWidgetWeekDayStarts,
+  narrowWidgetWeekSnapshot,
+  WIDGET_WEEK_SNAPSHOT_PREFS_KEY,
+} from '../domain/widget/weekSnapshot';
+import type { WidgetWeekSnapshot } from '../domain/widget/weekSnapshot';
+import {
+  narrowWidgetPageState,
+  WIDGET_PAGE_STATE_PREFS_KEY,
+} from '../domain/widget/pageState';
+import type { WidgetPageName } from '../domain/widget/pageState';
 import type { ItemRepository } from './ItemRepository';
 import WidgetSnapshotStoreModule from '../../modules/widget-snapshot-store';
 
@@ -60,6 +77,27 @@ export class WidgetSnapshotWriter {
     }
   }
 
+  /**
+   * 查库 → 生成周快照 → 写入 SharedPreferences（阶段 7b）。
+   * 范围 = 今天起 7 天（getWidgetWeekDayStarts，DST 语义同 getTodayRange）；
+   * 只含已安排项（有 start_at），不读 app_settings（周页暂无显示开关，7c 若加再接）。
+   * 返回写入是否成功。
+   */
+  async writeWeekSnapshotFromRepository(nowMs: number, tzid: string): Promise<boolean> {
+    try {
+      const { dayStartsMs, rangeEndMs } = getWidgetWeekDayStarts(nowMs, tzid);
+      const items = await this.itemRepository.listScheduledItemsInRange(
+        dayStartsMs[0],
+        rangeEndMs,
+      );
+      const snapshot = buildWeekWidgetSnapshot({ items, dayStartsMs, nowMs, tzid });
+      return this.writeWeekSnapshot(snapshot);
+    } catch (error) {
+      console.warn('[WidgetSnapshotWriter] writeWeekSnapshotFromRepository failed:', error);
+      return false;
+    }
+  }
+
   /** 序列化并写入；返回 commit() 是否成功（原生模块同步落盘）。 */
   writeSnapshot(snapshot: WidgetSnapshot): boolean {
     try {
@@ -67,6 +105,17 @@ export class WidgetSnapshotWriter {
       return WidgetSnapshotStoreModule.setString(WIDGET_SNAPSHOT_PREFS_KEY, json);
     } catch (error) {
       console.warn('[WidgetSnapshotWriter] writeSnapshot failed:', error);
+      return false;
+    }
+  }
+
+  /** 序列化并写入周快照（阶段 7b）；返回 commit() 是否成功。 */
+  writeWeekSnapshot(snapshot: WidgetWeekSnapshot): boolean {
+    try {
+      const json = JSON.stringify(snapshot);
+      return WidgetSnapshotStoreModule.setString(WIDGET_WEEK_SNAPSHOT_PREFS_KEY, json);
+    } catch (error) {
+      console.warn('[WidgetSnapshotWriter] writeWeekSnapshot failed:', error);
       return false;
     }
   }
@@ -87,6 +136,47 @@ export class WidgetSnapshotWriter {
     } catch (error) {
       console.warn('[WidgetSnapshotWriter] readSnapshot failed:', error);
       return null;
+    }
+  }
+
+  /** 读取上周持久化周快照（阶段 7b，渲染兜底用）；缺失/损坏返回 null。 */
+  readWeekSnapshot(): WidgetWeekSnapshot | null {
+    try {
+      const raw = WidgetSnapshotStoreModule.getString(WIDGET_WEEK_SNAPSHOT_PREFS_KEY);
+      if (raw === null) {
+        return null;
+      }
+      const parsed: unknown = JSON.parse(raw);
+      return narrowWidgetWeekSnapshot(parsed);
+    } catch (error) {
+      console.warn('[WidgetSnapshotWriter] readWeekSnapshot failed:', error);
+      return null;
+    }
+  }
+
+  /** 持久化页状态（阶段 7b，taskHandler SWITCH_PAGE 调用）；返回写入是否成功。 */
+  writePageState(page: WidgetPageName): boolean {
+    try {
+      const json = JSON.stringify({ page });
+      return WidgetSnapshotStoreModule.setString(WIDGET_PAGE_STATE_PREFS_KEY, json);
+    } catch (error) {
+      console.warn('[WidgetSnapshotWriter] writePageState failed:', error);
+      return false;
+    }
+  }
+
+  /** 读取页状态（阶段 7b）；缺失/损坏回退 'today'（narrowWidgetPageState 兜底）。 */
+  readPageState(): WidgetPageName {
+    try {
+      const raw = WidgetSnapshotStoreModule.getString(WIDGET_PAGE_STATE_PREFS_KEY);
+      if (raw === null) {
+        return narrowWidgetPageState(null);
+      }
+      const parsed: unknown = JSON.parse(raw);
+      return narrowWidgetPageState(parsed);
+    } catch (error) {
+      console.warn('[WidgetSnapshotWriter] readPageState failed:', error);
+      return narrowWidgetPageState(null);
     }
   }
 }
@@ -124,34 +214,7 @@ function narrowWidgetSnapshot(value: unknown): WidgetSnapshot | null {
 
 function narrowEntryList(list: unknown[]): WidgetSnapshot['groups']['overdue'] {
   return list.flatMap((entry) => {
-    const e = narrowEntry(entry);
+    const e = narrowSnapshotEntry(entry);
     return e === null ? [] : [e];
   });
-}
-
-function narrowEntry(value: unknown): WidgetSnapshot['groups']['overdue'][number] | null {
-  if (typeof value !== 'object' || value === null) {
-    return null;
-  }
-  const e = value as Record<string, unknown>;
-  // categoryColor 为 v0.14 阶段 5 新增：旧版本快照无此字段，宽松读为 null（其余字段仍严格）
-  const legacyColor = e.categoryColor;
-  if (
-    typeof e.id !== 'string'
-    || typeof e.title !== 'string'
-    || typeof e.type !== 'string'
-    || typeof e.timeLabel !== 'string'
-    || typeof e.status !== 'string'
-    || !(legacyColor === undefined || legacyColor === null || typeof legacyColor === 'string')
-  ) {
-    return null;
-  }
-  return {
-    id: e.id,
-    title: e.title,
-    type: e.type as WidgetSnapshot['groups']['overdue'][number]['type'],
-    timeLabel: e.timeLabel,
-    status: e.status as WidgetSnapshot['groups']['overdue'][number]['status'],
-    categoryColor: legacyColor === undefined ? null : legacyColor,
-  };
 }

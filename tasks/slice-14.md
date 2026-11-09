@@ -325,6 +325,61 @@
 72. 真机验证（用户执行）：今日条目超过组件可视高度时，列表可上下滑动浏览
     （Native ListView），快速记录按钮始终可见；建 10+ 条验证。
 
+### 小组件升级 7b：今日/周页签切换（2026-11-10，提案 docs/proposals/slice-14-widget-phase7.md）
+
+#### 目标（用户 4 需求的第 3 条；左右滑平台不可行——库全库仅 ClickableView 无 swipe/onTouch，7a 前已实锤，用户拍板页签方案）
+组件内「今日 | 周」点击页签；周页=今天起 7 天按天分组、每天上限 20；页状态持久化。
+
+#### 实现记录（2026-11-10）
+
+- 领域层｜weekSnapshot.ts（新增）：`WIDGET_WEEK_SNAPSHOT_PREFS_KEY`
+  （'widget_week_snapshot_v1'）、`WIDGET_WEEK_DAY_COUNT=7`、
+  `WIDGET_WEEK_MAX_PER_DAY=20`；`getWidgetWeekDayStarts(nowMs,tzid)`
+  （7 个民用日起点+第 8 天终点，DST 语义同 resolveDayStart）、
+  `buildWeekWidgetSnapshot`（纯函数：滤 archived/startAt null，按民用日分桶
+  取最大满足下标，组内沿用输入序截 20，dayLabel 今天/明天/'周X D' 与 App
+  日程分组同规则，timeLabel 复用 snapshot.ts toScheduledEntry——7b 起导出）、
+  `narrowWidgetWeekSnapshot`（读取端收窄，坏日跳过）。
+- 领域层｜pageState.ts（新增）：'widget_page_state_v1'、
+  `WidgetPageName='today'|'week'`、默认 'today'、`narrowWidgetPageState`
+  （损坏回退今日页）。
+- 下沉｜snapshot.ts 增导出 `narrowSnapshotEntry`（从 WidgetSnapshotWriter
+  私有实现下沉 domain，今日/周快照读取端共用）；writer 改 import。
+- 写入器｜WidgetSnapshotWriter 增 writeWeekSnapshotFromRepository（查
+  listScheduledItemsInRange(周起,周终)→build→写）、writeWeekSnapshot/
+  readWeekSnapshot、writePageState/readPageState。
+- taskHandler｜WIDGET_CLICK 增 SWITCH_PAGE 分支（clickActionData.page 收窄后
+  writePageState→完整渲染，不拉起 App）；渲染管线统一 renderCurrentWidget：
+  今日+周两张快照并行写（三级兜底各自同构，周兜底快照带真实 7 天窗）→
+  readPageState→渲染；WIDGET_UPDATE 触发点 4 语义不变。
+- 渲染｜TodayWidget.tsx：头部「今日 | 周」pill 页签（active=accent 底+粗体，
+  inactive=muted 描边；clickAction SWITCH_PAGE + {page}）；今日页布局沿用
+  7a；周页=单个 ListWidget 混排「日期头行+条目行」（平台一次渲染最多 2 个
+  集合视图，RNWidgetCollectionService.MAX_COLLECTION_WIDGETS=2，不能一天一个
+  ListWidget——本次实锤），空天组头缀『· 无安排』，weekSnapshot null 占位文案；
+  条目行抽 renderEntryRow 共用（周页 key 加 civilKey 前缀防跨天撞 key）。
+- 桥与设置页｜snapshotBridge 刷新改为并行写两张快照→读页状态→refreshWidgetViews
+  （今日快照读失败兜底空快照，两张全缺才跳过）；新增导出 refreshWidgetDataNow
+  （reason 参数，设置页开关保存后调用）；profile.tsx 开关处理改走统一管线
+  （原 writeSnapshot→refreshTodayWidgets 序列删除——开关只影响今日页数据，
+  但渲染必须保持在用户当前页，不能把周页顶回今日页）；requestWidgetUpdate
+  更名 refreshWidgetViews（入参 {page, snapshot, weekSnapshot}）。
+- 测试｜weekSnapshot.test.ts（新增 10 例：键名/日起点/7 天恒在+labels+civilKey/
+  分桶+越界丢弃/护栏截断/archived 与 null 跳过/dayStarts 数量防错/pageState 收窄
+  合法与兜底）；pageState.test.ts（新增 5 例）；修一处断言反转（domain 不重排、
+  输入序保留——乱序输入实证该口径）。
+- 验证｜`npx tsc --noEmit` 零错误；`npx jest --runInBand` 42 套件 521 用例全过
+  （原 506 + 新增 15）。
+
+#### 7b 验收
+73. `tsc` 零错误，`jest` 全过（521）。
+74. 真机验证（用户执行）：小组件头部出现「今日 | 周」页签；点「周」切到周页
+    （今天起 7 天分组，组头 今天/明天/周X D，条目带色点），点「今日」切回；
+    切到周页后冷启动 App 再看小组件仍停在周页（页状态持久化）。
+75. 真机验证（用户执行）：周页数据与 App 周视图一致——改某任务时间到明天后
+    小组件（回前台或等待去抖刷新）该条目从原日期组消失、出现在明天组；
+    超过一屏可上下滑动；快速记录按钮两页均可见可点。
+
 ### 阶段 7：导入预览
 - 拦截 ICS 和系统日历导入，进入预览勾选页，确认后批量落库。
 
