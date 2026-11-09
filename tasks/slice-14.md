@@ -198,6 +198,23 @@
   不做「跳近似位置」——highestMeasuredFrameIndex=0 会滚回顶）；计划页
   monthDayItems 改全量 itemsByDay（联动切月不影响各页 chip）。
 
+### 阶段 5g：真机回归修复 2（2026-11-09 用户 3 bug，真机复验通过）
+- 日程「点今天」不跳今日组：goToday 的 agenda 分支从「定位月名行」升级为
+  AgendaJumpTarget（day=civilKey 今日组 / month=月名行），冷启动初值=今日组。
+- 今日组定位链（排障实锤 4 层）：①onScroll 里 offset<50 的 prepend 守卫在
+  FlatList 重挂首帧（key 变化）也会以 y=0 触发，把定位好的组头顶下去——
+  prepend 触发源改 onScrollEndDrag/onMomentumScrollEnd（仅用户手势），onScroll
+  只记 lastAgendaOffsetRef；②Fabric 下 scrollToIndex 对 window 外未测量行
+  静默无效果（不滚、也不触发 onScrollToIndexFailed）——先按平均行高估算
+  offset 大跳把窗口推近；③Android FlatList 子项用 transform 定位，item 内
+  View 的 onLayout.y 恒≈0 不可用——今日组头挂 ref，精修用 measureInWindow
+  （header 窗口 y − 列表窗口 y + 当前 offset）；④最终真因=今日组接近列表
+  末尾、末尾内容不足一屏，max offset 卡在贴顶之前（header offset 1027.5 >
+  max offset 970，差 57.5 物理滚不到）——agenda 列表底部补
+  paddingBottom≈0.9×屏高 filler，今日组可贴顶。
+- 前两条用户 bug（学习不并排/周视图不展示）复现时数据链与 4-lane 布局实测
+  正常，未复现（疑为旧状态/anchor 不在当天），待用户再报。
+
 ### 阶段 6：小组件升级
 - 更新快照生成函数，携带 Category 颜色和 timeLabel。
 - 更新小组件 UI。
@@ -320,6 +337,13 @@
     都有时间块（呈现为 00:00 到结束时刻，跨午夜裁剪）。
 56. 月历视图滚动翻月时左上标签随视口月联动（跨年显年）；点「今天」后 11 月页
     贴顶（无上月残留）。
+
+### 阶段 5g 验收
+57. `tsc` 零错误，`jest` 全过（492）。
+58. 日程视图冷启动直接定位「今天」组头贴顶；滚远（跨多月）后点「今天」跳回
+    今日组贴顶；从 prepend 出的远月（如 7 月）点「今天」同样跳回贴顶。
+59. 日程视图下滑到列表顶可连续 prepend 前几个月名行（10→9→8→7…），左上标签
+    随生效月联动；列表末尾有一屏左右留白（今日组贴顶的滚动余量）。
 
 ### 阶段 6 验收
 41. 桌面小组件展示任务时，左侧带有 Category 对应的颜色小圆点。

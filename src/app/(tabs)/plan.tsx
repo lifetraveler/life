@@ -54,8 +54,14 @@ import {
   StyleSheet,
   Text,
   View,
+  useWindowDimensions,
 } from 'react-native';
-import type { NativeScrollEvent, NativeSyntheticEvent, ViewToken } from 'react-native';
+import type {
+  LayoutChangeEvent,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
+  ViewToken,
+} from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -102,6 +108,16 @@ const CARD_STRIPE_FALLBACK = '#DDDDDD';
 const SECTION_GAP = 16;
 // agenda 月名行整块高度（marginTop 28 + height 53 + marginBottom 4），定位 offset 用
 const AGENDA_MONTH_HEADER_BLOCK = 85;
+// 日程列表底部 filler（阶段 5g）：「今天」组常接近列表末尾，末尾内容不足一屏时
+// 滚动上限（max offset）会卡在「今天组头贴顶之前」（真机实测 header offset 1027.5
+// > max offset 970，差 57.5 永远滚不到）——底部补约一屏留白保证今日组可贴顶。
+const AGENDA_TAIL_PAD_RATIO = 0.9;
+
+/**
+ * agenda 定位目标（阶段 5f）：「今天」pill/冷启动定位到今日分组头（kind='day'，
+ * 无今日组时回退月名行）；年月选择器定位到目标月名行（kind='month'）。
+ */
+type AgendaJumpTarget = { kind: 'day'; civilKey: string } | { kind: 'month'; month: CivilMonth };
 
 /** FlatList 行模型：组头（含今天高亮）或卡片 */
 interface AgendaRowHeader {
@@ -155,6 +171,7 @@ function AgendaItemCard({
 
 export default function PlanScreen() {
   const router = useRouter();
+  const { height: windowHeight } = useWindowDimensions();
   const [items, setItems] = useState<ItemWithRelations[]>([]);
   const [allTags, setAllTags] = useState<Tag[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -591,22 +608,67 @@ export default function PlanScreen() {
   // offset 0（5e 实锤）。offset 用月名行定高块精确计算：非生效月页只有 1 个月名行，
   // 目标行 index = pages 里的页序号，offset = index × 块高。
   const initialJumpParts = getZonedParts(viewTime.nowMs, viewTime.tzid);
-  const agendaJumpTargetRef = useRef<CivilMonth | null>({
-    year: initialJumpParts.year,
-    month: initialJumpParts.month,
+  const agendaJumpTargetRef = useRef<AgendaJumpTarget | null>({
+    kind: 'day',
+    civilKey: formatLocalDate(initialJumpParts),
   });
   const [agendaJumpKey, setAgendaJumpKey] = useState(1);
   useEffect(() => {
-    if (viewKind !== 'agenda') {
+    if (viewKind !== 'agenda' || agendaJumpTargetRef.current === null) {
       return;
     }
     const target = agendaJumpTargetRef.current;
-    if (target === null) {
-      return;
+    const parseMonth = (civilKey: string): CivilMonth => {
+      const [yearPart, monthPart] = civilKey.split('-');
+      return { year: Number(yearPart), month: Number(monthPart) };
+    };
+    if (target.kind === 'day') {
+      // 今日组头定位（5f）：滚到 header-<todayKey> 行；无今日组（当天无安排）回退月名行。
+      // 定位目标统一降级为月定位（今天组行用 scrollToIndex，Fabric 首帧常未测量，
+      // 失败走 FlatList onScrollToIndexFailed 的 400ms 重试兜底）。
+      const rowIndex = agendaRows.findIndex(
+        (row) => row.kind === 'header' && row.key === `header-${target.civilKey}`,
+      );
+      if (rowIndex >= 0) {
+        const timer = setTimeout(() => {
+          // Fabric 实锤（5g）：scrollToIndex 对 window 外未测量行静默无效果（不滚、
+          // 也不触发 onScrollToIndexFailed）——先按平均行高估算 offset 把窗口推近，
+          // 目标行渲染测量后用 measureInWindow 实测窗口坐标精修贴顶
+          // （Android item 内 onLayout.y 是 transform 局部值，不可用）。
+          listRef.current?.scrollToOffset({
+            offset: Math.max(0, rowIndex * AGENDA_MONTH_HEADER_BLOCK),
+            animated: false,
+          });
+          setTimeout(() => {
+            const header = todayHeaderRef.current;
+            const wrap = agendaListWrapRef.current;
+            if (header && wrap) {
+              header.measureInWindow((hx, hy) => {
+                wrap.measureInWindow((wx, wy) => {
+                  const targetOffset = lastAgendaOffsetRef.current + (hy - wy);
+                  listRef.current?.scrollToOffset({
+                    offset: Math.max(0, targetOffset),
+                    // animated:true：Android 实测（5g）小步程序滚动（<60px）会被
+                    // FlatList 忽略（est 大跳有效、精修小跳无效），动画滚动不受影响
+                    animated: true,
+                  });
+                });
+              });
+            } else {
+              listRef.current?.scrollToIndex({ index: rowIndex, viewPosition: 0, animated: false });
+            }
+          }, 120);
+          agendaJumpTargetRef.current = null;
+        }, 400);
+        return () => clearTimeout(timer);
+      }
+      // 首帧 agendaRows 可能为空（observer 未推送）——不清目标，等 rows 到位后本
+      // effect 随 agendaRows 依赖重跑再定位（冷启动实测必须保留）。
+      return undefined;
     }
-    const index = agendaPages.findIndex(
-      (page) => page.year === target.year && page.month === target.month,
-    );
+    // 走到这里 target.kind 必为 'month'（'day' 分支已全部 return）
+    const month: CivilMonth = target.month;
+    const index = agendaPages.findIndex((page) => page.year === month.year && page.month === month.month);
     if (index < 0) {
       return;
     }
@@ -618,7 +680,7 @@ export default function PlanScreen() {
       agendaJumpTargetRef.current = null;
     }, 400);
     return () => clearTimeout(timer);
-  }, [agendaJumpKey, agendaPages, viewKind]);
+  }, [agendaJumpKey, agendaPages, agendaRows, viewKind]);
 
   const emptyMessage = useMemo(() => {
     if (viewKind === 'week') {
@@ -683,14 +745,18 @@ export default function PlanScreen() {
       target,
       shiftCivilMonth(target, 1),
     ]);
-    agendaJumpTargetRef.current = target;
+    // 5f：「今天」pill 定位到今日分组头（无今日组时 effect 内回退月名行）
+    agendaJumpTargetRef.current = { kind: 'day', civilKey: todayKey };
     setAgendaJumpKey((n) => n + 1);
-  }, [viewKind, viewTime]);
+  }, [viewKind, viewTime, todayKey]);
 
   // prepend 守卫（阶段 5e）：不用 onStartReached——mVCP 锚定后视口恒停在锚行顶
   // （距顶≈一个月名行高 89px），onStartReached 的 0.5 屏阈值会持续满足形成无限
-  // prepend；改在 onScroll 里判 offset<50（<月名行高，仅用户真滚到 9 月行顶才触发），
+  // prepend；改判 offset<50（<月名行高，仅用户真滚到 9 月行顶才触发），
   // isPrependingRef 防重入，去重由 prependAgendaPage 内部保证。
+  // 触发源只挂用户手势结束事件（onScrollEndDrag/onMomentumScrollEnd，阶段 5g）：
+  // onScroll 在 FlatList 重挂（key 变化）首帧也会以 y=0 触发一次，会把「点今天」
+  // 定位好的今天组头顶下去一次（真机 gt_far6 实锤）；程序滚动不产生手势事件。
   const handleAgendaScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
       if (isPrependingRef.current) {
@@ -815,7 +881,7 @@ export default function PlanScreen() {
         picked,
         shiftCivilMonth(picked, 1),
       ]);
-      agendaJumpTargetRef.current = picked;
+      agendaJumpTargetRef.current = { kind: 'month', month: picked };
       setAgendaJumpKey((n) => n + 1);
     },
     [viewKind],
@@ -889,6 +955,13 @@ export default function PlanScreen() {
 
   const rowKeyExtractor = useCallback((row: AgendaRow): string => row.key, []);
 
+  // 今日组头 ref（阶段 5g）：Android FlatList 子项用 transform 定位，item 内 View 的
+  // onLayout.y 恒≈局部 0（真机实测 24），拿不到 content offset——精修定位改用
+  // measureInWindow 实测窗口坐标（header 窗口 y - 列表窗口 y + 当前 offset）。
+  const todayHeaderRef = useRef<View | null>(null);
+  const agendaListWrapRef = useRef<View | null>(null);
+  const lastAgendaOffsetRef = useRef(0);
+
   const renderRow = useCallback(
     ({ item: row }: { item: AgendaRow }) => {
       if (row.kind === 'header') {
@@ -901,7 +974,10 @@ export default function PlanScreen() {
           );
         }
         return (
-          <View style={styles.groupHeader}>
+          <View
+            ref={row.isToday ? todayHeaderRef : undefined}
+            style={styles.groupHeader}
+          >
             <View style={[styles.groupHeaderPill, row.isToday && styles.groupHeaderPillToday]}>
               <Text style={[styles.groupHeaderText, row.isToday && styles.groupHeaderTextToday]}>
                 {row.label}
@@ -1087,24 +1163,45 @@ export default function PlanScreen() {
           />
         </View>
       ) : viewKind === 'agenda' ? (
-        /* 日程视图（阶段 5e 月窗口）：3 月窗口无边界滚动，标签随视口联动 */
-        <FlatList<AgendaRow>
-          key={`agenda-${agendaJumpKey}`}
-          ref={listRef}
-          style={styles.list}
-          data={agendaRows}
-          renderItem={renderRow}
-          keyExtractor={rowKeyExtractor}
-          onEndReached={appendAgendaPage}
-          onEndReachedThreshold={0.5}
-          onScroll={handleAgendaScroll}
-          onScrollEndDrag={handleAgendaScroll}
-          scrollEventThrottle={16}
+        /* 日程视图（阶段 5e 月窗口）：3 月窗口无边界滚动，标签随视口联动。
+           外层 View 供 measureInWindow 取列表窗口坐标（今日组精修定位用） */
+        <View ref={agendaListWrapRef} style={styles.listWrapper}>
+          <FlatList<AgendaRow>
+            key={`agenda-${agendaJumpKey}`}
+            ref={listRef}
+            style={styles.list}
+            data={agendaRows}
+            renderItem={renderRow}
+            keyExtractor={rowKeyExtractor}
+            onEndReached={appendAgendaPage}
+            onEndReachedThreshold={0.5}
+            onScroll={(event) => {
+              lastAgendaOffsetRef.current = event.nativeEvent.contentOffset.y;
+            }}
+            scrollEventThrottle={16}
+            onScrollEndDrag={handleAgendaScroll}
+            onMomentumScrollEnd={handleAgendaScroll}
           ListEmptyComponent={<EmptyState message={emptyMessage} />}
-          contentContainerStyle={agendaRows.length === 0 ? styles.listEmpty : undefined}
+          contentContainerStyle={
+            agendaRows.length === 0
+              ? styles.listEmpty
+              : { paddingBottom: Math.round(windowHeight * AGENDA_TAIL_PAD_RATIO) }
+          }
           onViewableItemsChanged={handleViewableItemsChanged}
           viewabilityConfig={viewabilityConfig}
-        />
+          onScrollToIndexFailed={(info) => {
+            // 两段精修兜底：估算 offset 偏差大时目标行可能仍未测量——再推一次窗口
+            // 后重试精修（onScrollToIndexFailed 在两段式首跳后才会触发）。
+            listRef.current?.scrollToOffset({
+              offset: Math.max(0, info.index * AGENDA_MONTH_HEADER_BLOCK),
+              animated: false,
+            });
+            setTimeout(() => {
+              listRef.current?.scrollToIndex({ index: info.index, viewPosition: 0, animated: false });
+            }, 400);
+          }}
+          />
+        </View>
       ) : (
         <FlatList<AgendaRow>
           ref={listRef}
