@@ -1,0 +1,32 @@
+# 切片14 阶段5c 状态更新（2026-11-09 12:26）
+
+## 最新：根路由修复已提交（99013e6）
+
+**问题**：MuMu/桌面图标启动显示 "Unmatched Route — life:///"。
+**根因**：阶段5 把 index.tsx 移入 (tabs)/plan.tsx 后，(tabs) 组没有 index 路由，
+根 URL（桌面图标 / dev launcher 默认打开的 life://）无法匹配。
+**修复**：
+- 新增 src/app/(tabs)/index.tsx：<Redirect href="/plan" />（根 URL 挂载即重定向，
+  Tab 高亮正确落在「计划」上）
+- src/app/(tabs)/_layout.tsx：<Tabs.Screen name="index" options={{ href: null }} />
+  （隐藏第 5 个 Tab）
+**验证**：tsc 0 错误；jest 39 套件 484 全过；真机冷启动直接进主界面，
+「计划」Tab 蓝色高亮正确，5c 全部新 UI 在位。
+
+## 阶段5c 已完成（243868f）
+
+1. 年月选择器：左上标签点击弹自绘 MonthPickerPopover（‹2026› 步年+12月宫格，
+   当前月黑胶囊，零新依赖）；今年显「11月」/非今年「2027年1月」
+2. agenda 标签跟随首可见分组（onViewableItemsChanged）
+3. 月视图空白格修复（MonthCalendarView 预取阈值 1.5→0.5）+ 渲染回归测试
+4. 日视图：左 44px 时间列+右画布（修复遮挡）+横滑 ±1 天切前后日
+5. ‹›箭头仅月视图保留
+6. 周视图双态：默认单日态（点周条天只切选中天）；「周」pill 切整周态（7天分组）
+7. 已归档移入筛选面板底部首行
+8. 筛选面板操作行：订阅日历/智能颜色编码/更多日历设置（占位「即将上线」）
+
+验证：tsc 0；jest 484 全过；expo-doctor 16/18（2 项为既有基线告警）。
+提交链：99013e6 ← 243868f（5c）← eb7fc54（5b）← 0f5b4cc（5）。
+
+Metro：bash-0acba02dcfcd4dc9（npx expo start --dev-client --port 8081 --clear）运行中。
+真机验收 34-40 与 19-27 中手动项留给用户。

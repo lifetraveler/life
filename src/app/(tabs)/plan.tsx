@@ -6,12 +6,15 @@
  *   + onApply 双参）；移除内嵌快速录入框（创建落点改为全屏新建页 /item/new，
  *   ui.md「快速记录落点 v0.14」）；右下 FAB 新建入口 → router.push('/item/new')；
  *   无导航头标题（(tabs) 布局 headerShown:false，验收 16）；
- * - 阶段 5b 顶栏：左=标签（week ±7 天 / day ±1 天 / month ±1 月步进），右=🔍
- *   （进入 /search 独立搜索页）+ 筛选（激活时红点）+ 「今天」pill（agenda 滚动定位
- *   今日分组；week/day 锚点回今日；month 回本月）；
- * - 阶段 5b 周条：week/day 视图显示今日起 7 天窗 chip 行，横滑（PanResponder）±7 天；
+ * - 阶段 5b 顶栏：左=标签（点击弹年月选择器），右=🔍（进入 /search 独立搜索页）
+ *   + 筛选（激活时红点）+「今天」pill（agenda 滚动定位今日分组；week/day 锚点回
+ *   今日；month 回本月）；
+ * - 阶段 5d 顶栏标签统一：四视图一律只显月（本年「11月」/非本年「2025年11月」）；
+ *   agenda 仍跟随首可见分组月，week/day 跟随锚点民用月，month 跟随锚点月；
+ * - 阶段 5d 周条=自然周（周一~周日，getWeekStart），替代 5b 的「锚点起 7 天」；
+ *   周视图整周态窗口同步改为自然周（getWeekRange）；7 天头横滑=整周 ±1；
  * - 数据链：observeItemsWithTags 单订阅（默认列表，§7.23 ItemWithRelations）→
- *   视图范围谓词（agenda 全量；week=锚点起 7 天窗；day=单日；month=锚点月；
+ *   视图范围谓词（agenda 全量；week=整周态自然周/单日态单日；day=单日；month=锚点月；
  *   startAt=null 恒通过进「待办」组）→
  *   filterItems（激活筛选，维度内 OR、维度间 AND）→ groupItemsForAgenda 按天分组 →
  *   FlatList 摊平渲染（header|item 两类行）；本月视图组序倒序（按日期从晚到早）；
@@ -27,17 +30,33 @@
  *   ⑤‹›箭头仅月视图保留（周/日靠周条与横滑）；⑥周视图单日态（默认：点周条天只切换
  *   选中天，列表按日程排版显示该天记录）+「周」pill 切整周态（7 天按天分组），
  *   整周态点某天回单日态；⑦「已归档」移入筛选面板。
+ * - 阶段 5d（真机反馈迭代 3）：①顶栏标签统一只显月+年月选择联动（month→切月、
+ *   day→同月同日、week→周序不变切到目标月同序自然周，nthMondayDateOfMonth）；
+ *   ②周条改自然周（周一~周日），整周态窗口同步；③周视图内容区横滑=选中日 ±1
+ *   （整周态=整周 ±7），7 天头横滑=整周 ±7；选中日走出当前自然周时周条整体切换；
+ *   ④周条/日视图切换平移动效（Animated，150/200ms）；⑤月历空格子去框；
+ *   ⑥日视图顶部与周条拉开 16px（区块间距标准值 SECTION_GAP=16）。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, FlatList, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  Alert,
+  Animated,
+  Easing,
+  FlatList,
+  PanResponder,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import type { ViewToken } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
 import { itemRepository } from '../../data';
 import type { Category } from '../../domain/category';
-import { formatLocalDate, getZonedParts } from '../../domain/recurrence/civilTime';
+import { daysInMonth, formatLocalDate, getZonedParts } from '../../domain/recurrence/civilTime';
 import type { ItemWithRelations } from '../../domain/relations/itemWithRelations';
 import type { Tag } from '../../domain/tag';
 import { groupItemsForAgenda } from '../../domain/views/agenda';
@@ -47,10 +66,13 @@ import type { ItemFilters } from '../../domain/views/filters';
 import {
   getDayRange,
   getMonthRangeForCivil,
-  getSevenDayWindow,
+  getWeekRange,
+  getWeekStart,
+  nthMondayDateOfMonth,
   resolveDayStart,
   shiftAnchorDay,
   shiftCivilMonth,
+  weekIndexInMonth,
 } from '../../domain/views/ranges';
 import type { CivilMonth } from '../../domain/views/ranges';
 import { itemsByDay } from '../../domain/views/itemsByDay';
@@ -67,6 +89,12 @@ const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
 
 /** 分类色缺失/非法时卡片色条回退灰 */
 const CARD_STRIPE_FALLBACK = '#DDDDDD';
+
+/**
+ * 区块间距标准值（阶段 5d 定档）：顶栏/周条/内容区之间的纵向间距统一 16，
+ * 后续新模块沿用该值（用户要求参考成熟设计模式定标准）。
+ */
+const SECTION_GAP = 16;
 
 /** FlatList 行模型：组头（含今天高亮）或卡片 */
 interface AgendaRowHeader {
@@ -236,16 +264,17 @@ export default function PlanScreen() {
 
   const filtersActive = hasActiveFilters(activeFilters);
 
-  // 视图时间范围：agenda=全量；week=锚点起 7 天窗（整周态）或锚点单日（单日态）；
+  // 视图时间范围：agenda=全量；week=整周态自然周（周一~周日）或单日态单日；
   // day=锚点单日；month=锚点月（[start, end) 左闭右开）
   const viewRange = useMemo(() => {
     if (viewKind === 'agenda') {
       return null;
     }
     if (viewKind === 'week') {
-      // 阶段 5c 周双态：单日态按单日取数（列表=该天记录，日程排版）；整周态按 7 天窗
+      // 阶段 5c 周双态 + 5d 自然周：单日态按单日取数（列表=该天记录，日程排版）；
+      // 整周态取锚点所在自然周（周一 00:00 ~ 下周一 00:00）
       return weekMode === 'whole'
-        ? getSevenDayWindow(anchorMs, viewTime.tzid)
+        ? getWeekRange(anchorMs, viewTime.tzid)
         : getDayRange(anchorMs, viewTime.tzid);
     }
     if (viewKind === 'day') {
@@ -358,8 +387,8 @@ export default function PlanScreen() {
 
   const emptyMessage = useMemo(() => {
     if (viewKind === 'week') {
-      // 阶段 5c 周双态：单日态提示与 day 视图一致
-      return weekMode === 'whole' ? '近 7 天没有安排' : '当天没有安排';
+      // 阶段 5c 周双态；阶段 5d 整周态=自然周语义
+      return weekMode === 'whole' ? '本周没有安排' : '当天没有安排';
     }
     if (viewKind === 'day') {
       return '当天没有安排';
@@ -385,21 +414,9 @@ export default function PlanScreen() {
     [viewTime],
   );
 
-  /** 单日标签：今年「11月7日 周六」，非今年「2027年11月7日 周六」（阶段 5c 任务 0）。 */
-  const dayLabelOf = useCallback(
-    (ms: number): string => {
-      const parts = partsOf(ms);
-      const weekday = WEEKDAY_LABELS[parts.weekday] ?? '';
-      const now = getZonedParts(viewTime.nowMs, viewTime.tzid);
-      const yearPrefix = parts.year === now.year ? '' : `${parts.year}年`;
-      return `${yearPrefix}${parts.month}月${parts.day}日 ${weekday}`;
-    },
-    [partsOf, viewTime],
-  );
-
   /**
-   * 顶栏标签（阶段 5c）：agenda=首可见分组月（跟随上下滑）；month=锚点月；
-   * day=锚点单日；week=整周态 7 天窗跨度（跨年才带年）/ 单日态锚点单日。
+   * 顶栏标签（阶段 5d 统一）：四视图一律只显民用月——本年「11月」/非本年「2025年11月」。
+   * agenda=首可见分组月（跟随上下滑）；week/day=锚点民用月；month=锚点月。
    */
   const topBarTitle = useMemo(() => {
     if (viewKind === 'agenda') {
@@ -408,25 +425,9 @@ export default function PlanScreen() {
     if (viewKind === 'month') {
       return monthLabelOf(anchorMonth.year, anchorMonth.month);
     }
-    if (viewKind === 'day') {
-      return dayLabelOf(anchorMs);
-    }
-    // week：单日态=选中那天；整周态=窗口起止（跨度含年才带年）
-    if (weekMode === 'day') {
-      return dayLabelOf(anchorMs);
-    }
-    const range = getSevenDayWindow(anchorMs, viewTime.tzid);
-    const start = partsOf(range.startMs);
-    const end = partsOf(range.endMs - 1);
-    const sameMonth = start.year === end.year && start.month === end.month;
-    const endLabel = sameMonth
-      ? `${end.day}日`
-      : end.year === start.year
-        ? `${end.month}月${end.day}日`
-        : `${end.year}年${end.month}月${end.day}日`;
-    const startYearPrefix = start.year === end.year ? '' : `${start.year}年`;
-    return `${startYearPrefix}${start.month}月${start.day}日 - ${endLabel}`;
-  }, [agendaTopMonth, anchorMonth, anchorMs, dayLabelOf, monthLabelOf, partsOf, viewKind, viewTime, weekMode]);
+    const parts = partsOf(anchorMs);
+    return monthLabelOf(parts.year, parts.month);
+  }, [agendaTopMonth, anchorMonth, anchorMs, monthLabelOf, partsOf, viewKind]);
 
   /** 顶栏 ‹ ›（阶段 5c 收敛：仅月视图保留，week/day 靠周条与横滑切日）。 */
   const stepAnchor = useCallback((dir: 1 | -1): void => {
@@ -466,17 +467,41 @@ export default function PlanScreen() {
     setWeekMode('day');
   }, []);
 
-  /** 周条 7 天：锚点窗内各民用日；单日态（day 视图或周视图单日态）高亮锚点日，整周态无高亮。 */
+  // 周条起点：锚点所在自然周的周一 00:00（阶段 5d：周条=自然周，非锚点起 7 天）。
+  // 选中日（anchorMs）±1 走出当前自然周时，周一变化 → 周条整体切到新自然周。
+  const weekStartMs = useMemo(
+    () => (viewKind === 'week' || viewKind === 'day' ? getWeekStart(anchorMs, viewTime.tzid) : 0),
+    [anchorMs, viewKind, viewTime.tzid],
+  );
+
+  // 周条切换动效（阶段 5d）：自然周变化时按切换方向平移淡入（36px，150ms）
+  const stripAnim = useRef(new Animated.Value(0)).current;
+  const prevWeekStartRef = useRef(weekStartMs);
+  useEffect(() => {
+    if (prevWeekStartRef.current === weekStartMs) {
+      return;
+    }
+    const direction = weekStartMs > prevWeekStartRef.current ? 1 : -1;
+    prevWeekStartRef.current = weekStartMs;
+    stripAnim.setValue(direction * 36);
+    Animated.timing(stripAnim, {
+      toValue: 0,
+      duration: 150,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [stripAnim, weekStartMs]);
+
+  /** 周条 7 天：自然周（周一~周日）各民用日；单日态高亮锚点日，整周态无高亮。 */
   const weekStripDays = useMemo(() => {
-    if (viewKind !== 'week' && viewKind !== 'day') {
+    if (viewKind !== 'week' && viewKind !== 'day' || weekStartMs === 0) {
       return [];
     }
-    const range = getSevenDayWindow(anchorMs, viewTime.tzid);
     const anchorKey = formatLocalDate(getZonedParts(anchorMs, viewTime.tzid));
     const highlightSelection = viewKind === 'day' || (viewKind === 'week' && weekMode === 'day');
     const days: Array<{ key: string; startMs: number; dayOfMonth: number; weekdayLabel: string; isToday: boolean; isSelected: boolean }> = [];
     for (let i = 0; i < 7; i += 1) {
-      const startMs = shiftAnchorDay(range.startMs, viewTime.tzid, i);
+      const startMs = shiftAnchorDay(weekStartMs, viewTime.tzid, i);
       const parts = getZonedParts(startMs, viewTime.tzid);
       const key = formatLocalDate(parts);
       days.push({
@@ -489,21 +514,33 @@ export default function PlanScreen() {
       });
     }
     return days;
-  }, [anchorMs, todayKey, viewKind, viewTime.tzid, weekMode]);
+  }, [anchorMs, todayKey, viewKind, viewTime.tzid, weekMode, weekStartMs]);
 
   /**
-   * 年月选择器（阶段 5c 任务 0）：选择后按当前视图落点——
-   * month→切月；week/day→锚定该月 1 日；agenda→滚动定位该月第一组。
+   * 年月选择器（阶段 5c 任务 0；阶段 5d 联动）：
+   * - month → 切锚点月；
+   * - day → 同月同日（当前日号超出目标月天数时收敛到月末）；
+   * - week → 周序不变：当前自然周在「周一所在月」是第几周，就切到目标月同序
+   *   自然周的周一（nthMondayDateOfMonth，不足回退最后一周）；周条跟随新锚点；
+   * - agenda → 滚动定位该月第一组。
    */
   const applyMonthPick = useCallback(
     (year: number, month: number): void => {
       setMonthPickerVisible(false);
-      setAnchorMonth({ year, month });
       if (viewKind === 'month') {
+        setAnchorMonth({ year, month });
         return;
       }
-      if (viewKind === 'week' || viewKind === 'day') {
-        setAnchorMs(resolveDayStart(viewTime.tzid, { year, month, day: 1 }));
+      if (viewKind === 'day') {
+        const parts = partsOf(anchorMs);
+        const day = Math.min(parts.day, daysInMonth(year, month));
+        setAnchorMs(resolveDayStart(viewTime.tzid, { year, month, day }));
+        return;
+      }
+      if (viewKind === 'week') {
+        const weekIndex = weekIndexInMonth(anchorMs, viewTime.tzid);
+        const monday = nthMondayDateOfMonth(viewTime.tzid, year, month, weekIndex);
+        setAnchorMs(resolveDayStart(viewTime.tzid, monday));
         return;
       }
       // agenda：滚动到该月第一组（civilKey 零填充 YYYY-MM-DD，前缀匹配 'YYYY-MM-'；
@@ -519,7 +556,7 @@ export default function PlanScreen() {
         listRef.current?.scrollToIndex({ index, viewPosition: 0, animated: true });
       }
     },
-    [rows, viewKind, viewTime],
+    [anchorMs, partsOf, rows, viewKind, viewTime],
   );
 
   /** agenda 标签跟随（阶段 5c 任务 1）：取首可见行的民用日，更新顶栏月份。 */
@@ -543,7 +580,7 @@ export default function PlanScreen() {
 
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 50 }).current;
 
-  // 周条横滑：水平拖过阈值 ±7 天（PanResponder 只接管移动，chip 的 onPress 不受影响）
+  // 周条横滑（7 天头）：水平拖过阈值 = 整体切周 ±1（自然周对齐后 ±7 天恒落在周一）
   const weekStripPanResponder = useMemo(
     () =>
       PanResponder.create({
@@ -558,6 +595,25 @@ export default function PlanScreen() {
         },
       }),
     [viewTime.tzid],
+  );
+
+  // 内容区横滑（阶段 5d，仅周视图）：单日态=选中日 ±1；整周态=整周 ±1。
+  // 纵向意图（|dx| ≤ |dy|*1.5）不接管，FlatList 滚动不受影响。
+  const contentPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_event, gesture) =>
+          Math.abs(gesture.dx) > 24 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.5,
+        onPanResponderRelease: (_event, gesture) => {
+          const delta = weekMode === 'whole' ? 7 : 1;
+          if (gesture.dx <= -40) {
+            setAnchorMs((prev) => shiftAnchorDay(prev, viewTime.tzid, delta));
+          } else if (gesture.dx >= 40) {
+            setAnchorMs((prev) => shiftAnchorDay(prev, viewTime.tzid, -delta));
+          }
+        },
+      }),
+    [viewTime.tzid, weekMode],
   );
 
   const rowKeyExtractor = useCallback((row: AgendaRow): string => row.key, []);
@@ -661,9 +717,13 @@ export default function PlanScreen() {
         </View>
       </View>
 
-      {/* 阶段 5b 周条：week/day 视图显示 7 天窗 chip 行，横滑 ±7 天，点某天进日视图 */}
+      {/* 阶段 5d 周条：自然周（周一~周日）chip 行，横滑=整周 ±1，点某天切选中日；
+          自然周变化时平移动效 */}
       {weekStripDays.length > 0 ? (
-        <View style={styles.weekStrip} {...weekStripPanResponder.panHandlers}>
+        <Animated.View
+          style={[styles.weekStrip, { transform: [{ translateX: stripAnim }] }]}
+          {...weekStripPanResponder.panHandlers}
+        >
           {weekStripDays.map((day) => (
             <Pressable
               key={day.key}
@@ -695,7 +755,7 @@ export default function PlanScreen() {
               {day.isToday && !day.isSelected ? <View style={styles.weekStripTodayDot} /> : null}
             </Pressable>
           ))}
-        </View>
+        </Animated.View>
       ) : null}
 
       {/* 阶段 5c：已归档入口移入筛选面板（原 linksRow 删除） */}
@@ -721,6 +781,28 @@ export default function PlanScreen() {
           onSelectItem={openItemDetail}
           onShiftDay={(delta) => setAnchorMs((prev) => shiftAnchorDay(prev, viewTime.tzid, delta))}
         />
+      ) : viewKind === 'week' ? (
+        /* 周视图：内容区横滑=选中日 ±1（整周态=整周 ±1）；列表按日程排版（阶段 5d） */
+        <View style={styles.listWrapper} {...contentPanResponder.panHandlers}>
+          <FlatList<AgendaRow>
+            ref={listRef}
+            style={styles.list}
+            data={rows}
+            renderItem={renderRow}
+            keyExtractor={rowKeyExtractor}
+            ListEmptyComponent={<EmptyState message={emptyMessage} />}
+            contentContainerStyle={rows.length === 0 ? styles.listEmpty : undefined}
+            onViewableItemsChanged={handleViewableItemsChanged}
+            viewabilityConfig={viewabilityConfig}
+            onScrollToIndexFailed={(info) => {
+              // 分组行未渲染完成时先跳近似位置再重试（RN 官方建议模式）
+              listRef.current?.scrollToOffset({ offset: info.highestMeasuredFrameIndex * 72, animated: false });
+              setTimeout(() => {
+                listRef.current?.scrollToIndex({ index: info.index, viewPosition: 0, animated: true });
+              }, 50);
+            }}
+          />
+        </View>
       ) : (
         <FlatList<AgendaRow>
           ref={listRef}
@@ -935,6 +1017,10 @@ const styles = StyleSheet.create({
   // 链接行（阶段 5c 删除：已归档入口移入筛选面板）
   // Agenda 列表
   list: {
+    flex: 1,
+  },
+  // 阶段 5d：周视图内容区手势容器（横滑切选中日；FlatList 纵向滚动在内层不受影响）
+  listWrapper: {
     flex: 1,
   },
   listEmpty: {

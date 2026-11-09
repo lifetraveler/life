@@ -1,0 +1,26 @@
+# 切片14 阶段5c 完成（2026-11-09，最新状态——本文件为当前最新，请以此为准）
+
+提交：243868f `feat(s14): 阶段5c 真机反馈迭代2——年月选择器/周视图双态/月历与日视图修复/筛选面板操作区`
+（分支 task/slice-14；log 序列 243868f ← eb7fc54(5b) ← 0f5b4cc(阶段5) ← 6ad24f5）
+变更：9 文件 +727/−154（plan.tsx 大改 / DayTimelineView 重构 / FilterSheet 操作区 / MonthCalendarView 阈值修复 / 新增 MonthPickerPopover + 渲染回归测试 + react-test-renderer 最小类型声明 / 任务卡阶段5c 小节+验收33-40 / 参考图年月切换组件.jpg）
+
+## 用户 8 条反馈逐项落地
+0. 年月选择器：左上标签今年只显「11月」/非今年「2027年1月」（周/日跨度跨年才带年）；点击弹自绘 MonthPickerPopover（‹2026› 步年 + 12 月宫格，当前月黑胶囊；零新依赖）。选择后 month→切月、week/day→锚定该月1日、agenda→滚动定位该月第一组。
+1. agenda 上下滑无缝（全量数据链既有）；顶栏月份跟随首可见分组（onViewableItemsChanged + itemVisiblePercentThreshold 50）自动变化。
+2. 月视图空白格修复：MonthCalendarView 预取阈值 1.5→0.5（初始双发 prepend 把视口顶推入空月）；新增渲染回归测试锁定 chip/日号输出。
+3. 日视图：两列结构（左 44px 时间列 + 右画布，块百分比相对画布）修复盖住时间列；横滑（PanResponder）±1 天切前后日。
+4. ‹›箭头仅月视图保留；周/日靠周条与横滑。
+5. 周视图默认单日态：点周条天只切换选中天（列表=该天记录，日程排版），不跳日视图。
+6. 工具栏「周」pill 切整周态（7 天按天分组日程排版；激活态黑底白字区分）；整周态点某天→切回单日态并选中。
+7. 「已归档」移入筛选面板底部首行（点击关面板跳 /archived）；主页链接行删除。
+8. 筛选面板底部操作区：订阅日历/智能颜色编码/更多日历设置 3 行占位（Alert「即将上线」）。
+
+## 验证结果
+- npx tsc --noEmit：0 错误
+- npx jest --runInBand：39 套件 / 484 测试全过
+- npx expo-doctor：16/18（2 失败=基线告警：android/ non-CNG 提示、watermelondb/simdjson/widget-snapshot-store 无 RN Directory 元数据；非本次引入）
+- 验收 grep：无 Link/linksRow 残留、onOpenArchived 接线、onShiftDay 接线（plan.tsx:722）、新文件无显式 any
+
+## 待真机验收（任务卡阶段 5c 验收 34-40，留用户）
+34 年月选择器落点、35 标签跟随、36 月历格 chip、37 日视图列结构+横滑、38 箭头收敛、39 周双态、40 筛选面板操作区。
+注意：本批未改运行时依赖，Metro 无需重启；若之前 Metro 在旧代码上运行，Reload 即可。

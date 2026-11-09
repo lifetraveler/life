@@ -195,3 +195,57 @@ export function shiftAnchorDay(anchorMs: number, tzid: string, deltaDays: number
   const shifted = deltaDays >= 0 ? addDays(day, deltaDays) : subtractDays(day, -deltaDays);
   return resolveDayStart(tzid, shifted);
 }
+
+/**
+ * 自然周起点（切片 14 阶段 5d）：锚点所在民用日所在周（周一起始）的周一 00:00。
+ * 计划页周条与周视图整周态统一以自然周（周一~周日）为窗口，替代 5b 的
+ * 「锚点日起 7 天」——选中日走出当前自然周时，周条整体切换到新自然周。
+ */
+export function getWeekStart(anchorMs: number, tzid: string): number {
+  assertValidTimeZone(tzid);
+  const parts = getZonedParts(anchorMs, tzid);
+  const day: CivilDate = { year: parts.year, month: parts.month, day: parts.day };
+  const monday = subtractDays(day, parts.weekday - 1);
+  return resolveDayStart(tzid, monday);
+}
+
+/** 该月第一个周一的民用日号（weekday: 1=周一 … 7=周日）。 */
+function firstMondayDayOfMonth(tzid: string, year: number, month: number): number {
+  const firstDay = getZonedParts(resolveDayStart(tzid, { year, month, day: 1 }), tzid);
+  // weekday 1（1 日即周一）→ offset 0；weekday 7（周日）→ offset 1；其余类推
+  return 1 + ((8 - firstDay.weekday) % 7);
+}
+
+/**
+ * 锚点所在自然周是「周一所在月」的第几周（切片 14 阶段 5d）：
+ * 以自然周周一的民用月为归属月，周序 = 该月内第几个周一开始的周（1 起）。
+ * 年月选择器联动周视图用：切换目标月时保持周序不变。
+ */
+export function weekIndexInMonth(anchorMs: number, tzid: string): number {
+  assertValidTimeZone(tzid);
+  const mondayMs = getWeekStart(anchorMs, tzid);
+  const monday = getZonedParts(mondayMs, tzid);
+  const firstMondayDay = firstMondayDayOfMonth(tzid, monday.year, monday.month);
+  return Math.floor((monday.day - firstMondayDay) / 7) + 1;
+}
+
+/**
+ * 目标月第 weekIndex 个「周一开始的周」的周一民用日（切片 14 阶段 5d）：
+ * - weekIndex 从 1 计；
+ * - 目标月的周数不足 weekIndex（如 2 月只有 4 个周一而 weekIndex=5）时，
+ *   回退为该月最后一个周一开始的周；
+ * - 跨年由 civilTime 的日推算处理。
+ */
+export function nthMondayDateOfMonth(
+  tzid: string,
+  year: number,
+  month: number,
+  weekIndex: number,
+): CivilDate {
+  assertValidTimeZone(tzid);
+  const totalDays = daysInMonth(year, month);
+  const firstMondayDay = firstMondayDayOfMonth(tzid, year, month);
+  const mondayCount = Math.floor((totalDays - firstMondayDay) / 7) + 1;
+  const ordinal = Math.min(Math.max(weekIndex, 1), mondayCount);
+  return addDays({ year, month, day: firstMondayDay }, (ordinal - 1) * 7);
+}

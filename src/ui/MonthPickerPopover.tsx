@@ -99,8 +99,10 @@ const styles = StyleSheet.create({
   },
   card: {
     position: 'absolute',
-    top: 6,
-    left: 0,
+    // 阶段 5d：从顶栏年月标签正下方弹出（topBar paddingTop48 + 标题行高 ≈ 96），
+    // 左对齐页面 padding 16；不再顶到屏幕左上角
+    top: 96,
+    left: 16,
     width: 268,
     borderRadius: 16,
     backgroundColor: '#FFFFFF',

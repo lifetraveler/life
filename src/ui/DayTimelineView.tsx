@@ -13,7 +13,16 @@
  */
 
 import { useEffect, useMemo, useRef } from 'react';
-import { PanResponder, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  Animated,
+  Easing,
+  PanResponder,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import type { DayTimelineLayout } from '../domain/views/dayTimeline';
 import type { ItemWithRelations } from '../domain/relations/itemWithRelations';
 import { formatAgendaTimeRange } from './timeFormat';
@@ -28,6 +37,8 @@ const DAY_PX = 24 * HOUR_PX;
 const TIME_COLUMN_WIDTH = 44;
 /** 挂载时滚动定位：当前时刻上移 2 小时 */
 const SCROLL_BACK_MIN = 120;
+/** 区块间距标准值（阶段 5d，与 plan.tsx SECTION_GAP 同源：时间轴顶部与周条拉开） */
+const SECTION_GAP = 16;
 
 interface DayTimelineViewProps {
   /** 当天起点毫秒（resolveDayStart 结果，块坐标/红线判定基准） */
@@ -61,6 +72,25 @@ export function DayTimelineView({
   onShiftDay,
 }: DayTimelineViewProps) {
   const scrollRef = useRef<ScrollView | null>(null);
+
+  // 切日动效（阶段 5d）：dayStartMs 变化时按切换方向平移淡入（40px，200ms）；
+  // 方向自算（与前一次 dayStartMs 比较），挂载首帧不动画。
+  const slideAnim = useRef(new Animated.Value(0)).current;
+  const prevDayRef = useRef(dayStartMs);
+  useEffect(() => {
+    if (prevDayRef.current === dayStartMs) {
+      return;
+    }
+    const direction = dayStartMs > prevDayRef.current ? 1 : -1;
+    prevDayRef.current = dayStartMs;
+    slideAnim.setValue(direction * 40);
+    Animated.timing(slideAnim, {
+      toValue: 0,
+      duration: 200,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [dayStartMs, slideAnim]);
 
   // 挂载时定位到当前时刻（上移 2 小时）；锚点变化（切天/今天回位）时跟随
   const nowOffsetMin = (nowMs - dayStartMs) / 60_000;
@@ -112,7 +142,10 @@ export function DayTimelineView({
   );
 
   return (
-    <View style={styles.container} {...shiftPanResponder.panHandlers}>
+    <Animated.View
+      style={[styles.container, { transform: [{ translateX: slideAnim }] }]}
+      {...shiftPanResponder.panHandlers}
+    >
       {hasAllDayArea ? (
         <View style={styles.allDayArea}>
           {layout.allDayItems.map((item) => (
@@ -189,7 +222,7 @@ export function DayTimelineView({
           </View>
         </View>
       </ScrollView>
-    </View>
+    </Animated.View>
   );
 }
 
@@ -197,6 +230,8 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#FFFFFF',
+    // 阶段 5d：时间轴顶部与周条拉开一个区块间距（修复 00:00 与上方工具栏重合）
+    paddingTop: SECTION_GAP,
   },
   allDayArea: {
     paddingHorizontal: 16,

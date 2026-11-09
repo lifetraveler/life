@@ -185,12 +185,11 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 72,
   },
+  // 阶段 5d：空格子保持空白不画框——去掉格子边框/圆角/底色，
+  // 有项目的日子由 chip 自身的 #F5F5F5 背景承载视觉
   cell: {
     flex: 1,
     minHeight: 72,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#F0F0F0',
-    borderRadius: 8,
     paddingVertical: 3,
     paddingHorizontal: 3,
     marginHorizontal: 1,

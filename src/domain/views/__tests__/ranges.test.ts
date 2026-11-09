@@ -2,6 +2,9 @@ import {
   getMonthRange,
   getTodayRange,
   getWeekRange,
+  getWeekStart,
+  nthMondayDateOfMonth,
+  weekIndexInMonth,
 } from '../ranges';
 import { getZonedParts, resolveCivilTimeToInstant } from '../../recurrence/civilTime';
 
@@ -376,5 +379,74 @@ describe('shiftAnchorDay（America/New_York，DST）', () => {
     const anchor = Date.UTC(2026, 10, 1, 17, 0); // 当地 2026-11-01 12:00 EST（那天民用 24 小时、绝对 25h）
     expect(shiftAnchorDay(anchor, 'America/New_York', 1)).toBe(nyMidnightEstUtc(2026, 11, 2));
     expect(shiftAnchorDay(anchor, 'America/New_York', -1)).toBe(nyMidnightEdtUtc(2026, 10, 31));
+  });
+});
+
+describe('getWeekStart（Asia/Shanghai，自然周周一 00:00）', () => {
+  it('周中/周末锚点都归到同一周一；周日归上一周（2026-11-09 为周一）', () => {
+    const monday = Date.UTC(2026, 10, 9, 4, 0); // 当地 2026-11-09（周一）12:00
+    const friday = Date.UTC(2026, 10, 13, 4, 0); // 2026-11-13（周五）
+    const sunday = Date.UTC(2026, 10, 8, 4, 0); // 2026-11-08（周日）
+    expect(getWeekStart(monday, 'Asia/Shanghai')).toBe(shanghaiMidnightUtc(2026, 11, 9));
+    expect(getWeekStart(friday, 'Asia/Shanghai')).toBe(shanghaiMidnightUtc(2026, 11, 9));
+    expect(getWeekStart(sunday, 'Asia/Shanghai')).toBe(shanghaiMidnightUtc(2026, 11, 2));
+  });
+
+  it('getWeekStart ≡ getWeekRange.startMs', () => {
+    const anchor = Date.UTC(2026, 10, 11, 2, 0);
+    expect(getWeekStart(anchor, 'Asia/Shanghai')).toBe(getWeekRange(anchor, 'Asia/Shanghai').startMs);
+  });
+});
+
+describe('weekIndexInMonth / nthMondayDateOfMonth（年月选择器周联动，2026-11-01 为周日、首个周一 11-02）', () => {
+  it('周序：周一与周日同周；第二个周一 → 2', () => {
+    const firstMonday = Date.UTC(2026, 10, 2, 4, 0); // 2026-11-02 周一（11 月第一个周一）
+    const firstSunday = Date.UTC(2026, 10, 8, 4, 0); // 2026-11-08 周日（同一自然周）
+    const secondMonday = Date.UTC(2026, 10, 9, 4, 0); // 2026-11-09 周一
+    expect(weekIndexInMonth(firstMonday, 'Asia/Shanghai')).toBe(1);
+    expect(weekIndexInMonth(firstSunday, 'Asia/Shanghai')).toBe(1);
+    expect(weekIndexInMonth(secondMonday, 'Asia/Shanghai')).toBe(2);
+  });
+
+  it('周一落在上月时按周一所在月计序（2026-08-01 周六 → 周一 07-27，7 月第 4 周）', () => {
+    const anchor = Date.UTC(2026, 7, 1, 4, 0); // 当地 2026-08-01（周六）
+    expect(weekIndexInMonth(anchor, 'Asia/Shanghai')).toBe(4);
+  });
+
+  it('nthMondayDateOfMonth：11 月第 1/2 周 → 11-02 / 11-09', () => {
+    expect(nthMondayDateOfMonth('Asia/Shanghai', 2026, 11, 1)).toEqual({
+      year: 2026,
+      month: 11,
+      day: 2,
+    });
+    expect(nthMondayDateOfMonth('Asia/Shanghai', 2026, 11, 2)).toEqual({
+      year: 2026,
+      month: 11,
+      day: 9,
+    });
+  });
+
+  it('nthMondayDateOfMonth：2 月只有 4 个周一，weekIndex=5 回退到最后一周（2026-02-23）', () => {
+    expect(nthMondayDateOfMonth('Asia/Shanghai', 2026, 2, 5)).toEqual({
+      year: 2026,
+      month: 2,
+      day: 23,
+    });
+  });
+
+  it('nthMondayDateOfMonth：12 月第 4 周跨年（2026-12-28）', () => {
+    expect(nthMondayDateOfMonth('Asia/Shanghai', 2026, 12, 4)).toEqual({
+      year: 2026,
+      month: 12,
+      day: 28,
+    });
+  });
+
+  it('roundtrip：11 月第 2 周锚点选 12 月 → 12 月第 2 周周一（12-14）', () => {
+    const anchor = Date.UTC(2026, 10, 10, 4, 0); // 2026-11-10（周二，所在周周一 11-09 = 11 月第 2 周）
+    const index = weekIndexInMonth(anchor, 'Asia/Shanghai');
+    expect(index).toBe(2);
+    const target = nthMondayDateOfMonth('Asia/Shanghai', 2026, 12, index);
+    expect(target).toEqual({ year: 2026, month: 12, day: 14 });
   });
 });
