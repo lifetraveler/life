@@ -18,6 +18,8 @@ import { APP_SETTINGS_ROW_ID, DEFAULT_APP_SETTINGS } from '../domain/settings';
  * - v5：items 新增 source_type / source_uid / source_read_only 列（切片 8，data-model.md v0.8）
  * - v6：新增 categories / app_settings 表；items 新增 category_id / priority；
  *        tags 新增 color / emoji（切片 14，AGENTS.md §7.22）
+ * - v7：app_settings 新增小组件显示开关 4 列（切片 14 阶段 7a，
+ *        docs/proposals/slice-14-widget-phase7.md）
  *
  * 规则（AGENTS.md §4.6）：已发布的 migration step 不得修改，只能在末尾追加；
  * 新增表必须在 migration 中显式创建，不得依赖“删库重装”。
@@ -176,6 +178,25 @@ export default schemaMigrations({
             `${sqlString(APP_SETTINGS_ROW_ID)}, ${sqlString('synced')}, ${sqlString('')}, ` +
             `${sqlString(DEFAULT_APP_SETTINGS.tagDisplayMode)});`,
         ),
+      ],
+    },
+    {
+      // 切片 14 阶段 7a：小组件显示开关（docs/proposals/slice-14-widget-phase7.md）。
+      // WatermelonDB addColumns 对非可选 boolean 列自动回填 false（encodeAddColumnsMigrationStep）；
+      // 过期组默认展示（widget_show_overdue 默认 true，保持升级前行为）需在此显式回填 1，
+      // 其余三列默认 false 与自动回填一致，无需额外 UPDATE。
+      toVersion: 7,
+      steps: [
+        addColumns({
+          table: 'app_settings',
+          columns: [
+            { name: 'widget_show_overdue', type: 'boolean' },
+            { name: 'widget_show_todos', type: 'boolean' },
+            { name: 'widget_show_category_emoji', type: 'boolean' },
+            { name: 'widget_show_tags', type: 'boolean' },
+          ],
+        }),
+        unsafeExecuteSql('UPDATE "app_settings" SET "widget_show_overdue" = 1;'),
       ],
     },
   ],

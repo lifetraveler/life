@@ -350,11 +350,27 @@ class FakeRepository implements ItemRepository {
   }
 
   async getSettings(): Promise<AppSettings> {
-    return { tagDisplayMode: 'text' };
+    return {
+      tagDisplayMode: 'text',
+      widgetShowOverdue: true,
+      widgetShowTodos: false,
+      widgetShowCategoryEmoji: false,
+      widgetShowTags: false,
+    };
   }
 
   async updateSettings(_patch: Partial<AppSettings>): Promise<void> {
     return undefined;
+  }
+
+  // —— 切片 14 阶段 7a 接口扩展的测试夹具 stub（§7.13：编译必需，调度器不触达） ——
+
+  async listUnscheduledItems(): Promise<ItemWithRelations[]> {
+    return [];
+  }
+
+  observeUnscheduledItems(_onNext: (items: ItemWithRelations[]) => void): () => void {
+    return () => undefined;
   }
 }
 

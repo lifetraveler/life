@@ -1,5 +1,6 @@
 /**
- * 今日待办小组件渲染组件（react-native-android-widget 原语组合，切片 10）：
+ * 今日待办小组件渲染组件（react-native-android-widget 原语组合，切片 10；
+ * 阶段 7a 修订：行区改 ListWidget 滚动列表，见 docs/proposals/slice-14-widget-phase7.md）：
  * - 禁 hooks、禁 React Compiler memo：本组件既在 App 进程渲染（requestWidgetUpdate），
  *   也在 Headless 任务上下文渲染（taskHandler）。buildWidgetTree 直接把自定义组件当
  *   普通函数展开（见库 src/api/build-widget-tree.ts:41-43），hooks/memo 都会破坏该展开，
@@ -8,6 +9,14 @@
  *   （RNWidget.java drawWidget），无需手传像素尺寸；
  * - 亮/暗双色由 WidgetRepresentation { light, dark } 承载（切片 10 采用双色表示），
  *   本组件以 palette prop 切换同一套布局的配色；
+ * - 滚动列表（阶段 7a）：行区包一层 FlexWidget { flex: 1 }（JS 层 flex → 原生
+ *   LinearLayout weight，FlexWidget.js convertFlexStyle + BaseWidget.java:185）占满
+ *   header 与按钮间剩余高度，ListWidget { width/height: 'match_parent' } 填满包裹层；
+ *   ListWidget 原生映射 RemoteViews ListView（RNWidget.java addCollectionView 按其在
+ *   JS 树的测量矩形 setViewPadding 收窄视口），超出可见高度即可滚动浏览；每行仍为
+ *   独立渲染位图，行级 clickAction 经 PendingIntent 模板保留（CollectionView.java
+ *   buildChildren）。库的 SizeStyleProps 无 flex，ListWidget 自身不能写 flex，
+ *   必须借包裹层获得权重高度（空列表时同样用 FlexWidget{flex:1} 占位保持按钮贴底）；
  * - 条目行（§7.21 v0.14 阶段 5）= FlexWidget 行（flexDirection row + alignItems center）：
  *   左侧分类色点（8×8 圆，categoryColor 经合法 #RRGGBB 校验，非法/无分类回退默认灰
  *   '#9E9E9E'——阶段 6 起与本机制统一走 domain/widget/categoryDot 解析，不再用 palette
@@ -18,15 +27,16 @@
  *   （原生 setEllipsize，受权重容器约束后正确省略号截断）；
  *   clickAction OPEN_ITEM 上移到整行 FlexWidget + clickActionData { itemId }，点击语义在
  *   taskHandler 展开（契约：点击条目导航到 item/[id] 详情）；
- * - 过期行 / done 行灰显（muted），仍可点击进入详情（详情页可做完成/取消，契约禁止
- *   小组件内直接完成）；
+ * - 行排序（阶段 7a 提案定案）：已安排（正常样式）在前，过期组、待办组依次置底；
+ *   过期行 / done 行灰显（muted），仍可点击进入详情（详情页可做完成/取消，契约禁止
+ *   小组件内直接完成）；待办行正常色、时间标签为快照携带的 '待办'；
  * - 底部快速记录按钮 = 圆角 pill FlexWidget，clickAction OPEN_QUICK_ADD（契约：
  *   deep link life://quick-add 唤起快速记录）；
  * - 空态文案 '今天没有安排'（契约未冻结空态，此处为展示文本）。
  */
 'use no memo';
 
-import { FlexWidget, TextWidget } from 'react-native-android-widget';
+import { FlexWidget, ListWidget, TextWidget } from 'react-native-android-widget';
 import type { ColorProp, HexColor } from 'react-native-android-widget';
 import type { WidgetSnapshot, WidgetSnapshotEntry } from '../domain/widget';
 import { resolveCategoryDotColor } from '../domain/widget';
@@ -74,9 +84,11 @@ interface TodayWidgetProps {
 
 export function TodayWidget({ snapshot, palette }: TodayWidgetProps) {
   const colors = PALETTES[palette];
+  // 阶段 7a 行序（提案定案）：已安排在前，过期、待办依次置底。
   const rows: WidgetRow[] = [
-    ...snapshot.groups.overdue.map((entry) => ({ entry, overdue: true })),
     ...snapshot.groups.scheduled.map((entry) => ({ entry, overdue: false })),
+    ...snapshot.groups.overdue.map((entry) => ({ entry, overdue: true })),
+    ...snapshot.groups.todos.map((entry) => ({ entry, overdue: false })),
   ];
 
   return (
@@ -101,70 +113,70 @@ export function TodayWidget({ snapshot, palette }: TodayWidgetProps) {
           marginBottom: 4,
         }}
       />
-      <FlexWidget
-        style={{
-          width: 'match_parent',
-          height: 'wrap_content',
-          flexDirection: 'column',
-          flexGap: 4,
-        }}
-      >
-        {rows.length === 0 ? (
+      {rows.length === 0 ? (
+        <FlexWidget style={{ width: 'match_parent', flex: 1, flexDirection: 'column' }}>
           <TextWidget
             text="今天没有安排"
             style={{ fontSize: 13, color: colors.muted }}
           />
-        ) : (
-          rows.map(({ entry, overdue }) => {
-            // 解析规则在 domain/widget/categoryDot（可单测）：合法 #RRGGBB 透传，
-            // null/非法回退 '#9E9E9E'（与主页卡片色条同一默认灰），恒为合法 HexColor 形态
-            const dotColor: ColorProp = resolveCategoryDotColor(entry.categoryColor) as HexColor;
-            return (
-              <FlexWidget
-                key={entry.id}
-                clickAction="OPEN_ITEM"
-                clickActionData={{ itemId: entry.id }}
-                style={{
-                  width: 'match_parent',
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  flexGap: 6,
-                }}
-              >
+        </FlexWidget>
+      ) : (
+        // 滚动列表（阶段 7a）：包裹层 FlexWidget{flex:1} 借原生 weight 占满剩余高度，
+        // ListWidget 填满包裹层；超出可见高度的行由原生 ListView 滚动浏览。
+        <FlexWidget style={{ width: 'match_parent', flex: 1, flexDirection: 'column' }}>
+          <ListWidget style={{ width: 'match_parent', height: 'match_parent' }}>
+            {rows.map(({ entry, overdue }) => {
+              // 解析规则在 domain/widget/categoryDot（可单测）：合法 #RRGGBB 透传，
+              // null/非法回退 '#9E9E9E'（与主页卡片色条同一默认灰），恒为合法 HexColor 形态
+              const dotColor: ColorProp = resolveCategoryDotColor(entry.categoryColor) as HexColor;
+              return (
                 <FlexWidget
+                  key={entry.id}
+                  clickAction="OPEN_ITEM"
+                  clickActionData={{ itemId: entry.id }}
                   style={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: 4,
-                    backgroundColor: dotColor,
-                  }}
-                />
-                <FlexWidget
-                  style={{
-                    width: 0,
-                    flex: 1,
+                    width: 'match_parent',
                     flexDirection: 'row',
+                    alignItems: 'center',
+                    flexGap: 6,
+                    paddingBottom: 4,
                   }}
                 >
-                  <TextWidget
-                    text={`${entry.timeLabel}  ${entry.title}`}
-                    maxLines={1}
-                    truncate="END"
+                  <FlexWidget
                     style={{
-                      width: 'match_parent',
-                      fontSize: 13,
-                      color:
-                        overdue || entry.status === 'done'
-                          ? colors.muted
-                          : colors.text,
+                      width: 8,
+                      height: 8,
+                      borderRadius: 4,
+                      backgroundColor: dotColor,
                     }}
                   />
+                  <FlexWidget
+                    style={{
+                      width: 0,
+                      flex: 1,
+                      flexDirection: 'row',
+                    }}
+                  >
+                    <TextWidget
+                      text={`${entry.timeLabel}  ${entry.title}`}
+                      maxLines={1}
+                      truncate="END"
+                      style={{
+                        width: 'match_parent',
+                        fontSize: 13,
+                        color:
+                          overdue || entry.status === 'done'
+                            ? colors.muted
+                            : colors.text,
+                      }}
+                    />
+                  </FlexWidget>
                 </FlexWidget>
-              </FlexWidget>
-            );
-          })
-        )}
-      </FlexWidget>
+              );
+            })}
+          </ListWidget>
+        </FlexWidget>
+      )}
       <FlexWidget
         style={{
           width: 'match_parent',

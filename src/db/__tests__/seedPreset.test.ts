@@ -21,8 +21,8 @@ import { APP_SETTINGS_ROW_ID } from '../../domain/settings';
 import { WatermelonItemRepository } from '../../data/WatermelonItemRepository';
 
 /**
- * 切片 14 阶段 1（schema v6 分类/设置底座）db 层单测：
- * 1. 迁移结构：SCHEMA_VERSION 与 migrations v6 step 的结构/字符串断言
+ * 切片 14 阶段 1（schema v6 分类/设置底座）+ 阶段 7a（schema v7 小组件显示开关）db 层单测：
+ * 1. 迁移结构：SCHEMA_VERSION 与 migrations v6/v7 step 的结构/字符串断言
  *    （schemaMigrations 运行时形状：{ sortedMigrations, minVersion, maxVersion, validated }）。
  *    已知限制：LokiJS 适配器（仅测试用）忽略 'sql' 步骤，v6 的 UPDATE 回填与 INSERT
  *    预置行在 loki 行为级不可测——行为级迁移验收依赖真机覆盖安装（任务卡阶段 1）。
@@ -96,15 +96,15 @@ function findMigrationToVersion(
   return spec.sortedMigrations.find((migration) => migration.toVersion === toVersion);
 }
 
-describe('schema v6 迁移结构（结构/字符串断言）', () => {
-  it('SCHEMA_VERSION === 6，migrations 无缺口且 maxVersion === 6', () => {
-    expect(SCHEMA_VERSION).toBe(6);
+describe('schema 迁移结构（结构/字符串断言）', () => {
+  it('SCHEMA_VERSION === 7，migrations 无缺口且 maxVersion === 7', () => {
+    expect(SCHEMA_VERSION).toBe(7);
     expect(migrations.validated).toBe(true);
-    expect(migrations.maxVersion).toBe(6);
+    expect(migrations.maxVersion).toBe(7);
     // 最早 step 是 toVersion 2（v1 初始库无需迁移），minVersion = 2 - 1 = 1
     expect(migrations.minVersion).toBe(1);
     expect(migrations.sortedMigrations.map((migration) => migration.toVersion)).toEqual([
-      2, 3, 4, 5, 6,
+      2, 3, 4, 5, 6, 7,
     ]);
   });
 
@@ -167,6 +167,24 @@ describe('schema v6 迁移结构（结构/字符串断言）', () => {
     );
     expect(sqlSteps[sqlSteps.length - 1]?.sql).toContain(`'${APP_SETTINGS_ROW_ID}'`);
     expect(sqlSteps[sqlSteps.length - 1]?.sql).toContain("'text'");
+  });
+
+  it('v7 step（阶段 7a）：app_settings 加 4 个小组件开关列 + 过期组默认开显式回填', () => {
+    const steps = findMigrationToVersion(migrations, 7)?.steps ?? [];
+    expect(steps.map((step) => step.type)).toEqual(['add_columns', 'sql']);
+    const addColumns = steps.find(
+      (step): step is AddColumnsMigrationStep => step.type === 'add_columns',
+    );
+    expect(addColumns?.table).toBe('app_settings');
+    expect(addColumns?.columns.map((column) => column.name)).toEqual([
+      'widget_show_overdue',
+      'widget_show_todos',
+      'widget_show_category_emoji',
+      'widget_show_tags',
+    ]);
+    // addColumns 对非可选 boolean 自动回填 0（关），仅过期组默认 true 需显式 UPDATE = 1
+    const sqlStep = steps.find((step): step is SqlMigrationStep => step.type === 'sql');
+    expect(sqlStep?.sql).toBe('UPDATE "app_settings" SET "widget_show_overdue" = 1;');
   });
 });
 

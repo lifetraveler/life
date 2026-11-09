@@ -3,8 +3,9 @@
  * - 桥接通道：WidgetSnapshotStore 本地 Expo 模块（modules/widget-snapshot-store，方案 A，
  *   用户开工确认；react-native-android-widget 自身无任何存储 API）；
  * - 键：WIDGET_SNAPSHOT_PREFS_KEY（'widget_today_snapshot_v1'，AGENTS §7.16 冻结）；
- * - 数据来源：消费切片 7 视图查询 listOverdueItems / listScheduledItemsInRange（签名冻结），
- *   经 buildTodayWidgetSnapshot 纯函数生成；本类不查询、不重复实现分组；
+ * - 数据来源：消费切片 7 视图查询 listOverdueItems / listScheduledItemsInRange（签名冻结）
+ *   与阶段 7a 的 listUnscheduledItems，经 buildTodayWidgetSnapshot 纯函数生成；
+ *   本类不查询、不重复实现分组；过期/待办两组是否拉取由 app_settings 小组件开关决定；
  * - Repository 接口不变（repository.md 冻结）；本类挂在 src/data/ 但不是 Repository 实现；
  * - 所有失败（原生模块缺失、写入失败、JSON 异常）捕获记录并返回失败态，不向上抛：
  *   小组件刷新失败不影响 App 主流程（任务卡实现要求）。
@@ -31,16 +32,27 @@ export class WidgetSnapshotWriter {
    * nowMs 由调用方传入（启动/回前台/变更回调各自取当下）；
    * tzid 用 getDeviceTzid()（切片 11 变更 A 起为真实设备时区；此前恒 'UTC' 的
    * 运行时伪影已修，见 slice-11 提案与 closeout）。
+   * 阶段 7a：读取 app_settings 小组件显示开关——widgetShowOverdue=false 时不查
+   * 过期项、widgetShowTodos=false 时不查待办项（对应组写空数组，JSON 三组恒在）；
+   * 配置变更由设置页改完后触发一次本方法（桥不订阅 app_settings）。
    * 返回写入是否成功。
    */
   async writeSnapshotFromRepository(nowMs: number, tzid: string): Promise<boolean> {
     try {
       const todayRange = getTodayRange(nowMs, tzid);
-      const [overdue, scheduled] = await Promise.all([
-        this.itemRepository.listOverdueItems(nowMs),
+      const [settings, scheduled] = await Promise.all([
+        this.itemRepository.getSettings(),
         this.itemRepository.listScheduledItemsInRange(todayRange.startMs, todayRange.endMs),
       ]);
-      const snapshot = buildTodayWidgetSnapshot({ overdue, scheduled, nowMs, tzid });
+      const [overdue, todos] = await Promise.all([
+        settings.widgetShowOverdue
+          ? this.itemRepository.listOverdueItems(nowMs)
+          : Promise.resolve([]),
+        settings.widgetShowTodos
+          ? this.itemRepository.listUnscheduledItems()
+          : Promise.resolve([]),
+      ]);
+      const snapshot = buildTodayWidgetSnapshot({ overdue, scheduled, todos, nowMs, tzid });
       return this.writeSnapshot(snapshot);
     } catch (error) {
       console.warn('[WidgetSnapshotWriter] writeSnapshotFromRepository failed:', error);
@@ -61,7 +73,8 @@ export class WidgetSnapshotWriter {
 
   /**
    * 读取上次持久化快照（渲染兜底用）；缺失/损坏返回 null。
-   * 形状校验做最小收窄（groups.overdue/scheduled 必须是数组），不信任存储内容。
+   * 形状校验做最小收窄（groups.overdue/scheduled 必须是数组；todos 阶段 7a 起可选，
+   * 缺失读空数组），不信任存储内容。
    */
   readSnapshot(): WidgetSnapshot | null {
     try {
@@ -103,6 +116,8 @@ function narrowWidgetSnapshot(value: unknown): WidgetSnapshot | null {
     groups: {
       overdue: narrowEntryList(groups.overdue),
       scheduled: narrowEntryList(groups.scheduled),
+      // todos 为阶段 7a 新增：旧版本快照无此字段，宽松读为空数组（其余组仍严格）
+      todos: Array.isArray(groups.todos) ? narrowEntryList(groups.todos) : [],
     },
   };
 }

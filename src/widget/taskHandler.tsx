@@ -51,7 +51,7 @@ async function produceSnapshotForWidget(): Promise<WidgetSnapshot> {
   if (persisted !== null) {
     return persisted;
   }
-  return buildTodayWidgetSnapshot({ overdue: [], scheduled: [], nowMs, tzid });
+  return buildTodayWidgetSnapshot({ overdue: [], scheduled: [], todos: [], nowMs, tzid });
 }
 
 async function openWidgetClickTarget(

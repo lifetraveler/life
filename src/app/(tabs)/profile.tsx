@@ -5,6 +5,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   View,
 } from 'react-native';
@@ -13,14 +14,15 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
 
-import { itemRepository } from '../../data';
+import { itemRepository, widgetSnapshotWriter } from '../../data';
 import { serializeExportData } from '../../domain/export';
 import { buildIcs } from '../../domain/ics/buildIcs';
 import { parseIcs } from '../../domain/ics/parseIcs';
-import type { TagDisplayMode } from '../../domain/settings';
+import type { AppSettings, TagDisplayMode } from '../../domain/settings';
 import { reminderScheduler } from '../../notifications';
 import TagChip from '../../ui/TagChip';
 import { getDeviceTzid } from '../../ui/timeFormat';
+import { refreshTodayWidgets } from '../../widget';
 import {
   setLastExportResult,
   setLastImportResult,
@@ -60,6 +62,27 @@ const TAG_DISPLAY_OPTIONS: ReadonlyArray<{ value: TagDisplayMode; label: string 
 /** 单选行的效果示例标签（固定样例数据，非数据库记录） */
 const SAMPLE_TAG = { name: '示例', color: '#64B5F6', emoji: '💼' };
 
+/**
+ * 小组件显示开关定义（阶段 7a）：仅列出当前已有渲染消费的两项；
+ * 分类 emoji / 标签开关在阶段 7c 渲染落地时随同加入（存储列 v7 已建）。
+ */
+const WIDGET_TOGGLE_OPTIONS: ReadonlyArray<{
+  key: 'widgetShowOverdue' | 'widgetShowTodos';
+  label: string;
+  hint: string;
+}> = [
+  {
+    key: 'widgetShowOverdue',
+    label: '展示过期项',
+    hint: '已过期任务显示在小组件今日列表底部（可滚动查看全部）。',
+  },
+  {
+    key: 'widgetShowTodos',
+    label: '展示待办项',
+    hint: '没有时间的待办显示在小组件今日列表底部。',
+  },
+];
+
 export default function SettingsPage() {
   const router = useRouter();
   const [busy, setBusy] = useState<'import' | 'export' | null>(null);
@@ -75,6 +98,16 @@ export default function SettingsPage() {
   const [modeSaving, setModeSaving] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
 
+  // 阶段 7a：小组件显示开关（app_settings schema v7）。与 displayMode 同一次 getSettings
+  // 读取；乐观更新 + 失败回滚 + 页内提示；保存成功后手动触发一次小组件快照刷新
+  // （桥不订阅 app_settings，见 docs/proposals/slice-14-widget-phase7.md）。
+  const [widgetFlags, setWidgetFlags] = useState<Pick<
+    AppSettings,
+    'widgetShowOverdue' | 'widgetShowTodos'
+  > | null>(null);
+  const [widgetSavingKey, setWidgetSavingKey] = useState<string | null>(null);
+  const [widgetError, setWidgetError] = useState<string | null>(null);
+
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
@@ -83,6 +116,10 @@ export default function SettingsPage() {
         .then((settings) => {
           if (!cancelled) {
             setDisplayMode(settings.tagDisplayMode);
+            setWidgetFlags({
+              widgetShowOverdue: settings.widgetShowOverdue,
+              widgetShowTodos: settings.widgetShowTodos,
+            });
           }
         })
         .catch((error: unknown) => {
@@ -114,6 +151,47 @@ export default function SettingsPage() {
       }
     },
     [modeSaving, displayMode],
+  );
+
+  /**
+   * 阶段 7a：小组件显示开关切换。乐观更新 → updateSettings → 成功后手动触发一次
+   * 小组件快照重写 + requestWidgetUpdate（fire-and-forget，失败仅 warn——快照刷新
+   * 失败不影响设置保存本身）；失败回滚 + 页内提示（不用 Alert）。
+   */
+  const handleWidgetFlagChange = useCallback(
+    async (
+      key: 'widgetShowOverdue' | 'widgetShowTodos',
+      value: boolean,
+    ): Promise<void> => {
+      if (widgetFlags === null || widgetSavingKey !== null || widgetFlags[key] === value) {
+        return;
+      }
+      const previous = widgetFlags;
+      setWidgetFlags({ ...widgetFlags, [key]: value });
+      setWidgetSavingKey(key);
+      try {
+        await itemRepository.updateSettings({ [key]: value });
+        setWidgetError(null);
+        const nowMs = Date.now();
+        const written = await widgetSnapshotWriter.writeSnapshotFromRepository(
+          nowMs,
+          getDeviceTzid(),
+        );
+        if (written) {
+          const snapshot = widgetSnapshotWriter.readSnapshot();
+          if (snapshot !== null) {
+            await refreshTodayWidgets(snapshot);
+          }
+        }
+      } catch (error) {
+        console.warn('[slice-14] 小组件显示开关保存失败', error);
+        setWidgetFlags(previous);
+        setWidgetError('保存失败，请重试');
+      } finally {
+        setWidgetSavingKey(null);
+      }
+    },
+    [widgetFlags, widgetSavingKey],
   );
 
   const handleImport = useCallback(async (): Promise<void> => {
@@ -295,6 +373,32 @@ export default function SettingsPage() {
           );
         })}
         {modeError !== null ? <Text style={styles.errorHint}>{modeError}</Text> : null}
+      </View>
+
+      {/* 阶段 7a：小组件显示开关（app_settings v7；emoji/标签开关随阶段 7c 渲染加入） */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>小组件显示</Text>
+        <Text style={styles.hint}>控制桌面「今日待办」小组件的列表内容。</Text>
+        {widgetFlags === null ? (
+          <Text style={styles.hint}>加载中…</Text>
+        ) : (
+          WIDGET_TOGGLE_OPTIONS.map((option) => (
+            <View key={option.key} style={styles.widgetToggleRow}>
+              <View style={styles.widgetToggleText}>
+                <Text style={styles.radioLabel}>{option.label}</Text>
+                <Text style={styles.widgetToggleHint}>{option.hint}</Text>
+              </View>
+              <Switch
+                value={widgetFlags[option.key]}
+                onValueChange={(value) => {
+                  void handleWidgetFlagChange(option.key, value);
+                }}
+                disabled={widgetSavingKey !== null}
+              />
+            </View>
+          ))
+        )}
+        {widgetError !== null ? <Text style={styles.errorHint}>{widgetError}</Text> : null}
       </View>
 
       <View style={styles.section}>
@@ -481,5 +585,22 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#333',
     flex: 1,
+  },
+  // —— 切片 14 阶段 7a：小组件显示开关行 ——
+  widgetToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+  },
+  widgetToggleText: {
+    flex: 1,
+    paddingRight: 12,
+  },
+  widgetToggleHint: {
+    fontSize: 12,
+    color: '#999',
+    marginTop: 2,
   },
 });

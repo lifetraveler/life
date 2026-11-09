@@ -278,6 +278,53 @@
   （原 492 + 新增 7）。
 
 
+### 小组件升级 7a：滚动列表 + 三段式快照 + 显示开关（2026-11-09，提案 docs/proposals/slice-14-widget-phase7.md）
+
+#### 目标（用户 4 需求的第 1/2 条，需求 3/4 留 7b/7c）
+今日列表超长可滚动浏览；过期/待办展示改为配置（展示时置底）。
+
+#### 实现记录（2026-11-09）
+
+- 领域层｜settings.ts：`AppSettings` 增 4 个 boolean 开关
+  （widgetShowOverdue/widgetShowTodos/widgetShowCategoryEmoji/widgetShowTags，
+  默认 true/false/false/false，emoji/tags 渲染消费在 7c）。
+- 快照｜snapshot.ts：`WIDGET_SNAPSHOT_MAX_PER_GROUP` 5→50（滚动列表护栏）；
+  `WidgetSnapshot.groups` 增 `todos` 三段式（BuildTodayWidgetSnapshotInput 增
+  todos 输入，timeLabel 恒『待办』，仅 active，categoryColor 透传）；键
+  widget_today_snapshot_v1 与 JSON 兼容性不变（narrowEntry 对旧快照宽松读）。
+- DB｜schema v6→v7：app_settings 加 4 列（非可选 boolean）+ migration v7
+  （addColumns 自动回填 0，仅 widget_show_overdue 显式 `UPDATE = 1`）；
+  AppSettingsModel 4 个 @field；seed.ts 建行写 4 默认值（数据源 DEFAULT_APP_SETTINGS）。
+- Repository｜`getSettings/updateSettings` 支持 4 开关；新增
+  `listUnscheduledItems()`（start_at NULL + active，createdAt 降序，不限时间窗口，
+  区别于 unscheduledCreatedInRangeQuery）与 `observeUnscheduledItems()`
+  （combineLatest4，列订阅口径同阶段 6）。
+- 写入器与桥｜WidgetSnapshotWriter 按开关条件取数（关→空数组）；snapshotBridge
+  数据订阅加 observeUnscheduledItems（开关不入订阅——桥不订阅 app_settings，
+  设置页改完自行触发刷新，触发点 1-4 语义不变）。
+- 渲染｜TodayWidget.tsx：行区改「包裹 FlexWidget{flex:1} + ListWidget（原生
+  ListView 滚动，行为独立位图）」，行序=已安排→过期→待办；空态同用 flex:1 占位
+  保快速记录按钮贴底（平台机制实锤见提案文档）。
+- 设置页｜profile.tsx 新增「小组件显示」节：展示过期项/展示待办项 2 个 Switch
+  （emoji/标签开关随 7c 渲染落地时加入，避免死开关）；乐观更新+失败回滚+页内
+  提示（同标签样式区模式），保存成功后手动 writeSnapshotFromRepository →
+  refreshTodayWidgets。
+- 测试｜snapshot.test.ts 适配护栏 50 与三段（用例 3 改 51/52/53→各截 50；
+  新增用例 8：todos 『待办』标签+仅 active+取色透传）；viewQueries.test.ts 新增
+  listUnscheduledItems 3 例（筛选/排序/categoryId 发射水合）+ settings 读写 2 例；
+  seedPreset.test.ts 结构断言升 v7 并加 v7 step 校验；ReminderScheduler.test.ts
+  FakeRepository 补 2 接口 stub（§7.13 编译必需）。
+- 验证｜`npx tsc --noEmit` 零错误；`npx jest --runInBand` 40 套件 506 用例全过
+  （原 499 + 新增 7）。
+
+#### 7a 验收
+70. `tsc` 零错误，`jest` 全过（506）。
+71. 真机验证（用户执行）：设置页出现「小组件显示」节，关「展示过期项」后
+    小组件不再显示过期行；开「展示待办项」后无时间待办以『待办』标签出现在
+    列表底部。
+72. 真机验证（用户执行）：今日条目超过组件可视高度时，列表可上下滑动浏览
+    （Native ListView），快速记录按钮始终可见；建 10+ 条验证。
+
 ### 阶段 7：导入预览
 - 拦截 ICS 和系统日历导入，进入预览勾选页，确认后批量落库。
 

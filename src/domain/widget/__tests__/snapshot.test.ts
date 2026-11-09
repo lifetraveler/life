@@ -1,8 +1,9 @@
 /**
- * buildTodayWidgetSnapshot 单测（切片 10 六类用例 + 切片 14 阶段 5 categoryColor 透传）：
- * 1) 空输入；2) 恰好 5 条；3) 超 5 截断；4) allDay → '全天'；
- * 5) done 在 scheduled（含 done，位置沿用输入序）；6) overdue 仅 active（done/archived 被过滤）；
- * 7) categoryColor 透传（v0.14 阶段 5：有分类带原色，无分类为 null）。
+ * buildTodayWidgetSnapshot 单测（切片 10 六类用例 + 切片 14 阶段 5/7a）：
+ * 1) 空输入；2) 恰好 5 条；3) 超护栏截断（阶段 7a：top5→50，三段各自截断）；
+ * 4) allDay → '全天'；5) done 在 scheduled（含 done，位置沿用输入序）；
+ * 6) overdue 仅 active（done/archived 被过滤）；7) categoryColor 透传（v0.14 阶段 5）；
+ * 8) todos 组（阶段 7a：'待办' 标签、仅 active、categoryColor 透传、输入序保留）。
  * 期望值独立构造，timeLabel 断言统一用 tzid 'UTC'（jest 与真机运行时下行为一致，确定性最高）。
  */
 
@@ -71,17 +72,18 @@ describe('WIDGET_SNAPSHOT_PREFS_KEY', () => {
 });
 
 describe('buildTodayWidgetSnapshot · 用例 1：空输入', () => {
-  it('两组均为空数组，generatedAt/tzid 原样写入', () => {
+  it('三组均为空数组，generatedAt/tzid 原样写入', () => {
     const snapshot = buildTodayWidgetSnapshot({
       overdue: [],
       scheduled: [],
+      todos: [],
       nowMs: NOW,
       tzid: 'UTC',
     });
     expect(snapshot).toEqual({
       generatedAt: NOW,
       tzid: 'UTC',
-      groups: { overdue: [], scheduled: [] },
+      groups: { overdue: [], scheduled: [], todos: [] },
     });
   });
 });
@@ -102,6 +104,7 @@ describe('buildTodayWidgetSnapshot · 用例 2：恰好 5 条', () => {
     const snapshot = buildTodayWidgetSnapshot({
       overdue,
       scheduled,
+      todos: [],
       nowMs: NOW,
       tzid: 'UTC',
     });
@@ -133,26 +136,33 @@ describe('buildTodayWidgetSnapshot · 用例 2：恰好 5 条', () => {
   });
 });
 
-describe('buildTodayWidgetSnapshot · 用例 3：超 5 截断', () => {
-  it('overdue 6 条 / scheduled 7 条 → 各截前 5，顺序沿用输入序（不重排）', () => {
-    const overdue = [1, 2, 3, 4, 5, 6].map((n) =>
-      makeItem({ id: `o${n}`, endAt: NOW - n * 60_000 }),
+describe('buildTodayWidgetSnapshot · 用例 3：超护栏截断（阶段 7a：50）', () => {
+  it('overdue 51 条 / scheduled 52 条 / todos 53 条 → 各截前 50，顺序沿用输入序（不重排）', () => {
+    const overdue = Array.from({ length: 51 }, (_, i) =>
+      makeItem({ id: `o${i + 1}`, endAt: NOW - (i + 1) * 60_000 }),
     );
-    const scheduled = [1, 2, 3, 4, 5, 6, 7].map((n) =>
-      makeItem({ id: `s${n}`, startAt: Date.UTC(2026, 2, 15, n, 0) }),
+    const scheduled = Array.from({ length: 52 }, (_, i) =>
+      makeItem({ id: `s${i + 1}`, startAt: Date.UTC(2026, 2, 15, 0, i + 1) }),
+    );
+    const todos = Array.from({ length: 53 }, (_, i) =>
+      makeItem({ id: `t${i + 1}`, createdAt: 10_000 - i }),
     );
     const snapshot = buildTodayWidgetSnapshot({
       overdue,
       scheduled,
+      todos,
       nowMs: NOW,
       tzid: 'UTC',
     });
-    expect(snapshot.groups.overdue.map((e) => e.id)).toEqual([
-      'o1', 'o2', 'o3', 'o4', 'o5',
-    ]);
-    expect(snapshot.groups.scheduled.map((e) => e.id)).toEqual([
-      's1', 's2', 's3', 's4', 's5',
-    ]);
+    expect(snapshot.groups.overdue.map((e) => e.id)).toHaveLength(50);
+    expect(snapshot.groups.overdue[0].id).toBe('o1');
+    expect(snapshot.groups.overdue[49].id).toBe('o50');
+    expect(snapshot.groups.scheduled.map((e) => e.id)).toHaveLength(50);
+    expect(snapshot.groups.scheduled[0].id).toBe('s1');
+    expect(snapshot.groups.scheduled[49].id).toBe('s50');
+    expect(snapshot.groups.todos.map((e) => e.id)).toHaveLength(50);
+    expect(snapshot.groups.todos[0].id).toBe('t1');
+    expect(snapshot.groups.todos[49].id).toBe('t50');
   });
 });
 
@@ -163,6 +173,7 @@ describe('buildTodayWidgetSnapshot · 用例 4：allDay', () => {
       scheduled: [
         makeItem({ id: 'a1', type: 'event', allDay: true, startAt: Date.UTC(2026, 2, 15, 0, 0) }),
       ],
+      todos: [],
       nowMs: NOW,
       tzid: 'UTC',
     });
@@ -187,6 +198,7 @@ describe('buildTodayWidgetSnapshot · 用例 5：done 在 scheduled', () => {
         makeItem({ id: 's1', startAt: Date.UTC(2026, 2, 15, 9, 5) }),
         makeItem({ id: 'd1', status: 'done', startAt: Date.UTC(2026, 2, 15, 14, 45) }),
       ],
+      todos: [],
       nowMs: NOW,
       tzid: 'UTC',
     });
@@ -213,6 +225,7 @@ describe('buildTodayWidgetSnapshot · 用例 6：overdue 仅 active', () => {
     const snapshot = buildTodayWidgetSnapshot({
       overdue,
       scheduled: [],
+      todos: [],
       nowMs: NOW,
       tzid: 'UTC',
     });
@@ -231,6 +244,7 @@ describe('buildTodayWidgetSnapshot · 用例 7：categoryColor 透传（v0.14 �
       scheduled: [
         makeItem({ id: 's1', startAt: Date.UTC(2026, 2, 15, 9, 0), category: workCategory }),
       ],
+      todos: [],
       nowMs: NOW,
       tzid: 'UTC',
     });
@@ -246,9 +260,40 @@ describe('buildTodayWidgetSnapshot · 用例 7：categoryColor 透传（v0.14 �
       scheduled: [
         makeItem({ id: 's1', startAt: Date.UTC(2026, 2, 15, 9, 0), category: noColorCategory }),
       ],
+      todos: [],
       nowMs: NOW,
       tzid: 'UTC',
     });
     expect(snapshot.groups.scheduled[0].categoryColor).toBeNull();
+  });
+});
+
+describe('buildTodayWidgetSnapshot · 用例 8：todos 组（阶段 7a）', () => {
+  it('无时间待办 timeLabel 为 待办，仅 active 进入，categoryColor 透传，顺序沿用输入序', () => {
+    const workCategory = makeCategory({ id: 'work', color: '#2E7D32', emoji: '💼' });
+    const snapshot = buildTodayWidgetSnapshot({
+      overdue: [],
+      scheduled: [],
+      todos: [
+        // todos 输入按 createdAt 降序（listUnscheduledItems 保证），此处沿用该序
+        makeItem({ id: 't1', createdAt: 3000 }),
+        makeItem({ id: 't2', status: 'done', createdAt: 2000 }),
+        makeItem({ id: 't3', status: 'archived', createdAt: 1500 }),
+        makeItem({ id: 't4', createdAt: 1000, category: workCategory }),
+      ],
+      nowMs: NOW,
+      tzid: 'UTC',
+    });
+    expect(snapshot.groups.todos.map((e) => e.id)).toEqual(['t1', 't4']);
+    expect(snapshot.groups.todos[0]).toEqual({
+      id: 't1',
+      title: '标题t1',
+      type: 'task',
+      timeLabel: '待办',
+      status: 'active',
+      categoryColor: null,
+    });
+    expect(snapshot.groups.todos[1].categoryColor).toBe('#2E7D32');
+    expect(snapshot.groups.todos[1].timeLabel).toBe('待办');
   });
 });

@@ -89,14 +89,14 @@ describe('全局设置兜底（getSettings/updateSettings）', () => {
   it('空库 getSettings() 兜底返回 text 并静默落唯一 global 行；两次调用幂等不重复插行', async () => {
     const { db, repository } = makeContext();
     // 未经 seedPresetData 的空库：首次 getSettings 经 ensureSeeded 兜底
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text' });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false });
     const rows = await db.get<AppSettingsModel>('app_settings').query().fetch();
     expect(rows.length).toBe(1);
     expect(rows[0]?._raw.id).toBe(APP_SETTINGS_ROW_ID);
     expect(rows[0]?.tagDisplayMode).toBe('text');
 
     // 第二次调用：幂等，不新增行
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text' });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false });
     const rowsAgain = await db.get<AppSettingsModel>('app_settings').query().fetch();
     expect(rowsAgain.length).toBe(1);
   });
@@ -104,7 +104,7 @@ describe('全局设置兜底（getSettings/updateSettings）', () => {
   it('updateSettings 合法值生效并可回读', async () => {
     const { repository } = makeContext();
     await repository.updateSettings({ tagDisplayMode: 'emoji' });
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'emoji' });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'emoji', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false });
   });
 
   it('updateSettings 非法值抛 updateSettings: invalid tagDisplayMode', async () => {
@@ -329,13 +329,13 @@ describe('阶段 3 补充：视觉更新与设置往返边角', () => {
 
   it('updateSettings 往返：text → emoji → both → text，每步 getSettings 随之变化', async () => {
     const { repository } = makeContext();
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text' });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false });
     await repository.updateSettings({ tagDisplayMode: 'emoji' });
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'emoji' });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'emoji', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false });
     await repository.updateSettings({ tagDisplayMode: 'both' });
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'both' });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'both', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false });
     await repository.updateSettings({ tagDisplayMode: 'text' });
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text' });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false });
   });
 
   it('updateCategoryVisuals 空 patch 是合法 no-op：不抛错且视觉值不变', async () => {

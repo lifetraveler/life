@@ -170,12 +170,18 @@ function toDomainCategory(model: CategoryModel): Category {
 /**
  * 切片 14（§7.22）：app_settings 行 → 领域 AppSettings。
  * 库中读到非法枚举值（理论上不应出现，如手改数据库）时防御性回退默认值，不抛错。
+ * 阶段 7a（schema v7）：小组件显示开关 4 列为非可选 boolean（v7 migration/seed 保证有值），
+ * 直接映射；列本身无枚举语义，不存在非法值分支。
  */
 function toDomainSettings(model: AppSettingsModel): AppSettings {
   return {
     tagDisplayMode: isTagDisplayMode(model.tagDisplayMode)
       ? model.tagDisplayMode
       : DEFAULT_APP_SETTINGS.tagDisplayMode,
+    widgetShowOverdue: model.widgetShowOverdue,
+    widgetShowTodos: model.widgetShowTodos,
+    widgetShowCategoryEmoji: model.widgetShowCategoryEmoji,
+    widgetShowTags: model.widgetShowTags,
   };
 }
 
@@ -1173,6 +1179,21 @@ export class WatermelonItemRepository implements ItemRepository {
       );
   }
 
+  /**
+   * 全部待办（阶段 7a，小组件数据源）：startAt = null 且 status = active，
+   * 不限创建窗口（区别于 unscheduledCreatedInRangeQuery 的「今日创建」口径），
+   * createdAt 降序（新建的在前）。
+   */
+  private unscheduledQuery(): Query<ItemModel> {
+    return this.db
+      .get<ItemModel>(ITEMS_TABLE)
+      .query(
+        Q.where('start_at', null),
+        Q.where('status', 'active'),
+        Q.sortBy('created_at', 'desc'),
+      );
+  }
+
   /** 今日创建：startAt = null 且 createdAt ∈ [rangeStartMs, rangeEndMs) 且 status = active。 */
   private unscheduledCreatedInRangeQuery(
     rangeStartMs: number,
@@ -1208,6 +1229,14 @@ export class WatermelonItemRepository implements ItemRepository {
       this.db,
       this.unscheduledCreatedInRangeQuery(rangeStartMs, rangeEndMs),
     );
+  }
+
+  /**
+   * 全部待办（阶段 7a，契约外显式扩展，先例同 observe*）：无时间纯待办快照数据源。
+   * 语义 = unscheduledQuery（startAt null + active，不限创建窗口，createdAt 降序）。
+   */
+  async listUnscheduledItems(): Promise<ItemWithRelations[]> {
+    return loadItemsWithRelationsByItemQuery(this.db, this.unscheduledQuery());
   }
 
   observeScheduledItemsInRange(
@@ -1255,6 +1284,22 @@ export class WatermelonItemRepository implements ItemRepository {
       // 本查询 status 仅取 active：翻转即成员变化，observe() 本就会发射；
       // 仍统一用 observeWithColumns 与另两个视图订阅保持同一语义口径（防御性）。
       this.unscheduledCreatedInRangeQuery(rangeStartMs, rangeEndMs).observeWithColumns(['status']),
+      this.itemTagsJoinQuery().observe(),
+      this.allTagsQuery().observeWithColumns(TAG_WATCH_COLUMNS),
+      this.allCategoriesQuery().observeWithColumns(CATEGORY_WATCH_COLUMNS),
+      joinItemsWithRelations,
+      onNext,
+    );
+  }
+
+  /**
+   * 全部待办观察（阶段 7a，契约外显式扩展，先例同 observe*）：小组件快照桥订阅，
+   * 待办增删/行内字段变更时重发射。列清单沿用 ITEM_WATCH_COLUMNS（阶段 6 起的统一口径：
+   * 水合所需字段 + 阶段 6 教训——行内 categoryId/title 更新必须显式监听才发射）。
+   */
+  observeUnscheduledItems(onNext: (items: ItemWithRelations[]) => void): () => void {
+    return combineLatest4(
+      this.unscheduledQuery().observeWithColumns(ITEM_WATCH_COLUMNS),
       this.itemTagsJoinQuery().observe(),
       this.allTagsQuery().observeWithColumns(TAG_WATCH_COLUMNS),
       this.allCategoriesQuery().observeWithColumns(CATEGORY_WATCH_COLUMNS),
@@ -1481,6 +1526,11 @@ export class WatermelonItemRepository implements ItemRepository {
         await this.db.get<AppSettingsModel>(APP_SETTINGS_TABLE).create((record) => {
           record._raw.id = APP_SETTINGS_ROW_ID;
           record.tagDisplayMode = DEFAULT_APP_SETTINGS.tagDisplayMode;
+          // 阶段 7a（schema v7）：补插默认行时一并写小组件显示开关默认值。
+          record.widgetShowOverdue = DEFAULT_APP_SETTINGS.widgetShowOverdue;
+          record.widgetShowTodos = DEFAULT_APP_SETTINGS.widgetShowTodos;
+          record.widgetShowCategoryEmoji = DEFAULT_APP_SETTINGS.widgetShowCategoryEmoji;
+          record.widgetShowTags = DEFAULT_APP_SETTINGS.widgetShowTags;
         });
         return { ...DEFAULT_APP_SETTINGS };
       }
@@ -1488,7 +1538,12 @@ export class WatermelonItemRepository implements ItemRepository {
     });
   }
 
-  /** 更新全局设置（当前仅支持 tagDisplayMode）；行不存在时以 patch 值（缺省用默认值）建行。 */
+  /**
+   * 更新全局设置（阶段 7a 扩展：tagDisplayMode + 小组件显示开关 4 项）；
+   * 行不存在时以 patch 值（缺省用默认值）建行。
+   * 改动小组件显示开关后，调用方需自行触发一次小组件快照刷新
+   * （桥不订阅 app_settings；设置页负责）。
+   */
   async updateSettings(patch: Partial<AppSettings>): Promise<void> {
     await this.ensureSeeded();
     if (patch.tagDisplayMode !== undefined && !isTagDisplayMode(patch.tagDisplayMode)) {
@@ -1501,12 +1556,29 @@ export class WatermelonItemRepository implements ItemRepository {
         await this.db.get<AppSettingsModel>(APP_SETTINGS_TABLE).create((record) => {
           record._raw.id = APP_SETTINGS_ROW_ID;
           record.tagDisplayMode = patch.tagDisplayMode ?? DEFAULT_APP_SETTINGS.tagDisplayMode;
+          record.widgetShowOverdue = patch.widgetShowOverdue ?? DEFAULT_APP_SETTINGS.widgetShowOverdue;
+          record.widgetShowTodos = patch.widgetShowTodos ?? DEFAULT_APP_SETTINGS.widgetShowTodos;
+          record.widgetShowCategoryEmoji =
+            patch.widgetShowCategoryEmoji ?? DEFAULT_APP_SETTINGS.widgetShowCategoryEmoji;
+          record.widgetShowTags = patch.widgetShowTags ?? DEFAULT_APP_SETTINGS.widgetShowTags;
         });
         return;
       }
       await model.update((draft) => {
         if (patch.tagDisplayMode !== undefined) {
           draft.tagDisplayMode = patch.tagDisplayMode;
+        }
+        if (patch.widgetShowOverdue !== undefined) {
+          draft.widgetShowOverdue = patch.widgetShowOverdue;
+        }
+        if (patch.widgetShowTodos !== undefined) {
+          draft.widgetShowTodos = patch.widgetShowTodos;
+        }
+        if (patch.widgetShowCategoryEmoji !== undefined) {
+          draft.widgetShowCategoryEmoji = patch.widgetShowCategoryEmoji;
+        }
+        if (patch.widgetShowTags !== undefined) {
+          draft.widgetShowTags = patch.widgetShowTags;
         }
       });
     });

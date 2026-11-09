@@ -75,9 +75,16 @@ export function initWidgetSnapshotBridge(): () => void {
       todayRange.endMs,
       scheduleDataChangeRefresh,
     );
+    // 阶段 7a：待办组数据源（widgetShowTodos 开启时进快照）。开关本身不入订阅
+    // （桥不订阅 app_settings，设置页改完开关自行触发刷新）；这里恒订阅，
+    // 待办增删/行内变更只在下次写快照时按当下配置消费。
+    const unsubscribeUnscheduled = itemRepository.observeUnscheduledItems(
+      scheduleDataChangeRefresh,
+    );
     unsubscribeDataChanges = () => {
       unsubscribeOverdue();
       unsubscribeScheduled();
+      unsubscribeUnscheduled();
     };
   };
 

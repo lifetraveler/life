@@ -2,8 +2,9 @@ import { appSchema, tableSchema } from '@nozbe/watermelondb';
 
 /**
  * schema 版本号：任何表/列变更必须 +1 并提供 migration（AGENTS.md §4.1 / §4.6）。
+ * v7（切片 14 阶段 7a）：app_settings 新增小组件显示开关 4 列（docs/proposals/slice-14-widget-phase7.md）。
  */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 export const schema = appSchema({
   version: SCHEMA_VERSION,
@@ -98,10 +99,15 @@ export const schema = appSchema({
     }),
     // 切片 14（AGENTS.md §7.22，schema v6）：全局设置单行表（id 固定 'global'）。
     // getSettings 无记录时兜底返回默认值（repository.md v0.14），seed/migration 均会插入默认行。
+    // v7（阶段 7a）：小组件显示开关 4 列（非可选 boolean，列名 widget_show_*）。
     tableSchema({
       name: 'app_settings',
       columns: [
         { name: 'tag_display_mode', type: 'string' },
+        { name: 'widget_show_overdue', type: 'boolean' },
+        { name: 'widget_show_todos', type: 'boolean' },
+        { name: 'widget_show_category_emoji', type: 'boolean' },
+        { name: 'widget_show_tags', type: 'boolean' },
       ],
     }),
   ],

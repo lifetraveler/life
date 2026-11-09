@@ -532,3 +532,124 @@ describe('listUnscheduledItemsCreatedInRange', () => {
     }
   });
 });
+
+// —— listUnscheduledItems / observeUnscheduledItems（切片 14 阶段 7a：小组件待办组数据源） ——
+
+describe('listUnscheduledItems', () => {
+  it('startAt null 且 active 的项全量命中（不限时间窗口）；scheduled / done / archived 排除', async () => {
+    const repository = makeRepository();
+    const created = await createItems(repository, [
+      { title: 'todo-1', startAt: null, endAt: null },
+      { title: 'todo-2', startAt: null, endAt: null },
+      { title: 'scheduled', startAt: 1_000, endAt: null },
+    ]);
+    await repository.updateItem(created[1].id, { status: 'done' });
+    const toArchive = await repository.createItem({
+      type: 'note',
+      title: 'archived',
+      startAt: null,
+      endAt: null,
+    });
+    await repository.archiveItem(toArchive.id);
+
+    // 仅 todo-1 剩余：todo-2 已 done、archived 已归档、scheduled 有 startAt
+    const found = await repository.listUnscheduledItems();
+    expect(byTitle(found)).toEqual(['todo-1']);
+  });
+
+  it('排序：createdAt 降序（后创建在前），与待办组快照输入序一致', async () => {
+    const repository = makeRepository();
+    await createItems(repository, [
+      { title: 'first', startAt: null, endAt: null },
+      { title: 'second', startAt: null, endAt: null },
+      { title: 'third', startAt: null, endAt: null },
+    ]);
+
+    const found = await repository.listUnscheduledItems();
+    expect(byTitle(found)).toEqual(['third', 'second', 'first']);
+  });
+
+  it('observeUnscheduledItems：行内改 categoryId 触发重发射并水合新分类色（阶段 7a 快照链路）', async () => {
+    const repository = makeRepository();
+    const created = await createItems(repository, [
+      { title: 'categorized', startAt: null, endAt: null },
+    ]);
+
+    // FIFO 等待队列与同步首发射处理同上（发射值为水合 ItemWithRelations）。
+    const waiters: Array<(value: ItemWithRelations[]) => void> = [];
+    const next = (): Promise<ItemWithRelations[]> =>
+      new Promise<ItemWithRelations[]>((resolve) => {
+        waiters.push(resolve);
+      });
+    const onNext = (items: ItemWithRelations[]): void => {
+      const waiter = waiters.shift();
+      waiter?.(items);
+    };
+
+    const initialPromise = next();
+    const recolorPromise = next();
+    const unsubscribe = repository.observeUnscheduledItems(onNext);
+    try {
+      // createItem 未传 categoryId → 默认 other（预置色 #9E9E9E）
+      const initial = await initialPromise;
+      expect(initial[0]?.category?.id).toBe('other');
+      expect(initial[0]?.category?.color).toBe('#9E9E9E');
+
+      // 改 categoryId 不改变匹配集合成员资格，必须依赖
+      // observeWithColumns(ITEM_WATCH_COLUMNS 含 category_id) 捕获字段级变化。
+      await repository.updateItem(created[0].id, { categoryId: 'work' });
+      const recolored = await Promise.race([
+        recolorPromise,
+        sleep(500).then((): 'timeout' => 'timeout'),
+      ]);
+      if (recolored === 'timeout') {
+        throw new Error('categoryId change did not trigger re-emission');
+      }
+      expect(recolored[0]?.category?.id).toBe('work');
+      expect(recolored[0]?.category?.color).toBe('#E57373');
+    } finally {
+      unsubscribe();
+    }
+  });
+});
+
+// —— getSettings / updateSettings（切片 14 阶段 7a：小组件显示开关） ——
+
+describe('getSettings / updateSettings · 小组件显示开关（阶段 7a）', () => {
+  it('无记录时 getSettings 兜底建行并返回默认值：overdue=true、todos/emoji/tags=false', async () => {
+    const repository = makeRepository();
+    const settings = await repository.getSettings();
+    expect(settings).toEqual({
+      tagDisplayMode: 'text',
+      widgetShowOverdue: true,
+      widgetShowTodos: false,
+      widgetShowCategoryEmoji: false,
+      widgetShowTags: false,
+    });
+  });
+
+  it('updateSettings 更新 4 个小组件开关并持久化（getSettings 复读一致）', async () => {
+    const repository = makeRepository();
+    await repository.updateSettings({
+      widgetShowOverdue: false,
+      widgetShowTodos: true,
+      widgetShowCategoryEmoji: true,
+      widgetShowTags: true,
+    });
+
+    const settings = await repository.getSettings();
+    expect(settings.widgetShowOverdue).toBe(false);
+    expect(settings.widgetShowTodos).toBe(true);
+    expect(settings.widgetShowCategoryEmoji).toBe(true);
+    expect(settings.widgetShowTags).toBe(true);
+
+    // 部分更新不覆盖未提及字段
+    await repository.updateSettings({ widgetShowTodos: false });
+    const afterPartial = await repository.getSettings();
+    expect(afterPartial.widgetShowTodos).toBe(false);
+    expect(afterPartial.widgetShowOverdue).toBe(false);
+    expect(afterPartial.widgetShowCategoryEmoji).toBe(true);
+    expect(afterPartial.widgetShowTags).toBe(true);
+    expect(afterPartial.tagDisplayMode).toBe('text');
+  });
+});
