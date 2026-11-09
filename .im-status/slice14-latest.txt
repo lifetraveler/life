@@ -1,34 +1,36 @@
-# 切片14 阶段5g 完成状态（2026-11-09 17:25）
+# 切片14 阶段5h 完成状态（2026-11-09 18:17）
 
-## 本轮修复（用户 3 bug）
-1. **日程视图点「今天」不跳今日组**（唯一实锤）——已修复+真机复验通过
-2. 学习事件日视图不并排/被覆盖——复现实测 4-lane 布局正确，未复现（疑旧状态）
-3. 周视图不展示新增项——复现实测正常显示，未复现（疑旧状态）
+## 本轮修复（用户 3 bug，全部真机复验通过）
+1. **新增带时间项落进「待办」、旧项像被「挪到对应日」**——已修复
+2. **周视图新增数据要操作下一条才显示**——同根因，已修复
+3. **月历点「今天」先闪 9 月再跳**——已修复
 
-## 今日组定位链修复（4 层排障实锤，全在 src/app/(tabs)/plan.tsx）
-- ①prepend 守卫误触发：FlatList 重挂（key 变化）首帧 onScroll y=0 会触发 prepend
-  把定位好的组头顶下去 → 触发源改 onScrollEndDrag/onMomentumScrollEnd（仅用户手势），
-  onScroll 只记 lastAgendaOffsetRef
-- ②Fabric scrollToIndex 对未测量行静默无效（不滚也不触发 onScrollToIndexFailed）
-  → 先按平均行高估算 offset 大跳把窗口推近
-- ③Android FlatList 子项 transform 定位，item 内 onLayout.y 恒≈0 不可用
-  → 今日组头挂 ref，精修用 measureInWindow（header 窗口y − 列表窗口y + 当前offset）
-- ④真因：今日组接近列表末尾，末尾内容不足一屏，max offset 卡在贴顶之前
-  （header offset 1027.5 > max 970，差 57.5 物理滚不到）→ 列表底部补
-  paddingBottom≈0.9×屏高 filler
+## 根因与修复
+### bug1+2（同一根因，WatermelonDB 订阅语义）
+- 根因：`Query.observe()` 只在「匹配集合成员」变化时发射；行内字段更新（成员不变）
+  不发射。新增保存链=createItem → updateItemTime 两步写，第二步的时间字段属成员
+  不变的字段级变化 → 列表永远停在「无时间」中态（进待办组）；用户后来编辑改时间
+  才触发一次更新，看起来像「挪到对应的日里」。
+- 修复：observeItemsWithTags / observeItems / observeTags / categories 订阅全部改
+  observeWithColumns 列订阅（ITEM_WATCH_COLUMNS / TAG_WATCH_COLUMNS /
+  CATEGORY_WATCH_COLUMNS；item_tags join 表保持 observe()——关联增删本就是成员变化）。
+- 文件：src/data/WatermelonItemRepository.ts
 
-## 真机验证（MuMu 127.0.0.1:16384）
-- 冷启动直接定位「今天」组头贴顶 ✓
-- 滚远（跨多月）→点今天→跳回贴顶 ✓
-- 从 prepend 出的远月（7月）点今天→跳回贴顶 ✓
-- 下滑到顶连续 prepend（10→9→8→7月名行）+标签随生效月联动 ✓
-- 副作用：列表末尾有一屏左右留白（今日组贴顶的滚动余量，月历类 app 常见形态）
+### bug3（月历跳月中间态）
+- 修复：MonthCalendarView 定位改 key 重挂 + initialScrollIndex 渲染期定位
+  （同 agenda 5g 方案），消除「页窗口重置 → 80ms 后才 scrollToIndex」的视口中间态。
+- 文件：src/ui/MonthCalendarView.tsx
+
+## 真机闭环验证（MuMu 127.0.0.1:16384）
+- P5Hwk/P5Hwk2/P5Hwk3 三条带时间项保存后均**直接落位「今天」组**（不再先进待办）
+- 待办组只剩真无时间项 ✓
+- 月历滚远（停顿后）点「今天」一次直达本月页，无闪跳 ✓
+- 注：滚动惯性未停止时立即 tap 会被吞（操作时机，非 bug）
 
 ## 验证
 - tsc 0 错误；jest 39 套件 492 全过；expo-doctor 16/18（2 失败=基线告警）
-- 提交 4658d6d「fix(s14): 阶段5g 真机回归修复2——今日组定位链(重挂prepend/估算跳/measureInWindow精修/底部filler)」（2 文件 +152/−31）
-- 任务卡「阶段 5g」小节+验收 57-59 已记录
+- 提交 c9de2f4「fix(s14): 阶段5h 真机回归修复3——观察订阅列级修正(新增时间字段丢渲染)与月历跳月重挂定位」（4 文件 +109/−32）
+- 任务卡「阶段 5h」小节+验收 60-62 已记录
 
-## 备注
-- bug ①② 未复现：建议用户确认当时视图状态；若再报，需提供具体操作路径
-- 提交序列：74e0a1c(5e) → 6292259(5f) → 4658d6d(5g)
+## 提交序列
+74e0a1c(5e) → 6292259(5f) → 4658d6d(5g) → c9de2f4(5h)
