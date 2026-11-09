@@ -416,7 +416,9 @@ export default function PlanScreen() {
               (item.startAt >= viewRange.startMs && item.startAt < viewRange.endMs),
           )
         : items;
-    const scoped = viewKind === 'agenda' ? ranged : ranged.filter((item) => item.startAt !== null);
+    // 阶段 5i：待办（无时间项）移出所有主视图列表，独立入口 /todos——
+    // agenda 也不再经过此函数（月窗口自带 startAt 过滤），统一排除无时间项。
+    const scoped = ranged.filter((item) => item.startAt !== null);
     const filtered = filterItems(scoped, activeFilters);
     return groupItemsForAgenda(filtered, {
       viewKind,
@@ -514,17 +516,13 @@ export default function PlanScreen() {
   }, [displayedGroups, todayKey]);
 
   // —— 阶段 5e：agenda 月窗口数据 ——
-  // 每页=月名标题行（恒存在，供定位与标签联动）+ 该月按日分组行；
-  // 「待办」组（无时间项）跟随生效月（agendaTopMonth）页首。
+  // 每页=月名标题行（恒存在，供定位与标签联动）+ 该月按日分组行。
+  // 阶段 5i：待办（无时间项）移出主列表，独立入口 /todos——主列表不再混排。
   const agendaRows = useMemo<AgendaRow[]>(() => {
     if (viewKind !== 'agenda') {
       return [];
     }
     const result: AgendaRow[] = [];
-    const todoSource = filterItems(
-      items.filter((item) => item.startAt === null),
-      activeFilters,
-    );
     for (const page of agendaPages) {
       result.push({
         kind: 'header',
@@ -534,34 +532,6 @@ export default function PlanScreen() {
         count: 0,
         isMonthHeader: true,
       });
-      if (
-        page.year === agendaTopMonth.year &&
-        page.month === agendaTopMonth.month &&
-        todoSource.length > 0
-      ) {
-        const todoGroups = groupItemsForAgenda(todoSource, {
-          viewKind: 'agenda',
-          nowMs: viewTime.nowMs,
-          tzid: viewTime.tzid,
-        });
-        for (const group of todoGroups) {
-          result.push({
-            kind: 'header',
-            key: `header-${group.key}`,
-            label: group.label,
-            isToday: false,
-            count: group.items.length,
-          });
-          for (const itemRecord of group.items) {
-            result.push({
-              kind: 'item',
-              key: `item-${group.key}-${itemRecord.id}`,
-              civilKey: group.key,
-              item: itemRecord,
-            });
-          }
-        }
-      }
       const range = getMonthRangeForCivil(viewTime.tzid, page.year, page.month);
       const ranged = items.filter(
         (item) =>
@@ -679,8 +649,11 @@ export default function PlanScreen() {
     return () => clearTimeout(timer);
   }, [agendaJumpKey, agendaPages, agendaRows, viewKind]);
 
-  const emptyMessage = useMemo(() => {
-    if (viewKind === 'week') {
+  // 阶段 5i：顶栏「待」入口——存在无时间条目时显示，点击进入待办列表页
+  // （observeItemsWithTags 为 NOT_ARCHIVED 查询，归档的待办不出现在这里）。
+  const hasUnscheduled = useMemo(() => items.some((item) => item.startAt === null), [items]);
+
+  const emptyMessage = useMemo(() => {    if (viewKind === 'week') {
       // 阶段 5c 周双态；阶段 5d 整周态=自然周语义
       return weekMode === 'whole' ? '本周没有安排' : '当天没有安排';
     }
@@ -1063,6 +1036,17 @@ export default function PlanScreen() {
               </Text>
             </Pressable>
           ) : null}
+          {hasUnscheduled ? (
+            /* 「待」pill（阶段 5i）：有等待安排的无时间条目时显示，独立待办列表入口 */
+            <Pressable
+              hitSlop={8}
+              style={styles.todoPill}
+              onPress={() => router.push('/todos')}
+              accessibilityLabel="待办列表"
+            >
+              <Text style={styles.todoPillText}>待</Text>
+            </Pressable>
+          ) : null}
           <Pressable hitSlop={8} style={styles.todayPill} onPress={goToday}>
             <Text style={styles.todayPillText}>今天</Text>
           </Pressable>
@@ -1362,6 +1346,18 @@ const styles = StyleSheet.create({
     height: 6,
     borderRadius: 3,
     backgroundColor: '#E53935',
+  },
+  // 阶段 5i「待」pill：与今天 pill 同款黑底白字，单字提醒
+  todoPill: {
+    backgroundColor: '#111111',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  todoPillText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#FFFFFF',
   },
   // 阶段 5b 周条：7 天 chip 行
   weekStrip: {

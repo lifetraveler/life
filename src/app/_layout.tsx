@@ -105,6 +105,8 @@ export default function RootLayout() {
         <Stack.Screen name="today" options={{ title: '今日' }} />
         <Stack.Screen name="week" options={{ title: '本周' }} />
         <Stack.Screen name="archived" options={{ title: '已归档' }} />
+        {/* 阶段 5i：待办独立入口（无时间条目列表，顶栏「待」pill 进入） */}
+        <Stack.Screen name="todos" options={{ title: '待办' }} />
         {/* 切片 14 阶段 3：分类/标签视觉配置页（tasks/slice-14.md 阶段 3） */}
         <Stack.Screen name="settings/categories" options={{ title: '分类管理' }} />
         <Stack.Screen name="settings/tags" options={{ title: '标签管理' }} />
