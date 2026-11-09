@@ -1,15 +1,19 @@
 /**
- * 日视图纵向时间轴（切片 14 阶段 5b，tasks/slice-14.md 阶段 5b-4）：
+ * 日视图纵向时间轴（切片 14 阶段 5b；阶段 5c 重构列结构 + 横滑切日）：
  * - 顶部：全天/无时间区（allDay 项 + startAt=null 的待办 chip）；
- * - 主体：ScrollView 纵向时间轴，每小时 64px（HOUR_PX）；左侧时间标签列 + 右侧事件画布；
+ * - 主体：ScrollView 纵向时间轴，每小时 64px（HOUR_PX）；阶段 5c 起为两列结构——
+ *   左侧固定宽时间标签列 + 右侧 flex:1 事件画布，事件块/小时线/红线的百分比与
+ *   absolute 坐标全部相对右侧画布（修复 5b 版块盖住时间列的偏移）；
  * - 事件块由 layoutDayEvents 预布局（分钟/比例坐标，本组件乘 px 换算），重叠自动横向平分；
- * - 当前时刻红线（nowMs 在当日范围内才渲染）；挂载时滚动到当前时刻附近（上移 2 小时）；
+ * - 横滑（PanResponder，|dx|>24 且横向意图明确）→ onShiftDay(±1) 切前后日（阶段 5c，
+ *   与周条同一手势阈值；纵向滚动仍归 ScrollView）；
+ * - 当前时刻红线（nowMs 在当日范围内才渲染）；挂载/切日时滚动到当前时刻附近（上移 2 小时）；
  * - 点事件块 → onSelectItem(id)（计划页跳详情）；
  * - 本组件不接触 Repository，全部数据经 props 传入。
  */
 
 import { useEffect, useMemo, useRef } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { PanResponder, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { DayTimelineLayout } from '../domain/views/dayTimeline';
 import type { ItemWithRelations } from '../domain/relations/itemWithRelations';
 import { formatAgendaTimeRange } from './timeFormat';
@@ -36,6 +40,8 @@ interface DayTimelineViewProps {
   nowMs: number;
   tzid: string;
   onSelectItem: (itemId: string) => void;
+  /** 横滑切日回调（±1；阶段 5c，左右滑切前后日） */
+  onShiftDay: (deltaDays: number) => void;
 }
 
 function pad2(value: number): string {
@@ -52,6 +58,7 @@ export function DayTimelineView({
   nowMs,
   tzid,
   onSelectItem,
+  onShiftDay,
 }: DayTimelineViewProps) {
   const scrollRef = useRef<ScrollView | null>(null);
 
@@ -67,19 +74,45 @@ export function DayTimelineView({
 
   const hasAllDayArea = layout.allDayItems.length > 0 || unscheduled.length > 0;
 
-  const hourMarks = useMemo(
+  // 横滑切日：水平拖过阈值 ±1 天（与周条同一阈值；纵向意图让给 ScrollView 滚动）
+  const shiftPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_event, gesture) =>
+          Math.abs(gesture.dx) > 24 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.5,
+        onPanResponderRelease: (_event, gesture) => {
+          if (gesture.dx <= -40) {
+            onShiftDay(1);
+          } else if (gesture.dx >= 40) {
+            onShiftDay(-1);
+          }
+        },
+      }),
+    [onShiftDay],
+  );
+
+  // 左列时间标签（absolute 挂在固定宽 gutter 上）
+  const gutterLabels = useMemo(
     () =>
       HOUR_LABELS.map((label, hour) => (
-        <View key={label} style={[styles.hourRow, { top: hour * HOUR_PX }]}>
-          <Text style={styles.hourLabel}>{label}</Text>
-          <View style={styles.hourLine} />
-        </View>
+        <Text key={label} style={[styles.hourLabel, { top: hour * HOUR_PX - 6 }]}>
+          {label}
+        </Text>
+      )),
+    [],
+  );
+
+  // 右侧画布小时线（absolute，相对画布全宽）
+  const hourLines = useMemo(
+    () =>
+      HOUR_LABELS.map((label, hour) => (
+        <View key={label} style={[styles.hourLine, { top: hour * HOUR_PX }]} />
       )),
     [],
   );
 
   return (
-    <View style={styles.container}>
+    <View style={styles.container} {...shiftPanResponder.panHandlers}>
       {hasAllDayArea ? (
         <View style={styles.allDayArea}>
           {layout.allDayItems.map((item) => (
@@ -110,47 +143,50 @@ export function DayTimelineView({
       ) : null}
 
       <ScrollView style={styles.scroll} contentContainerStyle={styles.canvas} ref={scrollRef}>
-        <View style={styles.canvasInner}>
-          {hourMarks}
-          {showNowLine ? (
-            <View style={[styles.nowLine, { top: nowOffsetMin * PX_PER_MIN }]}>
-              <View style={styles.nowDot} />
-            </View>
-          ) : null}
-          {layout.timedBlocks.map((block) => {
-            const rangeLabel = formatAgendaTimeRange(
-              {
-                ...block.item,
-                // 时间轴块内时间标签按块裁剪后的起止呈现（跨午夜事件显示当日剩余段）
-                startAt: dayStartMs + block.topMin * 60_000,
-                endAt: dayStartMs + (block.topMin + block.heightMin) * 60_000,
-              },
-              tzid,
-            );
-            return (
-              <Pressable
-                key={block.item.id}
-                style={[
-                  styles.eventBlock,
-                  {
-                    top: block.topMin * PX_PER_MIN,
-                    height: Math.max(30, block.heightMin * PX_PER_MIN - 2),
-                    left: `${block.leftRatio * 100}%` as `${number}%`,
-                    width: `${block.widthRatio * 100}%` as `${number}%`,
-                  },
-                ]}
-                onPress={() => onSelectItem(block.item.id)}
-              >
-                <View style={[styles.chipStripe, { backgroundColor: stripeColorOf(block.item.category?.color) }]} />
-                <View style={styles.eventTextWrap}>
-                  <Text style={styles.eventTime}>{rangeLabel ?? '无时间'}</Text>
-                  <Text style={styles.eventTitle} numberOfLines={2}>
-                    {block.item.title}
-                  </Text>
-                </View>
-              </Pressable>
-            );
-          })}
+        <View style={styles.canvasRow}>
+          <View style={styles.gutter}>{gutterLabels}</View>
+          <View style={styles.canvasInner}>
+            {hourLines}
+            {showNowLine ? (
+              <View style={[styles.nowLine, { top: nowOffsetMin * PX_PER_MIN }]}>
+                <View style={styles.nowDot} />
+              </View>
+            ) : null}
+            {layout.timedBlocks.map((block) => {
+              const rangeLabel = formatAgendaTimeRange(
+                {
+                  ...block.item,
+                  // 时间轴块内时间标签按块裁剪后的起止呈现（跨午夜事件显示当日剩余段）
+                  startAt: dayStartMs + block.topMin * 60_000,
+                  endAt: dayStartMs + (block.topMin + block.heightMin) * 60_000,
+                },
+                tzid,
+              );
+              return (
+                <Pressable
+                  key={block.item.id}
+                  style={[
+                    styles.eventBlock,
+                    {
+                      top: block.topMin * PX_PER_MIN,
+                      height: Math.max(30, block.heightMin * PX_PER_MIN - 2),
+                      left: `${block.leftRatio * 100}%` as `${number}%`,
+                      width: `${block.widthRatio * 100}%` as `${number}%`,
+                    },
+                  ]}
+                  onPress={() => onSelectItem(block.item.id)}
+                >
+                  <View style={[styles.chipStripe, { backgroundColor: stripeColorOf(block.item.category?.color) }]} />
+                  <View style={styles.eventTextWrap}>
+                    <Text style={styles.eventTime}>{rangeLabel ?? '无时间'}</Text>
+                    <Text style={styles.eventTitle} numberOfLines={2}>
+                      {block.item.title}
+                    </Text>
+                  </View>
+                </Pressable>
+              );
+            })}
+          </View>
         </View>
       </ScrollView>
     </View>
@@ -198,34 +234,38 @@ const styles = StyleSheet.create({
   canvas: {
     height: DAY_PX,
   },
-  canvasInner: {
+  // 阶段 5c 两列结构：左列固定宽标签，右侧 flex:1 画布（事件块百分比相对画布）
+  canvasRow: {
     flex: 1,
     flexDirection: 'row',
   },
-  hourRow: {
+  gutter: {
+    width: TIME_COLUMN_WIDTH,
+    height: DAY_PX,
+  },
+  canvasInner: {
+    flex: 1,
+    height: DAY_PX,
+    position: 'relative',
+  },
+  hourLabel: {
+    position: 'absolute',
+    left: 0,
+    width: TIME_COLUMN_WIDTH - 6,
+    textAlign: 'right',
+    fontSize: 10,
+    color: '#AAAAAA',
+  },
+  hourLine: {
     position: 'absolute',
     left: 0,
     right: 0,
-    height: HOUR_PX,
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-  },
-  hourLabel: {
-    width: TIME_COLUMN_WIDTH,
-    textAlign: 'center',
-    fontSize: 10,
-    color: '#AAAAAA',
-    marginTop: -6,
-  },
-  hourLine: {
-    flex: 1,
     height: StyleSheet.hairlineWidth,
     backgroundColor: '#EEEEEE',
-    marginTop: 0,
   },
   nowLine: {
     position: 'absolute',
-    left: TIME_COLUMN_WIDTH,
+    left: 0,
     right: 0,
     height: 1,
     backgroundColor: '#E53935',

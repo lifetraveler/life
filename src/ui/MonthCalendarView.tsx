@@ -139,9 +139,12 @@ export function MonthCalendarView({
       renderItem={renderMonth}
       maintainVisibleContentPosition={{ minIndexForVisible: 1 }}
       onStartReached={onPrependMonth}
-      onStartReachedThreshold={1.5}
+      // 阈值收紧到 0.5（阶段 5c 修复「月视图空白格子」）：1.5 时初始单页挂载会连发
+      // prepend（offset 0 触发一次，prepend 后视口距顶仍 <1.5 屏再触发一次），视口被
+      // 顶飞到无记录的空月页；0.5 只在真正接近列表边缘时补页。
+      onStartReachedThreshold={0.5}
       onEndReached={onAppendMonth}
-      onEndReachedThreshold={1.5}
+      onEndReachedThreshold={0.5}
     />
   );
 }

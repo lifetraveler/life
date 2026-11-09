@@ -6,26 +6,33 @@
  *   + onApply 双参）；移除内嵌快速录入框（创建落点改为全屏新建页 /item/new，
  *   ui.md「快速记录落点 v0.14」）；右下 FAB 新建入口 → router.push('/item/new')；
  *   无导航头标题（(tabs) 布局 headerShown:false，验收 16）；
- * - 阶段 5b 顶栏：左=‹ 标签 ›（agenda 仅标签纯展示；week ±7 天 / day ±1 天 /
- *   month ±1 月步进），右=🔍（进入 /search 独立搜索页）+ 筛选（激活时红点）
- *   + 「今天」pill（agenda 滚动定位今日分组；week/day 锚点回今日；month 回本月）；
- * - 阶段 5b 周条：week/day 视图显示今日起 7 天窗 chip 行，横滑（PanResponder）±7 天，
- *   点某天 → day 视图锚点换到该天；
+ * - 阶段 5b 顶栏：左=标签（week ±7 天 / day ±1 天 / month ±1 月步进），右=🔍
+ *   （进入 /search 独立搜索页）+ 筛选（激活时红点）+ 「今天」pill（agenda 滚动定位
+ *   今日分组；week/day 锚点回今日；month 回本月）；
+ * - 阶段 5b 周条：week/day 视图显示今日起 7 天窗 chip 行，横滑（PanResponder）±7 天；
  * - 数据链：observeItemsWithTags 单订阅（默认列表，§7.23 ItemWithRelations）→
- *   视图范围谓词（agenda 全量；week=今日起 7 天窗；day=单日；month=锚点月；
+ *   视图范围谓词（agenda 全量；week=锚点起 7 天窗；day=单日；month=锚点月；
  *   startAt=null 恒通过进「待办」组）→
  *   filterItems（激活筛选，维度内 OR、维度间 AND）→ groupItemsForAgenda 按天分组 →
  *   FlatList 摊平渲染（header|item 两类行）；本月视图组序倒序（按日期从晚到早）；
  * - 卡片：左侧 4px 分类色条 + Emoji + 标题 + 时间段（formatAgendaTimeRange），
  *   点击进详情页 /item/<id>（task 卡 life://item/<id> 深链同一路由）；
- * - 链接行：仅「已归档」（设置入口移入「我的」Tab）；行内「转为任务/添加标签」入口
- *   由编辑页承接（同等能力）；「归档」入口移至详情页（用户确认，2026-11-08）；
- *   旧 /today /week 页面原样保留不删；搜索移入 /search 独立页（阶段 5b）。
+ * - 「已归档」入口移入筛选面板（阶段 5c，仿日程筛选参考图「已删除项目」行）；
+ *   行内「转为任务/添加标签」入口由编辑页承接（同等能力）；「归档」入口移至详情页
+ *   （用户确认，2026-11-08）；旧 /today /week 页面原样保留不删；搜索移入 /search 独立页（阶段 5b）；
+ * - 阶段 5c（真机反馈迭代 2）：①左上标签点击弹年月选择器（MonthPickerPopover 自绘浮层，
+ *   今年只显月份/非今年显月+年）；②agenda 上下滑无缝（全量数据链已有），标签跟随首可见
+ *   分组月（onViewableItemsChanged）；③月视图空白格修复（MonthCalendarView threshold 降为
+ *   0.5，见该组件注释）；④日视图两列结构修复遮挡 + 横滑切前后日（DayTimelineView）；
+ *   ⑤‹›箭头仅月视图保留（周/日靠周条与横滑）；⑥周视图单日态（默认：点周条天只切换
+ *   选中天，列表按日程排版显示该天记录）+「周」pill 切整周态（7 天按天分组），
+ *   整周态点某天回单日态；⑦「已归档」移入筛选面板。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, FlatList, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
-import { Link, useRouter } from 'expo-router';
+import type { ViewToken } from 'react-native';
+import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
 import { itemRepository } from '../../data';
@@ -51,6 +58,7 @@ import { layoutDayEvents } from '../../domain/views/dayTimeline';
 import EmptyState from '../../ui/EmptyState';
 import FilterSheet from '../../ui/FilterSheet';
 import { MonthCalendarView } from '../../ui/MonthCalendarView';
+import { MonthPickerPopover } from '../../ui/MonthPickerPopover';
 import { DayTimelineView } from '../../ui/DayTimelineView';
 import { formatAgendaTimeRange, getDeviceTzid, WEEKDAY_LABELS } from '../../ui/timeFormat';
 
@@ -72,6 +80,8 @@ interface AgendaRowHeader {
 interface AgendaRowItem {
   kind: 'item';
   key: string;
+  /** 所属分组民用日键（YYYY-MM-DD；agenda 标签跟随滚动时解析月份用） */
+  civilKey: string;
   item: ItemWithRelations;
 }
 
@@ -116,6 +126,17 @@ export default function PlanScreen() {
   const [viewKind, setViewKind] = useState<AgendaViewKind>('agenda');
   const [activeFilters, setActiveFilters] = useState<ItemFilters>(EMPTY_ITEM_FILTERS);
   const [filterSheetVisible, setFilterSheetVisible] = useState(false);
+
+  // 阶段 5c 周视图双态：'day'=单日态（周条选中的那天，日程排版）| 'whole'=整周态（7 天按天分组）。
+  // 仅 viewKind==='week' 时有意义；「周」pill 切换。
+  const [weekMode, setWeekMode] = useState<'day' | 'whole'>('day');
+  // 阶段 5c 年月选择器（MonthPickerPopover）：点击左上标签弹出
+  const [monthPickerVisible, setMonthPickerVisible] = useState(false);
+  // 阶段 5c agenda 标签跟随：首可见分组所属民用月（onViewableItemsChanged 更新）
+  const [agendaTopMonth, setAgendaTopMonth] = useState<CivilMonth>(() => {
+    const parts = getZonedParts(Date.now(), getDeviceTzid());
+    return { year: parts.year, month: parts.month };
+  });
 
   // 视图时间坐标：挂载时固化（today.tsx 同款模式）——页面存续期间「今天」不漂移。
   const [viewTime] = useState(() => {
@@ -215,19 +236,23 @@ export default function PlanScreen() {
 
   const filtersActive = hasActiveFilters(activeFilters);
 
-  // 视图时间范围：agenda=全量；week=锚点日起 7 天窗；day=锚点单日；month=锚点月（[start, end) 左闭右开）
+  // 视图时间范围：agenda=全量；week=锚点起 7 天窗（整周态）或锚点单日（单日态）；
+  // day=锚点单日；month=锚点月（[start, end) 左闭右开）
   const viewRange = useMemo(() => {
     if (viewKind === 'agenda') {
       return null;
     }
     if (viewKind === 'week') {
-      return getSevenDayWindow(anchorMs, viewTime.tzid);
+      // 阶段 5c 周双态：单日态按单日取数（列表=该天记录，日程排版）；整周态按 7 天窗
+      return weekMode === 'whole'
+        ? getSevenDayWindow(anchorMs, viewTime.tzid)
+        : getDayRange(anchorMs, viewTime.tzid);
     }
     if (viewKind === 'day') {
       return getDayRange(anchorMs, viewTime.tzid);
     }
     return getMonthRangeForCivil(viewTime.tzid, anchorMonth.year, anchorMonth.month);
-  }, [anchorMonth, anchorMs, viewKind, viewTime]);
+  }, [anchorMonth, anchorMs, viewKind, viewTime, weekMode]);
 
   // 「今天」民用日期键（组头高亮判定，与 agenda 分组键同源：civilTime）
   const todayKey = useMemo(
@@ -320,7 +345,12 @@ export default function PlanScreen() {
         count: group.items.length,
       });
       for (const itemRecord of group.items) {
-        result.push({ kind: 'item', key: `item-${group.key}-${itemRecord.id}`, item: itemRecord });
+        result.push({
+          kind: 'item',
+          key: `item-${group.key}-${itemRecord.id}`,
+          civilKey: group.key,
+          item: itemRecord,
+        });
       }
     }
     return result;
@@ -328,7 +358,8 @@ export default function PlanScreen() {
 
   const emptyMessage = useMemo(() => {
     if (viewKind === 'week') {
-      return '近 7 天没有安排';
+      // 阶段 5c 周双态：单日态提示与 day 视图一致
+      return weekMode === 'whole' ? '近 7 天没有安排' : '当天没有安排';
     }
     if (viewKind === 'day') {
       return '当天没有安排';
@@ -337,53 +368,70 @@ export default function PlanScreen() {
       return '本月没有安排';
     }
     return '暂无日程';
-  }, [viewKind]);
+  }, [viewKind, weekMode]);
 
-  // —— 阶段 5b 顶栏与周条 ——
+  // —— 阶段 5b/5c 顶栏与周条 ——
   const partsOf = useCallback(
     (ms: number) => getZonedParts(ms, viewTime.tzid),
     [viewTime.tzid],
   );
 
-  /** 顶栏标签：随视图变化（agenda 月名纯展示；week 窗口起止；day 单日；month 年月）。 */
+  /** 年月标签（阶段 5c 任务 0）：今年只显「11月」，非今年显「2027年1月」。 */
+  const monthLabelOf = useCallback(
+    (year: number, month: number): string => {
+      const now = getZonedParts(viewTime.nowMs, viewTime.tzid);
+      return year === now.year ? `${month}月` : `${year}年${month}月`;
+    },
+    [viewTime],
+  );
+
+  /** 单日标签：今年「11月7日 周六」，非今年「2027年11月7日 周六」（阶段 5c 任务 0）。 */
+  const dayLabelOf = useCallback(
+    (ms: number): string => {
+      const parts = partsOf(ms);
+      const weekday = WEEKDAY_LABELS[parts.weekday] ?? '';
+      const now = getZonedParts(viewTime.nowMs, viewTime.tzid);
+      const yearPrefix = parts.year === now.year ? '' : `${parts.year}年`;
+      return `${yearPrefix}${parts.month}月${parts.day}日 ${weekday}`;
+    },
+    [partsOf, viewTime],
+  );
+
+  /**
+   * 顶栏标签（阶段 5c）：agenda=首可见分组月（跟随上下滑）；month=锚点月；
+   * day=锚点单日；week=整周态 7 天窗跨度（跨年才带年）/ 单日态锚点单日。
+   */
   const topBarTitle = useMemo(() => {
-    const fmtMonth = (year: number, month: number): string =>
-      month === 1 ? `${year}年1月` : `${month}月`;
     if (viewKind === 'agenda') {
-      const parts = partsOf(viewTime.nowMs);
-      return fmtMonth(parts.year, parts.month);
+      return monthLabelOf(agendaTopMonth.year, agendaTopMonth.month);
     }
     if (viewKind === 'month') {
-      return `${anchorMonth.year}年${anchorMonth.month}月`;
+      return monthLabelOf(anchorMonth.year, anchorMonth.month);
     }
-    const start = partsOf(viewKind === 'day' ? anchorMs : viewRange?.startMs ?? anchorMs);
     if (viewKind === 'day') {
-      const weekday = WEEKDAY_LABELS[start.weekday] ?? '';
-      return `${start.year}年${start.month}月${start.day}日 ${weekday}`;
+      return dayLabelOf(anchorMs);
     }
-    const end = partsOf(viewRange?.endMs ? viewRange.endMs - 1 : anchorMs);
+    // week：单日态=选中那天；整周态=窗口起止（跨度含年才带年）
+    if (weekMode === 'day') {
+      return dayLabelOf(anchorMs);
+    }
+    const range = getSevenDayWindow(anchorMs, viewTime.tzid);
+    const start = partsOf(range.startMs);
+    const end = partsOf(range.endMs - 1);
     const sameMonth = start.year === end.year && start.month === end.month;
     const endLabel = sameMonth
       ? `${end.day}日`
       : end.year === start.year
         ? `${end.month}月${end.day}日`
         : `${end.year}年${end.month}月${end.day}日`;
-    return `${start.year === end.year ? '' : `${start.year}年`}${start.month}月${start.day}日 - ${endLabel}`;
-  }, [anchorMonth, anchorMs, partsOf, viewKind, viewRange, viewTime.nowMs]);
+    const startYearPrefix = start.year === end.year ? '' : `${start.year}年`;
+    return `${startYearPrefix}${start.month}月${start.day}日 - ${endLabel}`;
+  }, [agendaTopMonth, anchorMonth, anchorMs, dayLabelOf, monthLabelOf, partsOf, viewKind, viewTime, weekMode]);
 
-  /** 顶栏 ‹ ›：week ±7 天、day ±1 天（civil 推算，DST 安全）、month ±1 月；agenda 无步进。 */
-  const stepAnchor = useCallback(
-    (dir: 1 | -1): void => {
-      if (viewKind === 'week') {
-        setAnchorMs((prev) => shiftAnchorDay(prev, viewTime.tzid, 7 * dir));
-      } else if (viewKind === 'day') {
-        setAnchorMs((prev) => shiftAnchorDay(prev, viewTime.tzid, dir));
-      } else if (viewKind === 'month') {
-        setAnchorMonth((prev) => shiftCivilMonth(prev, dir));
-      }
-    },
-    [viewKind, viewTime.tzid],
-  );
+  /** 顶栏 ‹ ›（阶段 5c 收敛：仅月视图保留，week/day 靠周条与横滑切日）。 */
+  const stepAnchor = useCallback((dir: 1 | -1): void => {
+    setAnchorMonth((prev) => shiftCivilMonth(prev, dir));
+  }, []);
 
   /** 「今天」pill：agenda 滚动定位今日分组；week/day 锚点回今日；month 回本月。 */
   const goToday = useCallback((): void => {
@@ -402,12 +450,30 @@ export default function PlanScreen() {
     }
   }, [rows, todayKey, viewKind, viewTime]);
 
-  /** 周条 7 天：锚点窗内各民用日（today 标记与 day 视图选中标记）。 */
+  /** 「周」pill（阶段 5c 任务 6）：单日态 ↔ 整周态切换；仅周视图渲染。 */
+  const toggleWeekMode = useCallback((): void => {
+    setWeekMode((prev) => (prev === 'day' ? 'whole' : 'day'));
+  }, []);
+
+  /**
+   * 点周条某天（阶段 5c 任务 5/6）：
+   * - 日视图：换天；
+   * - 周视图单日态：只切换选中天（不跳视图，列表仍按日程排版显示该天）；
+   * - 周视图整周态：切回单日态并选中该天（用户拍板 m00931-②）。
+   */
+  const selectWeekStripDay = useCallback((startMs: number): void => {
+    setAnchorMs(startMs);
+    setWeekMode('day');
+  }, []);
+
+  /** 周条 7 天：锚点窗内各民用日；单日态（day 视图或周视图单日态）高亮锚点日，整周态无高亮。 */
   const weekStripDays = useMemo(() => {
     if (viewKind !== 'week' && viewKind !== 'day') {
       return [];
     }
     const range = getSevenDayWindow(anchorMs, viewTime.tzid);
+    const anchorKey = formatLocalDate(getZonedParts(anchorMs, viewTime.tzid));
+    const highlightSelection = viewKind === 'day' || (viewKind === 'week' && weekMode === 'day');
     const days: Array<{ key: string; startMs: number; dayOfMonth: number; weekdayLabel: string; isToday: boolean; isSelected: boolean }> = [];
     for (let i = 0; i < 7; i += 1) {
       const startMs = shiftAnchorDay(range.startMs, viewTime.tzid, i);
@@ -419,20 +485,63 @@ export default function PlanScreen() {
         dayOfMonth: parts.day,
         weekdayLabel: WEEKDAY_LABELS[parts.weekday]?.slice(1) ?? '',
         isToday: key === todayKey,
-        isSelected: viewKind === 'day' && key === formatLocalDate(getZonedParts(anchorMs, viewTime.tzid)),
+        isSelected: highlightSelection && key === anchorKey,
       });
     }
     return days;
-  }, [anchorMs, todayKey, viewKind, viewTime.tzid]);
+  }, [anchorMs, todayKey, viewKind, viewTime.tzid, weekMode]);
 
-  /** 点周条某天 → 进入 day 视图并锚定该天。 */
-  const selectWeekStripDay = useCallback(
-    (startMs: number): void => {
-      setAnchorMs(startMs);
-      setViewKind('day');
+  /**
+   * 年月选择器（阶段 5c 任务 0）：选择后按当前视图落点——
+   * month→切月；week/day→锚定该月 1 日；agenda→滚动定位该月第一组。
+   */
+  const applyMonthPick = useCallback(
+    (year: number, month: number): void => {
+      setMonthPickerVisible(false);
+      setAnchorMonth({ year, month });
+      if (viewKind === 'month') {
+        return;
+      }
+      if (viewKind === 'week' || viewKind === 'day') {
+        setAnchorMs(resolveDayStart(viewTime.tzid, { year, month, day: 1 }));
+        return;
+      }
+      // agenda：滚动到该月第一组（civilKey 零填充 YYYY-MM-DD，前缀匹配 'YYYY-MM-'；
+      // 「待办」组（无时间项）key 非日期形态被正则排除）
+      const prefix = `${year}-${month < 10 ? `0${month}` : month}-`;
+      const index = rows.findIndex(
+        (row) =>
+          row.kind === 'header' &&
+          row.key.startsWith(`header-${prefix}`) &&
+          /^header-\d{4}-\d{2}-/.test(row.key),
+      );
+      if (index >= 0) {
+        listRef.current?.scrollToIndex({ index, viewPosition: 0, animated: true });
+      }
     },
-    [],
+    [rows, viewKind, viewTime],
   );
+
+  /** agenda 标签跟随（阶段 5c 任务 1）：取首可见行的民用日，更新顶栏月份。 */
+  const handleViewableItemsChanged = useRef(
+    (info: { viewableItems: ViewToken[]; changed: ViewToken[] }) => {
+      const first = info.viewableItems[0]?.item as AgendaRow | undefined;
+      if (!first) {
+        return;
+      }
+      const civilKey = first.kind === 'header' ? first.key.slice('header-'.length) : first.civilKey;
+      const monthPart = civilKey.slice(0, 7); // 'YYYY-MM'
+      const [yearPart, monthDigits] = monthPart.split('-');
+      const year = Number(yearPart);
+      const month = Number(monthDigits);
+      if (!Number.isInteger(year) || !Number.isInteger(month)) {
+        return;
+      }
+      setAgendaTopMonth((prev) => (prev.year === year && prev.month === month ? prev : { year, month }));
+    },
+  ).current;
+
+  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 50 }).current;
 
   // 周条横滑：水平拖过阈值 ±7 天（PanResponder 只接管移动，chip 的 onPress 不受影响）
   const weekStripPanResponder = useMemo(
@@ -474,26 +583,37 @@ export default function PlanScreen() {
 
   return (
     <View style={styles.container}>
-      {/* 阶段 5b 统一顶栏：左=‹ 标签 ›（agenda 纯标签），右=🔍 筛选 今天 */}
+      {/* 阶段 5c 统一顶栏：左=标签（点击弹年月选择器；‹›仅月视图），右=🔍 筛选 [周] 今天 */}
       <View style={styles.topBar}>
         <View style={styles.navGroup}>
-          {viewKind !== 'agenda' ? (
+          {viewKind === 'month' ? (
             <Pressable
               hitSlop={8}
               style={({ pressed }) => [styles.navArrow, pressed && styles.iconPressed]}
               onPress={() => stepAnchor(-1)}
-              accessibilityLabel="上一段"
+              accessibilityLabel="上一月"
             >
               <Ionicons name="chevron-back" size={20} color="#111111" />
             </Pressable>
           ) : null}
-          <Text style={styles.topBarTitle}>{topBarTitle}</Text>
-          {viewKind !== 'agenda' ? (
+          <Pressable
+            style={({ pressed }) => [styles.titlePressable, pressed && styles.iconPressed]}
+            onPress={() => setMonthPickerVisible(true)}
+            accessibilityLabel="选择年月"
+          >
+            <Text style={styles.topBarTitle}>{topBarTitle}</Text>
+            <Ionicons
+              name={monthPickerVisible ? 'chevron-up' : 'chevron-down'}
+              size={14}
+              color="#666666"
+            />
+          </Pressable>
+          {viewKind === 'month' ? (
             <Pressable
               hitSlop={8}
               style={({ pressed }) => [styles.navArrow, pressed && styles.iconPressed]}
               onPress={() => stepAnchor(1)}
-              accessibilityLabel="下一段"
+              accessibilityLabel="下一月"
             >
               <Ionicons name="chevron-forward" size={20} color="#111111" />
             </Pressable>
@@ -517,6 +637,24 @@ export default function PlanScreen() {
             <Ionicons name="options-outline" size={22} color="#111111" />
             {filtersActive ? <View style={styles.filterDot} /> : null}
           </Pressable>
+          {viewKind === 'week' ? (
+            /* 「周」pill（阶段 5c 任务 6）：周视图单日态↔整周态，激活态黑底白字区分 */
+            <Pressable
+              hitSlop={8}
+              style={[styles.weekModePill, weekMode === 'whole' && styles.weekModePillActive]}
+              onPress={toggleWeekMode}
+              accessibilityLabel={weekMode === 'whole' ? '切回单日' : '切换整周列表'}
+            >
+              <Text
+                style={[
+                  styles.weekModePillText,
+                  weekMode === 'whole' && styles.weekModePillTextActive,
+                ]}
+              >
+                周
+              </Text>
+            </Pressable>
+          ) : null}
           <Pressable hitSlop={8} style={styles.todayPill} onPress={goToday}>
             <Text style={styles.todayPillText}>今天</Text>
           </Pressable>
@@ -560,14 +698,7 @@ export default function PlanScreen() {
         </View>
       ) : null}
 
-      {/* 链接行：设置入口移入「我的」Tab；已归档保留 */}
-      <View style={styles.linksRow}>
-        <Link href="/archived" asChild>
-          <Pressable hitSlop={8}>
-            <Text style={styles.linkText}>已归档</Text>
-          </Pressable>
-        </Link>
-      </View>
+      {/* 阶段 5c：已归档入口移入筛选面板（原 linksRow 删除） */}
 
       {viewKind === 'month' ? (
         /* 月历视图：富月历，无极双向滚动，点格进日视图（阶段 5b） */
@@ -580,7 +711,7 @@ export default function PlanScreen() {
           onAppendMonth={appendMonthPage}
         />
       ) : viewKind === 'day' && dayTimeline !== null ? (
-        /* 日视图：纵向时间轴 + 全天/待办 chip 区（阶段 5b） */
+        /* 日视图：纵向时间轴 + 全天/待办 chip 区（阶段 5b）；横滑切前后日（阶段 5c 任务 3） */
         <DayTimelineView
           dayStartMs={dayTimeline.dayStartMs}
           layout={dayTimeline.layout}
@@ -588,6 +719,7 @@ export default function PlanScreen() {
           nowMs={viewTime.nowMs}
           tzid={viewTime.tzid}
           onSelectItem={openItemDetail}
+          onShiftDay={(delta) => setAnchorMs((prev) => shiftAnchorDay(prev, viewTime.tzid, delta))}
         />
       ) : (
         <FlatList<AgendaRow>
@@ -598,6 +730,8 @@ export default function PlanScreen() {
           keyExtractor={rowKeyExtractor}
           ListEmptyComponent={<EmptyState message={emptyMessage} />}
           contentContainerStyle={rows.length === 0 ? styles.listEmpty : undefined}
+          onViewableItemsChanged={handleViewableItemsChanged}
+          viewabilityConfig={viewabilityConfig}
           onScrollToIndexFailed={(info) => {
             // 分组行未渲染完成时先跳近似位置再重试（RN 官方建议模式）
             listRef.current?.scrollToOffset({ offset: info.highestMeasuredFrameIndex * 72, animated: false });
@@ -619,7 +753,8 @@ export default function PlanScreen() {
         <Ionicons name="add" size={28} color="#FFFFFF" />
       </Pressable>
 
-      {/* 筛选面板：即时生效（阶段 5b）——点条件/视图立即提交，X/遮罩直接关 */}
+      {/* 筛选面板：即时生效（阶段 5b）——点条件/视图立即提交，X/遮罩直接关；
+          已归档行 + 底部操作行（阶段 5c 任务 7/8） */}
       <FilterSheet
         visible={filterSheetVisible}
         categories={categories}
@@ -630,9 +765,27 @@ export default function PlanScreen() {
           setActiveFilters(nextFilters);
           setViewKind(nextViewKind);
         }}
+        onOpenArchived={() => {
+          setFilterSheetVisible(false);
+          router.push('/archived');
+        }}
         onClose={() => {
           setFilterSheetVisible(false);
         }}
+      />
+
+      {/* 年月选择器浮层（阶段 5c 任务 0）：锚定当前标签月；自绘零依赖 */}
+      <MonthPickerPopover
+        visible={monthPickerVisible}
+        anchor={
+          viewKind === 'month'
+            ? anchorMonth
+            : viewKind === 'agenda'
+              ? agendaTopMonth
+              : partsOf(anchorMs)
+        }
+        onSelect={applyMonthPick}
+        onClose={() => setMonthPickerVisible(false)}
       />
     </View>
   );
@@ -670,6 +823,14 @@ const styles = StyleSheet.create({
     color: '#111111',
     marginHorizontal: 2,
   },
+  // 阶段 5c：标签可点（弹年月选择器），右侧小箭头指示
+  titlePressable: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    marginHorizontal: 2,
+    paddingVertical: 4,
+  },
   rightGroup: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -695,6 +856,25 @@ const styles = StyleSheet.create({
   todayPillText: {
     fontSize: 12,
     fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  // 阶段 5c：「周」pill（周视图工具栏），激活态黑底白字与「今天」pill 同款区分
+  weekModePill: {
+    marginLeft: 4,
+    borderRadius: 999,
+    backgroundColor: '#F0F0F0',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  weekModePillActive: {
+    backgroundColor: '#111111',
+  },
+  weekModePillText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#333333',
+  },
+  weekModePillTextActive: {
     color: '#FFFFFF',
   },
   filterDot: {
@@ -752,18 +932,7 @@ const styles = StyleSheet.create({
     borderRadius: 2,
     backgroundColor: '#111111',
   },
-  // 链接行
-  linksRow: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 16,
-    marginTop: 8,
-    marginBottom: 10,
-  },
-  linkText: {
-    fontSize: 13,
-    color: '#2563eb',
-  },
+  // 链接行（阶段 5c 删除：已归档入口移入筛选面板）
   // Agenda 列表
   list: {
     flex: 1,

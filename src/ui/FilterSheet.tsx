@@ -14,11 +14,15 @@
  * - 「重置」移至面板右上角：仅清空筛选，不动视图（阶段 5b 拍板）；
  * - 纯 UI 组件：不直接访问 WatermelonDB / expo-notifications（AGENTS.md §4 受保护契约）；
  * - 切片 14 阶段 5b：顶部「视图」区收敛为 4 项（日程/周/月/日，「今日」移除，
- *   AGENTS.md §7.21），点选即时切视图。
+ *   AGENTS.md §7.21），点选即时切视图；
+ * - 切片 14 阶段 5c：底部操作区——「已归档」独占一行（onOpenArchived，父级关面板后
+ *   push /archived，任务卡阶段 5c-7）；「订阅日历/智能颜色编码/更多日历设置」3 行占位
+ *   （Alert「即将上线」，任务卡阶段 5c-8，功能留后续切片）。
  */
 
 import { useCallback, useEffect, useRef } from 'react';
 import {
+  Alert,
   Animated,
   Dimensions,
   Easing,
@@ -61,6 +65,9 @@ const STATUS_OPTIONS: readonly { value: ItemStatus; label: string }[] = [
   { value: 'done', label: '已完成' },
 ];
 
+/** 底部占位操作行（阶段 5c 任务 8：功能留后续切片，点击 Alert 提示） */
+const PLACEHOLDER_ACTIONS: readonly string[] = ['订阅日历', '智能颜色编码', '更多日历设置'];
+
 /** 视图选项（切片 14 阶段 5b：4 视图 = 日程/周/月/日，「今日」移除；图标 @expo/vector-icons） */
 const VIEW_OPTIONS: readonly { kind: AgendaViewKind; label: string; icon: ComponentProps<typeof Ionicons>['name'] }[] = [
   { kind: 'agenda', label: '日程', icon: 'list-outline' },
@@ -81,6 +88,8 @@ interface FilterSheetProps {
   viewKind: AgendaViewKind;
   /** 任一条件/视图变化：父级提交新筛选 + 视图模式、不负责关闭（即时生效） */
   onChange: (filters: ItemFilters, viewKind: AgendaViewKind) => void;
+  /** 「已归档」行点击（阶段 5c 任务 7）：父级关面板并跳转 /archived */
+  onOpenArchived: () => void;
   /** 关闭回调（反向动画结束后触发；父级置 visible=false 卸载 Modal） */
   onClose: () => void;
 }
@@ -92,6 +101,7 @@ export default function FilterSheet({
   filters,
   viewKind,
   onChange,
+  onOpenArchived,
   onClose,
 }: FilterSheetProps) {
   const tagDisplayMode = useTagDisplayMode();
@@ -323,6 +333,27 @@ export default function FilterSheet({
                 />
               ))}
             </View>
+
+            {/* 阶段 5c 底部操作区：已归档（真实入口）+ 3 行占位（任务 7/8） */}
+            <View style={styles.actionDivider} />
+            <Pressable
+              style={({ pressed }) => [styles.actionRow, pressed && styles.actionRowPressed]}
+              onPress={onOpenArchived}
+            >
+              <Ionicons name="archive-outline" size={18} color="#555555" />
+              <Text style={styles.actionText}>已归档</Text>
+              <Ionicons name="chevron-forward" size={16} color="#BBBBBB" />
+            </Pressable>
+            {PLACEHOLDER_ACTIONS.map((label) => (
+              <Pressable
+                key={label}
+                style={({ pressed }) => [styles.actionRow, pressed && styles.actionRowPressed]}
+                onPress={() => Alert.alert(label, '即将上线')}
+              >
+                <Text style={styles.actionText}>{label}</Text>
+                <Ionicons name="chevron-forward" size={16} color="#BBBBBB" />
+              </Pressable>
+            ))}
           </ScrollView>
         </Animated.View>
       </View>
@@ -427,6 +458,26 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+  },
+  // 底部操作区（阶段 5c）：分隔线 + 行列表（图标+文字+右箭头）
+  actionDivider: {
+    marginTop: 14,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: '#F0F0F0',
+  },
+  actionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 12,
+  },
+  actionRowPressed: {
+    opacity: 0.6,
+  },
+  actionText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#333333',
   },
   emptyHint: {
     fontSize: 13,
