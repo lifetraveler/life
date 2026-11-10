@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.14
+版本：v0.15
 
 ## 1. 项目概览
 
@@ -201,7 +201,21 @@ schema 版本 5→6，新增/修改如下：
 - 领域对象扩展为 `ItemWithRelations = Item & { tags: Tag[], category: Category | null }`。
 - 视图和 UI 层只消费 `ItemWithRelations`，不得在 UI 层自己去查 Category 或 Tag 表。
 
+### 7.24 AI 解析层与 Provider 架构（v0.15）
+- 闪电添加（AI 解析）的接口必须抽象为 `AiParser`。
+- 架构必须支持：用户自定义 API Key（兼容 OpenAI/DeepSeek 等），并为未来的官方代理服务预留 Provider。
+- 降级机制：当无 Key 或断网时，必须触发 `LocalFallbackProvider`，仅用本地正则提取基础时间（如“明天”、“下午3点”）。
+- 安全隐私：API Key 必须存储在 `expo-secure-store` 中，严禁明文写入 WatermelonDB。
+- 结构约束：AI 返回的 JSON 必须经过严格的类型守卫（如手写 `isParsedItemDraft` 或使用 Zod）校验，通过后才允许转成内部模型，严禁直接 `as` 强转。
+
+### 7.25 闪电添加 UI 交互（v0.15）
+- 路由挂载在 `src/app/(tabs)/flash.tsx`（即点击底部闪电 Tab）。
+- 交互模式：Chat UI + 结构化卡片。
+- 用户输入自然语言后，AI 返回一张“预览卡片”（展示标题、时间、分类、标签等）。
+- 用户可直接点击卡片修改字段，或在底部输入框继续对话纠正（如“改成明天”），AI 更新卡片。
+- 点击“确认保存”后，才调用 `Repository.createItem` 及 `createReminder` 落库。
+- 
 ## 8. 当前切片
-tasks/slice-14.md
+tasks/slice-15.md
 
 

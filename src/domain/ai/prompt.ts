@@ -1,0 +1,56 @@
+/**
+ * 切片 15 阶段 1：面向 OpenAI 兼容接口的系统提示词与响应 schema 描述。
+ *
+ * 设计原则：
+ * - 提示词里把“当前时间/时区”注入为绝对事实（由 context.now + context.tzid 计算），
+ *   模型不得自行假设日期；
+ * - 输出必须是单个 JSON 对象（放在 ```json 围栏或裸文本均可，响应侧负责剥离围栏）；
+ * - 时刻歧义处理与 LocalFallbackProvider 对齐：裸“3点”按 03:00、“12点”按 12:00，
+ *   下午/晚上 12 点分别按 12:00 与次日 00:00（由“民用时刻归一化规则”一节说明）。
+ *
+ * 本文件是纯文本模板（常量 + 纯函数），不属于解析逻辑；单测只断言关键句存在，
+ * 避免脆弱的全文比对。
+ */
+
+import { getZonedParts } from '../recurrence/civilTime';
+import type { AiParseContext } from './types';
+
+export const AI_SYSTEM_PROMPT = [
+  '你是一个日程/灵感解析助手。把用户输入解析成一个 JSON 对象，不要输出 JSON 以外的任何解释。',
+  '',
+  'JSON 字段定义：',
+  '- title: string，必填。简洁标题（去掉口语冗余，保留关键实体与动作）。',
+  '- content: string，必填。用户原始输入中除已提取字段外的补充说明，可为空字符串。',
+  '- type: "note" | "task" | "event"，必填。想法/记录→note；要做的事→task；有明确时间的安排→event。',
+  '- startAt / endAt: number | null，必填。Unix 毫秒时间戳；endAt 可为 null。',
+  '- allDay: boolean，必填。只表达了日期、没表达具体时刻时为 true，此时 startAt 为当天 00:00。',
+  '- categoryId: "work" | "personal" | "study" | "health" | "other" | null，必填。依据内容判断；不确定给 null。',
+  '- tags: string[]，必填。从输入提取的简短标签（如 ["工作", "汇报"]），没有则 []。不要把标签当标题。',
+  '- priority: 0 | 1 | 2 | 3 | null，必填。0=无 1=低 2=中 3=高；用户明确表达轻重缓急才填，否则 null。',
+  '- recurrence: null | {"frequency":"daily"|"weekly"|"monthly", ...}，必填。',
+  '  daily: {"frequency":"daily","localTime":{"hour":0-23,"minute":0-59}}；',
+  '  weekly: {"frequency":"weekly","weekdays":[1-7],"localTime":{"hour":0-23,"minute":0-59}}（1=周一…7=周日）；',
+  '  monthly: {"frequency":"monthly","dayOfMonth":1-31,"localTime":{"hour":0-23,"minute":0-59}}。',
+  '- reminderOffsetMinutes: number | null，必填。用户说“提前X分钟提醒”时填 X（正整数），否则 null。',
+  '',
+  '民用时刻归一化规则（与本地降级解析器一致）：',
+  '- “下午/傍晚/晚上 X点”：X 在 1..7 时按 (X+12) 点；X 为 12 时：下午/傍晚按 12:00，晚上/夜里/深夜按次日 00:00。',
+  '- “凌晨/半夜 X点”：X 为 12 时按 00:00；其余按 X 点。',
+  '- “中午 X点”：X 在 1..2 时按 (X+12) 点。',
+  '- 裸“X点”（没有上/下午等限定词）：X 在 0..12 按字面（“3点”→03:00），13..23 按字面；不要自行猜上下午。',
+  '- “X点半”→分钟 30；“X点一刻”→15；“X点三刻”→45。',
+  '',
+  '只输出一个 JSON 对象；不要编造输入中不存在的信息；无法判断的字段填 null 或 []。',
+].join('\n');
+
+/** 把 context 换算成提示词里的“当前时间”事实描述。 */
+export function buildNowFacts(context: AiParseContext): string {
+  const parts = getZonedParts(context.now, context.tzid);
+  const weekdays = ['一', '二', '三', '四', '五', '六', '日'];
+  const weekday = weekdays[parts.weekday - 1];
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return [
+    `当前时间：${parts.year}年${parts.month}月${parts.day}日 周${weekday} ${pad(parts.hour)}:${pad(parts.minute)}（时区 ${context.tzid}）`,
+    '解析相对时间（明天/下周三等）一律以上述当前时间为基准。',
+  ].join('\n');
+}
