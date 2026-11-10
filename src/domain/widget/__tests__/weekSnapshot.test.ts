@@ -190,7 +190,7 @@ describe('buildWeekWidgetSnapshot · 分桶与条目', () => {
 });
 
 describe('narrowWidgetWeekSnapshot', () => {
-  it('合法快照往返保留；categoryColor undefined 宽松读为 null', () => {
+  it('合法快照往返保留；categoryColor/categoryEmoji/tags 旧快照缺失宽松读为 null/[]', () => {
     const parsed = narrowWidgetWeekSnapshot({
       generatedAt: NOW,
       tzid: TZID,
@@ -205,7 +205,7 @@ describe('narrowWidgetWeekSnapshot', () => {
               type: 'task',
               timeLabel: '10:00',
               status: 'active',
-              // 无 categoryColor 字段（旧版本快照）
+              // 无 categoryColor/categoryEmoji/tags 字段（旧版本快照）
             },
           ],
         },
@@ -219,7 +219,16 @@ describe('narrowWidgetWeekSnapshot', () => {
           civilKey: '2026-03-15',
           dayLabel: '今天',
           entries: [
-            { id: 'a', title: 'A', type: 'task', timeLabel: '10:00', status: 'active', categoryColor: null },
+            {
+              id: 'a',
+              title: 'A',
+              type: 'task',
+              timeLabel: '10:00',
+              status: 'active',
+              categoryColor: null,
+              categoryEmoji: null,
+              tags: [],
+            },
           ],
         },
       ],

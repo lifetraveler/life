@@ -6,10 +6,13 @@
  * - 本模块只负责“把给定快照画上去”；快照的生产在 snapshotBridge（触发点 1/2/3）
  *   与 taskHandler（触发点 4）；
  * - 阶段 7b：渲染按页状态分流（today → 今日三段式，week → 周分组）；周快照为 null
- *   时 TodayWidget 自带占位文案（正常链路桥/写入器总会产出周快照）。
+ *   时 TodayWidget 自带占位文案（正常链路桥/写入器总会产出周快照）；
+ * - 阶段 7c：display（WidgetDisplayOptions）由调用方（snapshotBridge）读当下
+ *   app_settings 后一并传入——本模块只负责“把给定快照与显示选项画上去”。
  */
 import { requestWidgetUpdate } from 'react-native-android-widget';
 import type {
+  WidgetDisplayOptions,
   WidgetPageName,
   WidgetSnapshot,
   WidgetWeekSnapshot,
@@ -21,6 +24,8 @@ export interface WidgetViews {
   page: WidgetPageName;
   snapshot: WidgetSnapshot;
   weekSnapshot: WidgetWeekSnapshot | null;
+  /** 显示选项（阶段 7c）：emoji/标签开关 + 标签文案模式 */
+  display: WidgetDisplayOptions;
 }
 
 export async function refreshWidgetViews(views: WidgetViews): Promise<void> {
@@ -33,6 +38,7 @@ export async function refreshWidgetViews(views: WidgetViews): Promise<void> {
           snapshot={views.snapshot}
           weekSnapshot={views.weekSnapshot}
           palette="light"
+          display={views.display}
         />
       ),
       dark: (
@@ -41,6 +47,7 @@ export async function refreshWidgetViews(views: WidgetViews): Promise<void> {
           snapshot={views.snapshot}
           weekSnapshot={views.weekSnapshot}
           palette="dark"
+          display={views.display}
         />
       ),
     }),

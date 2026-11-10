@@ -63,11 +63,17 @@ const TAG_DISPLAY_OPTIONS: ReadonlyArray<{ value: TagDisplayMode; label: string 
 const SAMPLE_TAG = { name: '示例', color: '#64B5F6', emoji: '💼' };
 
 /**
- * 小组件显示开关定义（阶段 7a）：仅列出当前已有渲染消费的两项；
- * 分类 emoji / 标签开关在阶段 7c 渲染落地时随同加入（存储列 v7 已建）。
+ * 小组件显示开关定义（阶段 7a 建过期/待办两项；阶段 7c 补分类 emoji/标签两项——
+ * 渲染消费随 7c 落地，存储列 schema v7 早已建好）。
  */
+type WidgetShowFlagKey =
+  | 'widgetShowOverdue'
+  | 'widgetShowTodos'
+  | 'widgetShowCategoryEmoji'
+  | 'widgetShowTags';
+
 const WIDGET_TOGGLE_OPTIONS: ReadonlyArray<{
-  key: 'widgetShowOverdue' | 'widgetShowTodos';
+  key: WidgetShowFlagKey;
   label: string;
   hint: string;
 }> = [
@@ -80,6 +86,16 @@ const WIDGET_TOGGLE_OPTIONS: ReadonlyArray<{
     key: 'widgetShowTodos',
     label: '展示待办项',
     hint: '没有时间的待办显示在小组件今日列表底部。',
+  },
+  {
+    key: 'widgetShowCategoryEmoji',
+    label: '显示分类图标',
+    hint: '小组件条目在色点旁显示分类 emoji。',
+  },
+  {
+    key: 'widgetShowTags',
+    label: '显示标签',
+    hint: '小组件条目显示标签，文案跟随上方「标签展示样式」。',
   },
 ];
 
@@ -103,7 +119,7 @@ export default function SettingsPage() {
   // （桥不订阅 app_settings，见 docs/proposals/slice-14-widget-phase7.md）。
   const [widgetFlags, setWidgetFlags] = useState<Pick<
     AppSettings,
-    'widgetShowOverdue' | 'widgetShowTodos'
+    WidgetShowFlagKey
   > | null>(null);
   const [widgetSavingKey, setWidgetSavingKey] = useState<string | null>(null);
   const [widgetError, setWidgetError] = useState<string | null>(null);
@@ -119,6 +135,8 @@ export default function SettingsPage() {
             setWidgetFlags({
               widgetShowOverdue: settings.widgetShowOverdue,
               widgetShowTodos: settings.widgetShowTodos,
+              widgetShowCategoryEmoji: settings.widgetShowCategoryEmoji,
+              widgetShowTags: settings.widgetShowTags,
             });
           }
         })
@@ -162,7 +180,7 @@ export default function SettingsPage() {
    */
   const handleWidgetFlagChange = useCallback(
     async (
-      key: 'widgetShowOverdue' | 'widgetShowTodos',
+      key: WidgetShowFlagKey,
       value: boolean,
     ): Promise<void> => {
       if (widgetFlags === null || widgetSavingKey !== null || widgetFlags[key] === value) {

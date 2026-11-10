@@ -35,6 +35,13 @@
  *   （原生 setEllipsize，受权重容器约束后正确省略号截断）；
  *   clickAction OPEN_ITEM 上移到整行 FlexWidget + clickActionData { itemId }，点击语义在
  *   taskHandler 展开（契约：点击条目导航到 item/[id] 详情）；
+ * - 显示选项（阶段 7c）：分类 emoji / 标签 chips 是否展示由 display prop
+ *   （WidgetDisplayOptions，渲染侧读 app_settings 当下值，src/widget/widgetDisplay.ts；
+ *   桥与 taskHandler 各自渲染前读取）决定，快照恒携带字段（domain/widget/snapshot.ts）：
+ *   emoji 展示在色点之后（TextWidget fontSize 12）；标签 chips 展示在主文案之后，
+ *   底色 tag.color ?? 中性底、文字 contrastTextColor ?? 中性文字（与主页 TagChip 同规则，
+ *   此处不 import TagChip——RN 组件文件不进 headless 渲染路径），文案
+ *   formatTagDisplay(tag, tagMode)（text/emoji/both，无 emoji 回退 name，同 App）；
  * - 行排序：今日页（阶段 7a 提案定案）已安排在前，过期组、待办组依次置底；
  *   过期行 / done 行灰显（muted），仍可点击进入详情（详情页可做完成/取消，契约禁止
  *   小组件内直接完成）；待办行正常色、时间标签为快照携带的 '待办'。
@@ -49,12 +56,16 @@
 import { FlexWidget, ListWidget, TextWidget } from 'react-native-android-widget';
 import type { ColorProp, HexColor } from 'react-native-android-widget';
 import type {
+  WidgetDisplayOptions,
   WidgetPageName,
   WidgetSnapshot,
   WidgetSnapshotEntry,
+  WidgetSnapshotTag,
   WidgetWeekSnapshot,
 } from '../domain/widget';
 import { resolveCategoryDotColor } from '../domain/widget';
+import { formatTagDisplay } from '../domain/tags/tagDisplay';
+import { contrastTextColor } from '../ui/color';
 
 export type TodayWidgetPaletteName = 'light' | 'dark';
 
@@ -99,6 +110,8 @@ interface TodayWidgetProps {
   /** 周快照（阶段 7b）；null = 尚未生成过（taskHandler/桥兜底失败），周页显示占位文案 */
   weekSnapshot: WidgetWeekSnapshot | null;
   palette: TodayWidgetPaletteName;
+  /** 显示选项（阶段 7c）：emoji / 标签开关 + 标签文案模式（渲染侧读当下 app_settings） */
+  display: WidgetDisplayOptions;
 }
 
 const PAGE_TABS: { page: WidgetPageName; label: string }[] = [
@@ -106,7 +119,15 @@ const PAGE_TABS: { page: WidgetPageName; label: string }[] = [
   { page: 'week', label: '周' },
 ];
 
-export function TodayWidget({ page, snapshot, weekSnapshot, palette }: TodayWidgetProps) {
+/**
+ * 标签 chips 中性配色（阶段 7c）：与 src/ui/TagChip.tsx NEUTRAL_BG/NEUTRAL_TEXT 一致；
+ * widget 侧不复用该 RN 组件（避免把 react-native 组件引入 headless 渲染路径），
+ * 只复用纯函数 contrastTextColor。
+ */
+const WIDGET_TAG_NEUTRAL_BG = '#eef2ff';
+const WIDGET_TAG_NEUTRAL_TEXT = '#3730a3';
+
+export function TodayWidget({ page, snapshot, weekSnapshot, palette, display }: TodayWidgetProps) {
   const colors = PALETTES[palette];
   // 阶段 7a 行序（提案定案）：已安排在前，过期、待办依次置底。
   const rows: WidgetRow[] = [
@@ -168,9 +189,9 @@ export function TodayWidget({ page, snapshot, weekSnapshot, palette }: TodayWidg
         })}
       </FlexWidget>
       {page === 'week' ? (
-        renderWeekBody({ weekSnapshot, colors })
+        renderWeekBody({ weekSnapshot, colors, display })
       ) : (
-        renderTodayBody({ rows, colors })
+        renderTodayBody({ rows, colors, display })
       )}
       <FlexWidget
         style={{
@@ -214,9 +235,11 @@ interface BodyColors {
 function renderTodayBody({
   rows,
   colors,
+  display,
 }: {
   rows: WidgetRow[];
   colors: BodyColors;
+  display: WidgetDisplayOptions;
 }) {
   if (rows.length === 0) {
     return (
@@ -233,7 +256,9 @@ function renderTodayBody({
   return (
     <FlexWidget style={{ width: 'match_parent', flex: 1, flexDirection: 'column' }}>
       <ListWidget style={{ width: 'match_parent', height: 'match_parent' }}>
-        {rows.map(({ entry, overdue }) => renderEntryRow({ entry, overdue, colors }))}
+        {rows.map(({ entry, overdue }) =>
+          renderEntryRow({ entry, overdue, colors, display }),
+        )}
       </ListWidget>
     </FlexWidget>
   );
@@ -247,9 +272,11 @@ function renderTodayBody({
 function renderWeekBody({
   weekSnapshot,
   colors,
+  display,
 }: {
   weekSnapshot: WidgetWeekSnapshot | null;
   colors: BodyColors;
+  display: WidgetDisplayOptions;
 }) {
   if (weekSnapshot === null) {
     return (
@@ -297,7 +324,7 @@ function renderWeekBody({
             </FlexWidget>
           );
           const entryRows = day.entries.map((entry) =>
-            renderEntryRow({ entry, overdue: false, colors, keyPrefix: `week-${day.civilKey}` }),
+            renderEntryRow({ entry, overdue: false, colors, display, keyPrefix: `week-${day.civilKey}` }),
           );
           return [header, ...entryRows];
         })}
@@ -307,18 +334,22 @@ function renderWeekBody({
 }
 
 /**
- * 条目行（今日/周共用）：色点 + 「时间标签  标题」，整行 clickAction OPEN_ITEM。
- * 周页 key 加 civilKey 前缀避免跨天撞 key（今日页三组互斥 id 唯一，无需前缀）。
+ * 条目行（今日/周共用）：色点 + [分类 emoji] + 「时间标签  标题」+ [标签 chips]，
+ * 整行 clickAction OPEN_ITEM。emoji/标签是否渲染由 display 决定（阶段 7c），
+ * 快照恒携带字段；周页 key 加 civilKey 前缀避免跨天撞 key
+ * （今日页三组互斥 id 唯一，无需前缀）。
  */
 function renderEntryRow({
   entry,
   overdue,
   colors,
+  display,
   keyPrefix,
 }: {
   entry: WidgetSnapshotEntry;
   overdue: boolean;
   colors: BodyColors;
+  display: WidgetDisplayOptions;
   keyPrefix?: string;
 }) {
   // 解析规则在 domain/widget/categoryDot（可单测）：合法 #RRGGBB 透传，
@@ -345,6 +376,12 @@ function renderEntryRow({
           backgroundColor: dotColor,
         }}
       />
+      {display.showCategoryEmoji && entry.categoryEmoji !== null ? (
+        <TextWidget
+          text={entry.categoryEmoji}
+          style={{ fontSize: 12 }}
+        />
+      ) : null}
       <FlexWidget
         style={{
           width: 0,
@@ -363,6 +400,49 @@ function renderEntryRow({
           }}
         />
       </FlexWidget>
+      {display.showTags && entry.tags.length > 0 ? (
+        <FlexWidget
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            flexGap: 4,
+          }}
+        >
+          {entry.tags.map((tag: WidgetSnapshotTag) => {
+            // 与主页 TagChip 同规则：有 color 用 color，文字色按对比度回退中性文字；
+            // 底色仅接受合法 #RRGGBB（ColorProp 严格类型 + 原生解析失败会变透明底）
+            const chipBackground: ColorProp =
+              tag.color !== null && /^#[0-9a-fA-F]{6}$/.test(tag.color)
+                ? (tag.color as HexColor)
+                : WIDGET_TAG_NEUTRAL_BG;
+            const chipText: ColorProp = tag.color
+              ? (contrastTextColor(tag.color) ?? WIDGET_TAG_NEUTRAL_TEXT)
+              : WIDGET_TAG_NEUTRAL_TEXT;
+            return (
+              <FlexWidget
+                key={tag.name}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  borderRadius: 999,
+                  backgroundColor: chipBackground,
+                  paddingHorizontal: 5,
+                  paddingVertical: 1,
+                }}
+              >
+                <TextWidget
+                  text={formatTagDisplay(tag, display.tagMode)}
+                  maxLines={1}
+                  style={{
+                    fontSize: 10,
+                    color: chipText,
+                  }}
+                />
+              </FlexWidget>
+            );
+          })}
+        </FlexWidget>
+      ) : null}
     </FlexWidget>
   );
 }

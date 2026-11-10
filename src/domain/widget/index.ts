@@ -14,8 +14,13 @@ export {
 export type {
   WidgetSnapshot,
   WidgetSnapshotEntry,
+  WidgetSnapshotTag,
   BuildTodayWidgetSnapshotInput,
 } from './snapshot';
+export {
+  WIDGET_DISPLAY_DEFAULTS,
+} from './display';
+export type { WidgetDisplayOptions } from './display';
 export {
   WIDGET_DEFAULT_CATEGORY_COLOR,
   resolveCategoryDotColor,
@@ -40,3 +45,9 @@ export {
   narrowWidgetPageState,
 } from './pageState';
 export type { WidgetPageName } from './pageState';
+
+/**
+ * 小组件模块头注释（阶段 7c 起含渲染显示选项）：
+ * domain 只承载类型与纯函数；读取 app_settings 的实现在 src/widget/widgetDisplay.ts
+ * （widget 层可依赖 data 层，domain 不依赖）。
+ */

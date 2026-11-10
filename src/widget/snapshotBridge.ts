@@ -21,6 +21,7 @@ import type { WidgetSnapshot } from '../domain/widget';
 import { getTodayRange } from '../domain/views/ranges';
 import { getDeviceTzid } from '../ui/timeFormat';
 import { refreshWidgetViews } from './requestWidgetUpdate';
+import { readWidgetDisplayOptions } from './widgetDisplay';
 
 const DATA_CHANGE_DEBOUNCE_MS = 500;
 
@@ -51,10 +52,14 @@ export async function refreshWidgetDataNow(reason: string): Promise<void> {
     }
     const safeSnapshot: WidgetSnapshot =
       snapshot ?? buildTodayWidgetSnapshot({ overdue: [], scheduled: [], todos: [], nowMs, tzid });
+    // 显示选项（阶段 7c）：每次渲染前读当下 app_settings，与快照解耦——
+    // 设置页改开关后走本函数重写快照并重绘，渲染输入恒新鲜。
+    const display = await readWidgetDisplayOptions();
     await refreshWidgetViews({
       page: widgetSnapshotWriter.readPageState(),
       snapshot: safeSnapshot,
       weekSnapshot,
+      display,
     });
   } catch (error) {
     console.warn(`[WidgetSnapshotBridge] refreshWidgetDataNow(${reason}) render failed:`, error);

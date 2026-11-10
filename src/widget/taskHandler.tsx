@@ -19,6 +19,9 @@
  *   ③ 仍无 → 空输入生成的空快照（保证渲染输入永远是合法形状，不信任存储；
  *      周页兜底快照由 getWidgetWeekDayStarts 供给真实 7 天窗，days 恒 7 组）。
  *   页状态读取失败回退 'today'（narrowWidgetPageState），不影响数据渲染。
+ *   显示选项（阶段 7c）：渲染前 readWidgetDisplayOptions() 读当下 app_settings
+ *   （emoji/标签开关 + 标签文案模式），与快照解耦——开关不入快照 JSON，
+ *   改完设置（设置页 refreshWidgetDataNow）立即生效。
  */
 import { Linking } from 'react-native';
 import type {
@@ -35,15 +38,17 @@ import {
 import type { WidgetPageName, WidgetSnapshot, WidgetWeekSnapshot } from '../domain/widget';
 import { getDeviceTzid } from '../ui/timeFormat';
 import { TodayWidget } from './TodayWidget';
+import { readWidgetDisplayOptions } from './widgetDisplay';
 
 function renderRepresentation(
   page: WidgetPageName,
   snapshot: WidgetSnapshot,
   weekSnapshot: WidgetWeekSnapshot | null,
+  display: Awaited<ReturnType<typeof readWidgetDisplayOptions>>,
 ): WidgetRepresentation {
   return {
-    light: <TodayWidget page={page} snapshot={snapshot} weekSnapshot={weekSnapshot} palette="light" />,
-    dark: <TodayWidget page={page} snapshot={snapshot} weekSnapshot={weekSnapshot} palette="dark" />,
+    light: <TodayWidget page={page} snapshot={snapshot} weekSnapshot={weekSnapshot} palette="light" display={display} />,
+    dark: <TodayWidget page={page} snapshot={snapshot} weekSnapshot={weekSnapshot} palette="dark" display={display} />,
   };
 }
 
@@ -110,18 +115,19 @@ async function openWidgetClickTarget(
   }
 }
 
-/** 写两张快照 + 读页状态 → 整体渲染（触发点 4 与 SWITCH_PAGE 共用渲染管线）。 */
+/** 写两张快照 + 读页状态 + 读显示选项 → 整体渲染（触发点 4 与 SWITCH_PAGE 共用管线）。 */
 async function renderCurrentWidget(
   renderWidget: WidgetTaskHandlerProps['renderWidget'],
 ): Promise<void> {
   const nowMs = Date.now();
   const tzid = getDeviceTzid();
-  const [snapshot, weekSnapshot] = await Promise.all([
+  const [snapshot, weekSnapshot, display] = await Promise.all([
     produceSnapshotForWidget(nowMs, tzid),
     produceWeekSnapshotForWidget(nowMs, tzid),
+    readWidgetDisplayOptions(),
   ]);
   const page = widgetSnapshotWriter.readPageState();
-  renderWidget(renderRepresentation(page, snapshot, weekSnapshot));
+  renderWidget(renderRepresentation(page, snapshot, weekSnapshot, display));
 }
 
 export async function widgetTaskHandler(props: WidgetTaskHandlerProps): Promise<void> {

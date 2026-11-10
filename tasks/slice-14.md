@@ -418,6 +418,50 @@
 - 备注：JS 侧零改动（tsc/jest 不受影响）；本机构建链 JDK17
   （F:\code\tools\jdk17\jdk-17.0.21+9，原 JAVA_HOME 指向已删除目录）。
 
+### 小组件升级 7c：分类 emoji / 标签展示配置（2026-11-10，提案 docs/proposals/slice-14-widget-phase7.md）
+
+#### 目标（用户 4 需求的第 4 条）
+- 快照条目携带分类 emoji 与标签最小子集；是否展示由渲染侧开关决定
+  （app_settings 的 widgetShowCategoryEmoji / widgetShowTags，schema v7 列
+  阶段 7a 已建）；标签文案跟随全局 tagDisplayMode。
+
+#### 实现记录（2026-11-10）
+1. 设计定案：display 不写入快照 JSON——渲染链（taskHandler / snapshotBridge）
+   每次渲染前读当下设置传给 TodayWidget；改开关 → 设置页 refreshWidgetDataNow
+   重写快照并按当前页重绘，输入恒新鲜，快照 schema 只加条目可选字段。
+2. src/domain/widget/display.ts（新增）：`WidgetDisplayOptions`
+   {showCategoryEmoji, showTags, tagMode} + WIDGET_DISPLAY_DEFAULTS（≡7a 行为）。
+3. src/domain/widget/snapshot.ts：WidgetSnapshotEntry 增 `categoryEmoji: string|null`
+   与 `tags: WidgetSnapshotTag[]`（{name,color,emoji} 子集）；三个 mapper
+   （toOverdueEntry/toScheduledEntry/toTodoEntry）经 toSnapshotTags 携带；
+   narrowSnapshotEntry 宽松收窄新字段（undefined→null/[]，tags 逐项收窄，
+   name 非 string 成员丢弃；私有 narrowSnapshotTags）。
+4. src/widget/widgetDisplay.ts（新增）：readWidgetDisplayOptions()=
+   itemRepository.getSettings→pick 三字段（widget 层唯一读设置入口）。
+5. src/widget/TodayWidget.tsx：props 增 display；条目行 = 色点 +
+   [分类 emoji（fontSize 12）] + 「时间  标题」 + [标签 chips]；chip 底色
+   tag.color（合法 #RRGGBB）→ 否则中性底 '#eef2ff'，文字 contrastTextColor
+   → '#3730a3'（与 TagChip 同规则，纯函数复用不引 RN 组件）；文案
+   formatTagDisplay(tag, tagMode)（text/emoji/both，无 emoji 回退 name）。
+6. 渲染链传参：taskHandler.renderCurrentWidget 并行读 display →
+   renderRepresentation；requestWidgetUpdate.WidgetViews 增 display；
+   snapshotBridge.refreshWidgetDataNow 读后传入。
+7. src/app/(tabs)/profile.tsx：「小组件显示」节扩到 4 个开关
+   （新增 显示分类图标 / 显示标签），WidgetShowFlagKey 联合类型统一三处；
+   保存成功后仍走 refreshWidgetDataNow('settings-toggle')。
+8. 测试：snapshot.test.ts 用例 7 扩 categoryEmoji 断言 + 新用例 9
+   （tags 子集携带 / 空 → null+[] / narrowSnapshotEntry 旧快照宽松收窄 +
+   坏 tags 丢弃）；weekSnapshot.test.ts 收窄往返补新字段；
+   夹具 makeItem 支持 tags 覆盖（makeTag 全字段）。
+
+#### 7c 验收
+76. `tsc` 零错误，`jest` 全过（525）。
+77. 真机验证（用户执行）：设置页开「显示分类图标」→ 今日页条目色点旁出现
+    分类 emoji（预置 work=💼）；关掉即消失。
+78. 真机验证（用户执行）：开「显示标签」→ 带 color 标签的条目出现彩色
+    chips（文案随「标签展示样式」切换 text/emoji/both；无 color 标签为中性底）；
+    周页条目同样生效。
+
 ### 阶段 7：导入预览
 - 拦截 ICS 和系统日历导入，进入预览勾选页，确认后批量落库。
 

@@ -7,7 +7,9 @@
  *   关闭时写空数组——JSON 三组恒在，旧版小组件侧只读不感知）；
  * - 每项字段：id / title / type / timeLabel / status；§7.21 v0.14（任务卡阶段 5）扩展
  *   `categoryColor`（分类颜色原样携带，无分类/颜色 null → UI 层回退灰点）；
- *   仍不含 content、tags、reminders 细节（emoji/标签展示字段留给阶段 7c）；
+ *   阶段 7c 扩展 `categoryEmoji` + `tags`（是否展示由渲染侧 WidgetDisplayOptions 决定，
+ *   快照恒携带；docs/proposals/slice-14-widget-phase7.md 对 §7.16「不含 tags 细节」的
+ *   修订随本阶段生效）；仍不含 content、reminders 细节；
  * - 分组：overdue（仅 active）+ scheduled（含 done）+ todos（仅 active 无时间项），
  *   各截前 WIDGET_SNAPSHOT_MAX_PER_GROUP 条（阶段 7a：5 → 50，滚动列表护栏，防止极端
  *   数据量撑爆 SharedPreferences）；
@@ -37,7 +39,19 @@ export const WIDGET_SNAPSHOT_PREFS_KEY = 'widget_today_snapshot_v1';
  */
 export const WIDGET_SNAPSHOT_MAX_PER_GROUP = 50;
 
-/** 快照单项（§7.16 v0.10 冻结字段集 + §7.21 v0.14 扩展 categoryColor）。 */
+/**
+ * 快照标签项（阶段 7c）：展示所需最小子集（Tag 结构子集，与 TagChipVisualSource 同形）；
+ * 是否渲染由渲染侧 WidgetDisplayOptions.showTags 决定，快照恒携带。
+ */
+export interface WidgetSnapshotTag {
+  name: string;
+  /** 标签颜色原样携带（合法性/回退由 UI 层处理） */
+  color: string | null;
+  /** 标签 emoji 原样携带；null 时按 tagMode 回退 name（domain/tags/tagDisplay） */
+  emoji: string | null;
+}
+
+/** 快照单项（§7.16 v0.10 冻结字段集 + §7.21 v0.14 categoryColor + 阶段 7c emoji/tags）。 */
 export interface WidgetSnapshotEntry {
   id: string;
   title: string;
@@ -47,6 +61,10 @@ export interface WidgetSnapshotEntry {
   status: ItemStatus;
   /** 分类颜色原样携带（合法性由 UI 层校验回退）；无分类为 null（v0.14 阶段 5） */
   categoryColor: string | null;
+  /** 分类 emoji 原样携带（阶段 7c；是否显示由渲染侧开关决定）；无分类/未设置为 null */
+  categoryEmoji: string | null;
+  /** 标签最小子集（阶段 7c；顺序沿用 item.tags，是否显示由渲染侧开关决定） */
+  tags: WidgetSnapshotTag[];
 }
 
 /** 快照 JSON 根对象（ui.md v0.10 schema；阶段 7a 扩展 groups.todos）。 */
@@ -76,6 +94,15 @@ export interface BuildTodayWidgetSnapshotInput {
   tzid: string;
 }
 
+/** 标签最小子集映射（阶段 7c）：三组条目共用，顺序沿用 item.tags。 */
+function toSnapshotTags(item: ItemWithRelations): WidgetSnapshotTag[] {
+  return item.tags.map((tag) => ({
+    name: tag.name,
+    color: tag.color ?? null,
+    emoji: tag.emoji ?? null,
+  }));
+}
+
 /** 过期项：标签恒 '已过期'（契约冻结，不拼 endAt 时刻）。 */
 function toOverdueEntry(item: ItemWithRelations): WidgetSnapshotEntry {
   return {
@@ -85,6 +112,8 @@ function toOverdueEntry(item: ItemWithRelations): WidgetSnapshotEntry {
     timeLabel: '已过期',
     status: item.status,
     categoryColor: item.category?.color ?? null,
+    categoryEmoji: item.category?.emoji ?? null,
+    tags: toSnapshotTags(item),
   };
 }
 
@@ -109,6 +138,8 @@ export function toScheduledEntry(item: ItemWithRelations, tzid: string): WidgetS
     timeLabel,
     status: item.status,
     categoryColor: item.category?.color ?? null,
+    categoryEmoji: item.category?.emoji ?? null,
+    tags: toSnapshotTags(item),
   };
 }
 
@@ -121,6 +152,8 @@ function toTodoEntry(item: ItemWithRelations): WidgetSnapshotEntry {
     timeLabel: '待办',
     status: item.status,
     categoryColor: item.category?.color ?? null,
+    categoryEmoji: item.category?.emoji ?? null,
+    tags: toSnapshotTags(item),
   };
 }
 
@@ -159,8 +192,9 @@ export function buildTodayWidgetSnapshot(
  * 快照单条最小形状收窄（切片 14 阶段 7b 从 WidgetSnapshotWriter 下沉到 domain：
  * 今日快照与周快照的读取端共用同一份；数据源是我们自己写入的 JSON，但
  * SharedPreferences 仍可能被旧版本/手工改动污染，此处防御）。
- * id/title/type/timeLabel/status 必须是 string；categoryColor 阶段 5 起新增，
- * 宽松读（undefined/null → null，其余字段仍严格）。
+ * id/title/type/timeLabel/status 必须是 string；categoryColor 阶段 5 起新增、
+ * categoryEmoji/tags 阶段 7c 新增，均宽松读（undefined/null → null/[]，
+ * 其余字段仍严格；tags 逐项收窄，name 非 string 的成员丢弃）。
  */
 export function narrowSnapshotEntry(value: unknown): WidgetSnapshotEntry | null {
   if (typeof value !== 'object' || value === null) {
@@ -168,6 +202,7 @@ export function narrowSnapshotEntry(value: unknown): WidgetSnapshotEntry | null 
   }
   const e = value as Record<string, unknown>;
   const legacyColor = e.categoryColor;
+  const legacyEmoji = e.categoryEmoji;
   if (
     typeof e.id !== 'string'
     || typeof e.title !== 'string'
@@ -175,6 +210,7 @@ export function narrowSnapshotEntry(value: unknown): WidgetSnapshotEntry | null 
     || typeof e.timeLabel !== 'string'
     || typeof e.status !== 'string'
     || !(legacyColor === undefined || legacyColor === null || typeof legacyColor === 'string')
+    || !(legacyEmoji === undefined || legacyEmoji === null || typeof legacyEmoji === 'string')
   ) {
     return null;
   }
@@ -185,5 +221,34 @@ export function narrowSnapshotEntry(value: unknown): WidgetSnapshotEntry | null 
     timeLabel: e.timeLabel,
     status: e.status as WidgetSnapshotEntry['status'],
     categoryColor: legacyColor === undefined ? null : legacyColor,
+    categoryEmoji: legacyEmoji === undefined ? null : legacyEmoji,
+    tags: narrowSnapshotTags(e.tags),
   };
+}
+
+/** 标签数组宽松收窄（阶段 7c）：非数组 → []；name 非 string 的成员丢弃。 */
+function narrowSnapshotTags(value: unknown): WidgetSnapshotTag[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const tags: WidgetSnapshotTag[] = [];
+  for (const raw of value) {
+    if (typeof raw !== 'object' || raw === null) {
+      continue;
+    }
+    const t = raw as Record<string, unknown>;
+    if (typeof t.name !== 'string') {
+      continue;
+    }
+    const color = t.color;
+    const emoji = t.emoji;
+    tags.push({
+      name: t.name,
+      color:
+        color === undefined || color === null || typeof color !== 'string' ? null : color,
+      emoji:
+        emoji === undefined || emoji === null || typeof emoji !== 'string' ? null : emoji,
+    });
+  }
+  return tags;
 }
