@@ -3,17 +3,25 @@
  * - 注册点在根 index.ts（先 import 'expo-router/entry' 注册 App，
  *   再 registerWidgetTaskHandler，库官方要求的顺序）；
  * - WIDGET_DELETED：无需渲染（库内 renderWidget 对 DELETED 是 no-op），直接返回；
- * - WIDGET_CLICK：按 clickAction 展开 deep link（契约冻结的点击语义）：
+ * - WIDGET_CLICK：按 clickAction 展开：
  *   OPEN_ITEM → life://item/<itemId>（复用切片 6 item/[id] 路由）；
  *   OPEN_QUICK_ADD → life://quick-add（快速记录）；
+ *   SWITCH_PAGE → 写页状态（widget_page_state_v1，阶段 7b 页签切换）后走完整渲染，
+ *   不拉起 App（组件内换页是纯组件状态，导航语义除外）；
  *   其余 → 兜底 life://（拉起 App 首页，不吞点击）；
  *   App 未运行时系统冷启动并按 deep link 导航（expo-router 原生 scheme 映射）；
- * - WIDGET_ADDED / WIDGET_UPDATE / WIDGET_RESIZED：先写快照再渲染
- *   （契约冻结的数据桥接触发点 4：手动刷新小组件时 WIDGET_UPDATE action 内先写快照）。
- *   快照生产三级兜底：
+ * - WIDGET_ADDED / WIDGET_UPDATE / WIDGET_RESIZED / SWITCH_PAGE 后的渲染：
+ *   先写快照再渲染（契约冻结的数据桥接触发点 4：手动刷新小组件时 WIDGET_UPDATE
+ *   action 内先写快照；阶段 7b 起今日+周两张快照都写，保证两页数据同源新鲜）。
+ *   快照生产三级兜底（两页同构）：
  *   ① 查库重写成功 → 读回持久化值（渲染与 SharedPreferences 内容保持一致）；
  *   ② 写失败 / 读不到 → 直接读上次持久化值（旧数据优于空白）；
- *   ③ 仍无 → 空输入生成的空快照（保证渲染输入永远是合法形状，不信任存储）。
+ *   ③ 仍无 → 空输入生成的空快照（保证渲染输入永远是合法形状，不信任存储；
+ *      周页兜底快照由 getWidgetWeekDayStarts 供给真实 7 天窗，days 恒 7 组）。
+ *   页状态读取失败回退 'today'（narrowWidgetPageState），不影响数据渲染。
+ *   显示选项（阶段 7c）：渲染前 readWidgetDisplayOptions() 读当下 app_settings
+ *   （emoji/标签开关 + 标签文案模式），与快照解耦——开关不入快照 JSON，
+ *   改完设置（设置页 refreshWidgetDataNow）立即生效。
  */
 import { Linking } from 'react-native';
 import type {
@@ -21,21 +29,30 @@ import type {
   WidgetTaskHandlerProps,
 } from 'react-native-android-widget';
 import { widgetSnapshotWriter } from '../data';
-import { buildTodayWidgetSnapshot } from '../domain/widget';
-import type { WidgetSnapshot } from '../domain/widget';
+import {
+  buildTodayWidgetSnapshot,
+  buildWeekWidgetSnapshot,
+  getWidgetWeekDayStarts,
+  narrowWidgetPageState,
+} from '../domain/widget';
+import type { WidgetPageName, WidgetSnapshot, WidgetWeekSnapshot } from '../domain/widget';
 import { getDeviceTzid } from '../ui/timeFormat';
 import { TodayWidget } from './TodayWidget';
+import { readWidgetDisplayOptions } from './widgetDisplay';
 
-function renderRepresentation(snapshot: WidgetSnapshot): WidgetRepresentation {
+function renderRepresentation(
+  page: WidgetPageName,
+  snapshot: WidgetSnapshot,
+  weekSnapshot: WidgetWeekSnapshot | null,
+  display: Awaited<ReturnType<typeof readWidgetDisplayOptions>>,
+): WidgetRepresentation {
   return {
-    light: <TodayWidget snapshot={snapshot} palette="light" />,
-    dark: <TodayWidget snapshot={snapshot} palette="dark" />,
+    light: <TodayWidget page={page} snapshot={snapshot} weekSnapshot={weekSnapshot} palette="light" display={display} />,
+    dark: <TodayWidget page={page} snapshot={snapshot} weekSnapshot={weekSnapshot} palette="dark" display={display} />,
   };
 }
 
-async function produceSnapshotForWidget(): Promise<WidgetSnapshot> {
-  const nowMs = Date.now();
-  const tzid = getDeviceTzid();
+async function produceSnapshotForWidget(nowMs: number, tzid: string): Promise<WidgetSnapshot> {
   try {
     const written = await widgetSnapshotWriter.writeSnapshotFromRepository(nowMs, tzid);
     if (written) {
@@ -51,7 +68,31 @@ async function produceSnapshotForWidget(): Promise<WidgetSnapshot> {
   if (persisted !== null) {
     return persisted;
   }
-  return buildTodayWidgetSnapshot({ overdue: [], scheduled: [], nowMs, tzid });
+  return buildTodayWidgetSnapshot({ overdue: [], scheduled: [], todos: [], nowMs, tzid });
+}
+
+/** 周快照生产（阶段 7b，三级兜底同今日页；兜底空快照带真实 7 天窗）。 */
+async function produceWeekSnapshotForWidget(
+  nowMs: number,
+  tzid: string,
+): Promise<WidgetWeekSnapshot | null> {
+  try {
+    const written = await widgetSnapshotWriter.writeWeekSnapshotFromRepository(nowMs, tzid);
+    if (written) {
+      const persisted = widgetSnapshotWriter.readWeekSnapshot();
+      if (persisted !== null) {
+        return persisted;
+      }
+    }
+  } catch (error) {
+    console.warn('[WidgetTaskHandler] week snapshot write failed, fall back:', error);
+  }
+  const persisted = widgetSnapshotWriter.readWeekSnapshot();
+  if (persisted !== null) {
+    return persisted;
+  }
+  const { dayStartsMs } = getWidgetWeekDayStarts(nowMs, tzid);
+  return buildWeekWidgetSnapshot({ items: [], dayStartsMs, nowMs, tzid });
 }
 
 async function openWidgetClickTarget(
@@ -74,16 +115,37 @@ async function openWidgetClickTarget(
   }
 }
 
+/** 写两张快照 + 读页状态 + 读显示选项 → 整体渲染（触发点 4 与 SWITCH_PAGE 共用管线）。 */
+async function renderCurrentWidget(
+  renderWidget: WidgetTaskHandlerProps['renderWidget'],
+): Promise<void> {
+  const nowMs = Date.now();
+  const tzid = getDeviceTzid();
+  const [snapshot, weekSnapshot, display] = await Promise.all([
+    produceSnapshotForWidget(nowMs, tzid),
+    produceWeekSnapshotForWidget(nowMs, tzid),
+    readWidgetDisplayOptions(),
+  ]);
+  const page = widgetSnapshotWriter.readPageState();
+  renderWidget(renderRepresentation(page, snapshot, weekSnapshot, display));
+}
+
 export async function widgetTaskHandler(props: WidgetTaskHandlerProps): Promise<void> {
   const { widgetAction, clickAction, clickActionData, renderWidget } = props;
   if (widgetAction === 'WIDGET_DELETED') {
     return;
   }
   if (widgetAction === 'WIDGET_CLICK') {
+    if (clickAction === 'SWITCH_PAGE') {
+      // 页签切换（阶段 7b）：持久化目标页（损坏数据 narrow 回 'today'）→ 完整渲染。
+      // 写失败不阻断渲染：页状态只是偏好，读侧 narrow 同样兜底，最坏回今日页。
+      widgetSnapshotWriter.writePageState(narrowWidgetPageState(clickActionData));
+      await renderCurrentWidget(renderWidget);
+      return;
+    }
     await openWidgetClickTarget(clickAction, clickActionData);
     return;
   }
   // WIDGET_ADDED / WIDGET_UPDATE / WIDGET_RESIZED
-  const snapshot = await produceSnapshotForWidget();
-  renderWidget(renderRepresentation(snapshot));
+  await renderCurrentWidget(renderWidget);
 }

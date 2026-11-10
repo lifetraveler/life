@@ -4,13 +4,17 @@ import type { NotificationRequest } from 'expo-notifications';
 import { WatermelonReminderScheduler } from '../ReminderScheduler';
 import { buildOccurrenceKey } from '../../domain/recurrence';
 import type { CreateItemInput, Item } from '../../domain/item';
+import type { Category } from '../../domain/category';
+import type { AppSettings } from '../../domain/settings';
 import type { CreateReminderInput, Reminder, UpdateReminderInput } from '../../domain/reminder';
 import type { ItemWithTags, Tag } from '../../domain/tag';
+import type { ItemWithRelations } from '../../domain/relations/itemWithRelations';
 import type {
   ImportBatchResult,
   ItemRepository,
   SystemCalendarImportInput,
   SystemImportResult,
+  VisualPatch,
 } from '../../data/ItemRepository';
 
 // —— 固定时钟锚点：2025-06-10T08:00:00Z ——
@@ -70,6 +74,9 @@ function activeItem(id: string, title: string): Item {
     sourceType: 'local',
     sourceUid: null,
     sourceReadOnly: false,
+    // 切片 14 编译必需夹具补字段（§7.13）：调度器不读分类/优先级，固定默认值。
+    categoryId: 'other',
+    priority: 0,
     createdAt: FIXED_NOW - 1,
     updatedAt: FIXED_NOW - 1,
   };
@@ -181,11 +188,12 @@ class FakeRepository implements ItemRepository {
   }
 
   // 以下方法调度器单测不触及，为满足接口而存在。
-  observeItems(_onNext: (items: Item[]) => void): () => void {
+  // 切片 14（§7.23）：查询/观察签名统一升级为 ItemWithRelations，夹具签名同步（§7.13 编译必需）。
+  observeItems(_onNext: (items: ItemWithRelations[]) => void): () => void {
     throw new Error('FakeRepository: observeItems 未实现');
   }
 
-  observeItemsWithTags(_onNext: (items: ItemWithTags[]) => void): () => void {
+  observeItemsWithTags(_onNext: (items: ItemWithRelations[]) => void): () => void {
     throw new Error('FakeRepository: observeItemsWithTags 未实现');
   }
 
@@ -193,27 +201,31 @@ class FakeRepository implements ItemRepository {
     throw new Error('FakeRepository: observeTags 未实现');
   }
 
+  async listTags(): Promise<Tag[]> {
+    throw new Error('FakeRepository: listTags 未实现');
+  }
+
   async createItem(_input: CreateItemInput): Promise<Item> {
     throw new Error('FakeRepository: createItem 未实现');
   }
 
-  async listItems(): Promise<Item[]> {
+  async listItems(): Promise<ItemWithRelations[]> {
     throw new Error('FakeRepository: listItems 未实现');
   }
 
-  async listItemsWithTags(): Promise<ItemWithTags[]> {
+  async listItemsWithTags(): Promise<ItemWithRelations[]> {
     throw new Error('FakeRepository: listItemsWithTags 未实现');
   }
 
-  async searchItems(): Promise<ItemWithTags[]> {
+  async searchItems(): Promise<ItemWithRelations[]> {
     throw new Error('FakeRepository: searchItems 未实现');
   }
 
-  async listArchivedItems(): Promise<ItemWithTags[]> {
+  async listArchivedItems(): Promise<ItemWithRelations[]> {
     throw new Error('FakeRepository: listArchivedItems 未实现');
   }
 
-  async listArchivedItemsWithTags(): Promise<ItemWithTags[]> {
+  async listArchivedItemsWithTags(): Promise<ItemWithRelations[]> {
     throw new Error('FakeRepository: listArchivedItemsWithTags 未实现');
   }
 
@@ -238,7 +250,7 @@ class FakeRepository implements ItemRepository {
   }
 
   // 切片 6（§4.24）新增接口方法：调度器单测不触及，为满足接口而存在。
-  async getItemById(): Promise<ItemWithTags | null> {
+  async getItemById(): Promise<ItemWithRelations | null> {
     throw new Error('FakeRepository: getItemById 未实现');
   }
 
@@ -247,15 +259,15 @@ class FakeRepository implements ItemRepository {
   }
 
   // 切片 7 视图查询方法：调度器单测不触及，为满足接口而存在。
-  async listScheduledItemsInRange(): Promise<ItemWithTags[]> {
+  async listScheduledItemsInRange(): Promise<ItemWithRelations[]> {
     throw new Error('FakeRepository: listScheduledItemsInRange 未实现');
   }
 
-  async listOverdueItems(): Promise<ItemWithTags[]> {
+  async listOverdueItems(): Promise<ItemWithRelations[]> {
     throw new Error('FakeRepository: listOverdueItems 未实现');
   }
 
-  async listUnscheduledItemsCreatedInRange(): Promise<ItemWithTags[]> {
+  async listUnscheduledItemsCreatedInRange(): Promise<ItemWithRelations[]> {
     throw new Error('FakeRepository: listUnscheduledItemsCreatedInRange 未实现');
   }
 
@@ -276,11 +288,11 @@ class FakeRepository implements ItemRepository {
     throw new Error('FakeRepository: createImportedItem 未实现');
   }
 
-  async findItemBySource(): Promise<ItemWithTags | null> {
+  async findItemBySource(): Promise<ItemWithRelations | null> {
     throw new Error('FakeRepository: findItemBySource 未实现');
   }
 
-  async listItemsForExport(): Promise<ItemWithTags[]> {
+  async listItemsForExport(): Promise<ItemWithRelations[]> {
     throw new Error('FakeRepository: listItemsForExport 未实现');
   }
 
@@ -321,6 +333,44 @@ class FakeRepository implements ItemRepository {
     _input: SystemCalendarImportInput,
   ): Promise<SystemImportResult> {
     throw new Error('FakeRepository: importSystemCalendarEvents 未实现');
+  }
+
+  // 切片 14：分类与全局设置接口方法，调度器单测不触及，为满足接口而存在
+  // （§7.13 夹具编译必需；stub 返回空数组/简单值，调度器路径不会触达）。
+  async getCategories(): Promise<Category[]> {
+    return [];
+  }
+
+  async updateCategoryVisuals(_id: string, _patch: VisualPatch): Promise<Category> {
+    return { id: '', name: '', color: null, emoji: null, priority: 0 };
+  }
+
+  async updateTagVisuals(_id: string, _patch: VisualPatch): Promise<Tag> {
+    return { id: '', name: '', color: null, emoji: null, createdAt: 0 };
+  }
+
+  async getSettings(): Promise<AppSettings> {
+    return {
+      tagDisplayMode: 'text',
+      widgetShowOverdue: true,
+      widgetShowTodos: false,
+      widgetShowCategoryEmoji: false,
+      widgetShowTags: false,
+    };
+  }
+
+  async updateSettings(_patch: Partial<AppSettings>): Promise<void> {
+    return undefined;
+  }
+
+  // —— 切片 14 阶段 7a 接口扩展的测试夹具 stub（§7.13：编译必需，调度器不触达） ——
+
+  async listUnscheduledItems(): Promise<ItemWithRelations[]> {
+    return [];
+  }
+
+  observeUnscheduledItems(_onNext: (items: ItemWithRelations[]) => void): () => void {
+    return () => undefined;
   }
 }
 

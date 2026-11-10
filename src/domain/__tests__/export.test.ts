@@ -26,6 +26,9 @@ function makeItem(overrides: Partial<ItemWithTags> = {}): ItemWithTags {
     sourceType: 'local' as ItemSourceType,
     sourceUid: null,
     sourceReadOnly: false,
+    // 切片 14 编译必需夹具补字段（§7.13）：导出序列化不含分类/优先级，固定默认值。
+    categoryId: 'other',
+    priority: 0,
     createdAt: 1000,
     updatedAt: 2000,
     tags: [],
@@ -67,8 +70,9 @@ describe('serializeExportData（切片 12 数据导出纯函数）', () => {
       startAt: 1767225600000,
       allDay: true,
       tags: [
-        { id: 'tag-1', name: '健康', createdAt: 500 },
-        { id: 'tag-2', name: '重要', createdAt: 600 },
+        // 切片 14 编译必需夹具补字段（§7.13）：Tag 新增 color/emoji，导出只取 name。
+        { id: 'tag-1', name: '健康', color: null, emoji: null, createdAt: 500 },
+        { id: 'tag-2', name: '重要', color: null, emoji: null, createdAt: 600 },
       ],
     });
     const reminder = makeReminder(item.id, {

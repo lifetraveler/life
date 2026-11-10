@@ -5,6 +5,8 @@ import type { ImportedItemInput } from '../../domain/item';
 import ItemModel from '../../db/models/ItemModel';
 import ItemTagModel from '../../db/models/ItemTagModel';
 import ReminderModel from '../../db/models/ReminderModel';
+import CategoryModel from '../../db/models/CategoryModel';
+import AppSettingsModel from '../../db/models/AppSettingsModel';
 import TagModel from '../../db/models/TagModel';
 import { schema } from '../../db/schema';
 import { WatermelonItemRepository } from '../WatermelonItemRepository';
@@ -51,7 +53,15 @@ function makeContext(): TestContext {
   createdAdapters.push(adapter);
   const database = new Database({
     adapter,
-    modelClasses: [ItemModel, TagModel, ItemTagModel, ReminderModel],
+    modelClasses: [
+      ItemModel,
+      TagModel,
+      ItemTagModel,
+      ReminderModel,
+      // 切片 14（§7.22）：seedPresetData 需要 categories/app_settings model，未注册则 db.get 返回 null
+      CategoryModel,
+      AppSettingsModel,
+    ],
   });
   return {
     repository: new WatermelonItemRepository(database, () => 'Asia/Shanghai'),
@@ -221,7 +231,11 @@ describe('WatermelonItemRepository ICS 导入导出（切片 8）', () => {
   describe('importItemsInBatches', () => {
     it('101 条分 2 批写入且全部落库', async () => {
       const { repository, db } = makeContext();
+      // 切片 14（§7.22）：仓库首次操作会经 ensureSeeded 触发一次 seed 写入（seedPresetData）。
+      // 先预热 seed，再挂 spy，使断言继续只度量 101 条的分批写入次数（2 批）。
+      await repository.getCategories();
       const writeSpy = jest.spyOn(db, 'write');
+      writeSpy.mockClear();
       const inputs = Array.from({ length: 101 }, () => makeInput());
       const result = await repository.importItemsInBatches(inputs);
       expect(result.createdCount).toBe(101);

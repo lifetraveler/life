@@ -19,3 +19,9 @@ yarn-error.*
 
 # Gradle 构建产物（android/.gitignore 只覆盖 android/ 下；模块目录在此补充）
 build/
+
+# 会话临时产物（验收截图、会话日志、模块构建缓存）
+.tmp-accept/
+.tmp-session-log/
+modules/widget-snapshot-store/android/.gradle/
+.tmp-shots/

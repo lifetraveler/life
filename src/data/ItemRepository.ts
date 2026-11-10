@@ -1,3 +1,4 @@
+import type { Category } from '../domain/category';
 import type {
   CreateItemInput,
   ImportedItemInput,
@@ -5,12 +6,23 @@ import type {
   ItemSourceType,
   UpdateItemInput,
 } from '../domain/item';
+import type { AppSettings } from '../domain/settings';
 import type {
   CreateReminderInput,
   Reminder,
   UpdateReminderInput,
 } from '../domain/reminder';
+import type { ItemWithRelations } from '../domain/relations/itemWithRelations';
 import type { ItemWithTags, Tag } from '../domain/tag';
+
+/**
+ * v0.14：分类/标签视觉更新入参（repository.md「Category 与标签接口（v0.14）」明文形状）。
+ * color / emoji 可独立更新，显式 null 表示清除。
+ */
+export interface VisualPatch {
+  color?: string | null;
+  emoji?: string | null;
+}
 
 /**
  * 切片 8：批量导入的单条失败记录
@@ -117,51 +129,76 @@ export interface ImportBatchResult {
  * - importItemsInBatches：契约外显式扩展（与 observe* 同一先例）：repository.md v0.8
  *   要求「Repository 层分批写入（每批 100 条）、单条失败不整批回滚、失败清单作为
  *   返回值上报」，故批量写入辅助归入 Repository 接口。
+ * - v0.14 分类与全局设置（repository.md「Category 与标签接口（v0.14）」明文新增）：
+ *   getCategories（priority 升序）/ updateCategoryVisuals / updateTagVisuals /
+ *   getSettings / updateSettings。getSettings 无记录时必须返回默认值
+ *   { tagDisplayMode: 'text' } 并静默写入，不得抛错；updateSettings 随阶段 7a
+ *   扩展支持小组件显示开关 4 项（docs/proposals/slice-14-widget-phase7.md，
+ *   schema v7）。本切片不支持自定义新增/删除分类，仅允许改颜色/Emoji。
+ * - 切片 14 阶段 7a：listUnscheduledItems / observeUnscheduledItems（契约外显式扩展，
+ *   先例同 deleteItem / observe*）：小组件「待办组」数据源（无时间纯待办，
+ *   不限创建窗口，区别于切片 7 的 listUnscheduledItemsCreatedInRange「今日创建」口径）。
+ * - v0.14 关系水合（AGENTS.md §7.23）：所有原先返回 Item[] 或 ItemWithTags[] 的
+ *   查询接口统一升级为 ItemWithRelations[]（含 observe* 回调参数与
+ *   getItemById / findItemBySource），必须水合完整 Category 对象与 Tags 数组，
+ *   UI 层不得自查 Category/Tag 表。getItem（调度器用）保持 Item | null；
+ *   createItem / createImportedItem / updateItem / updateItemTime /
+ *   updateImportedItemTime 保持冻结写返回。createItem / updateItem 入参增加
+ *   categoryId?: string | null（repository.md v0.14 明文）与 priority?: number
+ *   （契约外文档化扩展，先例同 deleteItem / observe*，供阶段 3 编辑页使用）。
  * 观察方法的返回值均为退订函数。
  */
 export interface ItemRepository {
   createItem(input: CreateItemInput): Promise<Item>;
-  listItems(): Promise<Item[]>;
-  observeItems(onNext: (items: Item[]) => void): () => void;
+  listItems(): Promise<ItemWithRelations[]>;
+  observeItems(onNext: (items: ItemWithRelations[]) => void): () => void;
   updateItem(id: string, patch: UpdateItemInput): Promise<Item>;
   addTagToItem(itemId: string, tagName: string): Promise<Tag>;
   removeTagFromItem(itemId: string, tagId: string): Promise<void>;
-  listItemsWithTags(): Promise<ItemWithTags[]>;
-  searchItems(keyword: string): Promise<ItemWithTags[]>;
+  listItemsWithTags(): Promise<ItemWithRelations[]>;
+  searchItems(keyword: string): Promise<ItemWithRelations[]>;
   archiveItem(id: string): Promise<void>;
   unarchiveItem(id: string): Promise<void>;
-  listArchivedItems(): Promise<ItemWithTags[]>;
+  listArchivedItems(): Promise<ItemWithRelations[]>;
   // —— v0.12：归档视图查询（repository.md「搜索与归档增强接口（v0.12）」明文新增，
   //    切片 12 落地；与 v0.3 listArchivedItems 并存，后者保留不删）——
-  listArchivedItemsWithTags(): Promise<ItemWithTags[]>;
-  observeItemsWithTags(onNext: (items: ItemWithTags[]) => void): () => void;
+  listArchivedItemsWithTags(): Promise<ItemWithRelations[]>;
+  observeItemsWithTags(onNext: (items: ItemWithRelations[]) => void): () => void;
   observeTags(onNext: (tags: Tag[]) => void): () => void;
+  /** 切片 14 阶段 3（契约外文档化扩展，先例同 getCategories）：一次性取全部标签（created_at 升序）。 */
+  listTags(): Promise<Tag[]>;
   getItem(id: string): Promise<Item | null>;
 
   // —— 切片 6：Item 时间字段（AGENTS.md §4.24，签名冻结）——
-  getItemById(id: string): Promise<ItemWithTags | null>;
+  getItemById(id: string): Promise<ItemWithRelations | null>;
   updateItemTime(
     id: string,
     patch: { startAt?: number | null; endAt?: number | null; allDay?: boolean },
   ): Promise<Item>;
 
   // —— 切片 7：视图查询（repository.md「视图查询接口（v0.7）」，签名冻结）——
-  listScheduledItemsInRange(rangeStartMs: number, rangeEndMs: number): Promise<ItemWithTags[]>;
-  listOverdueItems(nowMs: number): Promise<ItemWithTags[]>;
-  listUnscheduledItemsCreatedInRange(rangeStartMs: number, rangeEndMs: number): Promise<ItemWithTags[]>;
+  listScheduledItemsInRange(rangeStartMs: number, rangeEndMs: number): Promise<ItemWithRelations[]>;
+  listOverdueItems(nowMs: number): Promise<ItemWithRelations[]>;
+  listUnscheduledItemsCreatedInRange(rangeStartMs: number, rangeEndMs: number): Promise<ItemWithRelations[]>;
 
   // —— 切片 7：视图响应式扩展（契约外显式扩展，语义与对应 list* 一致）——
   observeScheduledItemsInRange(
     rangeStartMs: number,
     rangeEndMs: number,
-    onNext: (items: ItemWithTags[]) => void,
+    onNext: (items: ItemWithRelations[]) => void,
   ): () => void;
-  observeOverdueItems(nowMs: number, onNext: (items: ItemWithTags[]) => void): () => void;
+  observeOverdueItems(nowMs: number, onNext: (items: ItemWithRelations[]) => void): () => void;
   observeUnscheduledItemsCreatedInRange(
     rangeStartMs: number,
     rangeEndMs: number,
-    onNext: (items: ItemWithTags[]) => void,
+    onNext: (items: ItemWithRelations[]) => void,
   ): () => void;
+
+  // —— 切片 14 阶段 7a：全部待办（契约外显式扩展，先例同 observe*）——
+  /** 无时间纯待办（startAt null + active，不限创建窗口，createdAt 降序）；小组件快照数据源。 */
+  listUnscheduledItems(): Promise<ItemWithRelations[]>;
+  /** 全部待办的响应式版本（语义与 listUnscheduledItems 一致）；返回退订函数。 */
+  observeUnscheduledItems(onNext: (items: ItemWithRelations[]) => void): () => void;
 
   // —— 切片 5：reminders（AGENTS.md §4.18，签名冻结）——
   createReminder(input: CreateReminderInput): Promise<Reminder>;
@@ -177,8 +214,8 @@ export interface ItemRepository {
   // —— 切片 8：ICS 导入导出（repository.md「ICS 导入导出接口（v0.8，切片 8 落地）」，签名冻结）——
   createImportedItem(input: ImportedItemInput): Promise<ItemWithTags>;
   // v0.9：sourceType 参数放宽为 ItemSourceType（AGENTS.md §7.15，切片 9 以 'system-calendar' 调用）。
-  findItemBySource(sourceType: ItemSourceType, sourceUid: string): Promise<ItemWithTags | null>;
-  listItemsForExport(filter: { includeArchived: false; includeDone: true }): Promise<ItemWithTags[]>;
+  findItemBySource(sourceType: ItemSourceType, sourceUid: string): Promise<ItemWithRelations | null>;
+  listItemsForExport(filter: { includeArchived: false; includeDone: true }): Promise<ItemWithRelations[]>;
   updateImportedItemTime(
     id: string,
     patch: { startAt?: number | null; endAt?: number | null; allDay?: boolean },
@@ -190,4 +227,23 @@ export interface ItemRepository {
 
   // —— 切片 9：系统日历导入（repository.md「系统日历导入接口（v0.9，切片 9 落地）」，签名冻结）——
   importSystemCalendarEvents(input: SystemCalendarImportInput): Promise<SystemImportResult>;
+
+  // —— 切片 14：分类与全局设置（repository.md「Category 与标签接口（v0.14）」明文新增）——
+  /** 全部分类，按 priority 升序（预置 5 条；本切片不支持自定义新增/删除分类）。 */
+  getCategories(): Promise<Category[]>;
+  /** 更新分类视觉（颜色/Emoji）；分类不存在时抛明确错误。 */
+  updateCategoryVisuals(id: string, patch: VisualPatch): Promise<Category>;
+  /** 更新标签视觉（颜色/Emoji）；标签不存在时抛明确错误。 */
+  updateTagVisuals(id: string, patch: VisualPatch): Promise<Tag>;
+  /**
+   * 全局设置；无记录时返回默认值 { tagDisplayMode: 'text' } 并静默写入，不得抛错
+   * （repository.md v0.14）。库中读到非法枚举值时防御性回退默认值。
+   * 阶段 7a（schema v7）：默认值扩展小组件显示开关（domain/settings.ts DEFAULT_APP_SETTINGS）。
+   */
+  getSettings(): Promise<AppSettings>;
+  /**
+   * 更新全局设置（阶段 7a 扩展：tagDisplayMode + 小组件显示开关 4 项，
+   * docs/proposals/slice-14-widget-phase7.md）。改小组件开关后由调用方触发快照刷新。
+   */
+  updateSettings(patch: Partial<AppSettings>): Promise<void>;
 }

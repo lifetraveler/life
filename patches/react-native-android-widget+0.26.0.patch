@@ -1,0 +1,23 @@
+diff --git a/node_modules/react-native-android-widget/android/src/main/java/com/reactnativeandroidwidget/RNWidget.java b/node_modules/react-native-android-widget/android/src/main/java/com/reactnativeandroidwidget/RNWidget.java
+index df7e6a6..1deb437 100644
+--- a/node_modules/react-native-android-widget/android/src/main/java/com/reactnativeandroidwidget/RNWidget.java
++++ b/node_modules/react-native-android-widget/android/src/main/java/com/reactnativeandroidwidget/RNWidget.java
+@@ -242,7 +242,17 @@ public class RNWidget {
+     private void addCollectionViews(int widgetId, RemoteViews remoteWidgetView, WidgetWithViews widgetWithViews, List<List<String>> lightImageNames, List<List<String>> darkImageNames) {
+         remoteWidgetView.removeAllViews(R.id.rn_widget_collection_container);
+ 
+-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
++        // PATCH (slice-14 阶段7b 修复，2026-11-10)：禁用 S+ 的容器显式尺寸。
++        // 原因：Lawnchair/部分 launcher 对 RemoteViews setViewLayoutWidth/Height 的
++        // dp 值按自己的 density（实测 ~1.536，而 App 侧 density=2.0）换算，
++        // 导致 collection container 被缩到 ~76.8%（312x381px 而非 406x496px），
++        // ListView 视口随之塌缩（366x330 → 272x215），表现为列表宽度不满、
++        // 行被压窄、可见行数变少且出现异常滚动条。
++        // 禁用后容器回到 XML 的 match_parent = 宿主尺寸（与密度无关），
++        // 实测 MuMu12 + Lawnchair ListView 恢复 366x329px，今日/周两页均正常。
++        // 代价：放弃 S+ 上该分支针对的显式尺寸修正，回到库 pre-S 行为。
++        // 项目侧补丁存档：patches/react-native-android-widget+0.26.0.patch（postinstall 自动重打）
++        if (false && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+             remoteWidgetView.setViewLayoutWidth(
+                 R.id.rn_widget_collection_container,
+                 RNWidgetUtil.getWidgetWidth(appContext, widgetId),

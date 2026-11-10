@@ -3,18 +3,21 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 
 import { itemRepository } from '../../data';
-import type { ItemWithTags } from '../../domain/tag';
+import { itemPriorityLabel } from '../../domain/category';
+import type { ItemWithRelations } from '../../domain/relations/itemWithRelations';
 import type { Reminder, ReconcileResult, UpdateReminderInput } from '../../domain/reminder';
 import {
   getLastAutoReconcileResult,
   reminderScheduler,
 } from '../../notifications';
 import { isWhitelistedReminderTz } from '../../data/reminderTzWhitelist';
+import CategoryChip from '../../ui/CategoryChip';
 import EmptyState from '../../ui/EmptyState';
 import ReminderFormEditor from '../../ui/ReminderFormEditor';
 import type { ReminderFormValues } from '../../ui/reminderForm';
 import { buildCreateReminderInput } from '../../ui/reminderForm';
 import TagChip from '../../ui/TagChip';
+import { useTagDisplayMode } from '../../ui/useTagDisplayMode';
 import {
   formatItemEnd,
   formatItemStart,
@@ -53,13 +56,15 @@ export default function ItemDetailPage() {
   const router = useRouter();
 
   // undefined=加载中；null=条目不存在（占位态）
-  const [item, setItem] = useState<ItemWithTags | null | undefined>(undefined);
+  const [item, setItem] = useState<ItemWithRelations | null | undefined>(undefined);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [formMode, setFormMode] = useState<FormMode>(null);
   const [saveReconcile, setSaveReconcile] = useState<ReconcileResult | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const deviceTzid = getDeviceTzid();
+  // 切片 14 阶段 3：标签展示样式（设置页全局切换）
+  const tagDisplayMode = useTagDisplayMode();
 
   const load = useCallback(async (): Promise<void> => {
     if (!id) {
@@ -201,6 +206,34 @@ export default function ItemDetailPage() {
     ]);
   };
 
+  /** 切片 14 阶段 4：归档入口（原主页行内归档随 Agenda 重构移除，移到本页）。
+   * 语义与旧主页完全一致：只调 archiveItem（status→archived，§4.7），
+   * 不级联取消提醒、不额外 reconcile，归档后重读本页刷新状态展示。 */
+  const handleArchiveItem = useCallback(async (): Promise<void> => {
+    if (!id) {
+      return;
+    }
+    try {
+      await itemRepository.archiveItem(id);
+      await load();
+    } catch (error) {
+      console.warn('[slice-14] 归档失败', error);
+      setActionError(`归档失败：${String(error)}`);
+    }
+  }, [id, load]);
+
+  const confirmArchiveItem = useCallback((): void => {
+    Alert.alert('归档条目', '归档后从主页默认列表移除，可在「已归档」页取消归档。', [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '归档',
+        onPress: () => {
+          void handleArchiveItem();
+        },
+      },
+    ]);
+  }, [handleArchiveItem]);
+
   if (item === undefined) {
     return (
       <View style={styles.container}>
@@ -245,12 +278,28 @@ export default function ItemDetailPage() {
         {TYPE_LABELS[item.type] ?? item.type} · 状态 {item.status}
       </Text>
 
+      {/* 切片 14 阶段 4：归档入口（原主页行内归档移到本页；已归档项不重复提供，
+          取消归档仍在「已归档」页） */}
+      {item.status !== 'archived' ? (
+        <View style={styles.itemActionsRow}>
+          <Pressable style={styles.secondaryButton} onPress={confirmArchiveItem}>
+            <Text style={styles.secondaryText}>归档</Text>
+          </Pressable>
+        </View>
+      ) : null}
+
+      {/* 切片 14 阶段 3：分类与优先级展示（只读；编辑在编辑页） */}
+      <View style={styles.tagRow}>
+        {item.category ? <CategoryChip category={item.category} /> : null}
+        <Text style={styles.priorityText}>优先级：{itemPriorityLabel(item.priority)}</Text>
+      </View>
+
       {item.content.length > 0 ? <Text style={styles.content}>{item.content}</Text> : null}
 
       {item.tags.length > 0 ? (
         <View style={styles.tagRow}>
           {item.tags.map((tag) => (
-            <TagChip key={tag.id} label={tag.name} />
+            <TagChip key={tag.id} tag={tag} mode={tagDisplayMode} />
           ))}
         </View>
       ) : null}
@@ -369,6 +418,9 @@ export default function ItemDetailPage() {
           <Text style={styles.devText}>本页保存对账：{reconcileBrief(saveReconcile)}</Text>
         </View>
       ) : null}
+
+      {/* 切片 14 阶段 3：来源只读项底部灰色「只读」标注（Toki 图2 风格） */}
+      {item.sourceReadOnly ? <Text style={styles.readonlyFooter}>只读</Text> : null}
     </ScrollView>
   );
 }
@@ -399,6 +451,11 @@ const styles = StyleSheet.create({
     color: '#888',
     marginTop: 4,
   },
+  itemActionsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 10,
+  },
   content: {
     fontSize: 15,
     color: '#333',
@@ -410,6 +467,17 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 6,
     marginTop: 10,
+  },
+  priorityText: {
+    fontSize: 13,
+    color: '#555',
+    alignSelf: 'center',
+  },
+  readonlyFooter: {
+    textAlign: 'center',
+    color: '#9e9e9e',
+    fontSize: 13,
+    marginTop: 24,
   },
   sectionBox: {
     marginTop: 16,

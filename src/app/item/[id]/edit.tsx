@@ -5,34 +5,30 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 
 import { itemRepository } from '../../../data';
-import type { ItemWithTags, Tag } from '../../../domain/tag';
-import type { Item, UpdateItemInput } from '../../../domain/item';
+import type { Category } from '../../../domain/category';
+import type { ItemWithRelations } from '../../../domain/relations/itemWithRelations';
+import type { Tag } from '../../../domain/tag';
+import type { UpdateItemInput } from '../../../domain/item';
 import { reminderScheduler } from '../../../notifications';
-import TagChip from '../../../ui/TagChip';
-import DateTimeField from '../../../ui/DateTimeField';
+import ItemFormFields from '../../../ui/ItemFormFields';
+import { useItemForm } from '../../../ui/useItemForm';
 import { getDeviceTzid } from '../../../ui/timeFormat';
 
 /**
- * Item 编辑页（切片 6，AGENTS.md §4.27 / §4.30）：
- * - 可改：title、content、type、startAt/endAt/allDay、tags；
- * - time 字段只走 updateItemTime（§4.24），title/content/type 走 updateItem（§4.5）；
+ * Item 编辑页（切片 6，AGENTS.md §4.27 / §4.30；切片 14 阶段 5：字段状态与渲染
+ * 抽到共享表单 ui/useItemForm + ui/ItemFormFields，供全屏新建页 item/new.tsx 复用）：
+ * - 可改：title、content、type、startAt/endAt/allDay、tags、categoryId、priority；
+ * - time 字段只走 updateItemTime（§4.24），title/content/type/categoryId/priority
+ *   走 updateItem（§4.5，repository.md v0.14）；
  * - Reminder 的创建/编辑/删除在详情页完成，本页不含；
  * - endAt < startAt 由 Repository 抛错，本页先行校验并提示。
  */
-
-const TYPE_OPTIONS: Array<{ value: Item['type']; label: string }> = [
-  { value: 'note', label: '灵感' },
-  { value: 'task', label: '任务' },
-  { value: 'event', label: '日程' },
-];
 
 export default function ItemEditPage() {
   const params = useLocalSearchParams<{ id?: string }>();
@@ -40,15 +36,12 @@ export default function ItemEditPage() {
   const router = useRouter();
 
   const deviceTzid = getDeviceTzid();
-  const [loaded, setLoaded] = useState<ItemWithTags | null | undefined>(undefined);
-  const [title, setTitle] = useState('');
-  const [content, setContent] = useState('');
-  const [type, setType] = useState<Item['type']>('note');
-  const [startAt, setStartAt] = useState<number | null>(null);
-  const [endAt, setEndAt] = useState<number | null>(null);
-  const [allDay, setAllDay] = useState(false);
-  const [tags, setTags] = useState<Tag[]>([]);
-  const [tagInput, setTagInput] = useState('');
+  const form = useItemForm();
+  // reset 引用稳定（useCallback），load 依赖它不会随渲染变化（否则 useFocusEffect
+  // 每次渲染都重跑、逐键重读库）。
+  const resetForm = form.reset;
+  const [loaded, setLoaded] = useState<ItemWithRelations | null | undefined>(undefined);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -58,15 +51,24 @@ export default function ItemEditPage() {
       return;
     }
     try {
-      const itemLoaded = await itemRepository.getItemById(id);
+      const [itemLoaded, categoryList] = await Promise.all([
+        itemRepository.getItemById(id),
+        itemRepository.getCategories(),
+      ]);
+      setCategories(categoryList);
       if (itemLoaded) {
-        setTitle(itemLoaded.title);
-        setContent(itemLoaded.content);
-        setType(itemLoaded.type);
-        setStartAt(itemLoaded.startAt);
-        setEndAt(itemLoaded.endAt);
-        setAllDay(itemLoaded.allDay);
-        setTags(itemLoaded.tags);
+        resetForm({
+          title: itemLoaded.title,
+          content: itemLoaded.content,
+          type: itemLoaded.type,
+          categoryId: itemLoaded.categoryId,
+          priority: itemLoaded.priority,
+          startAt: itemLoaded.startAt,
+          endAt: itemLoaded.endAt,
+          allDay: itemLoaded.allDay,
+          tags: itemLoaded.tags,
+          tagInput: '',
+        });
       }
       setLoaded(itemLoaded);
     } catch (error) {
@@ -74,7 +76,7 @@ export default function ItemEditPage() {
       setFormError(`读取失败：${String(error)}`);
       setLoaded(null);
     }
-  }, [id]);
+  }, [id, resetForm]);
 
   useFocusEffect(
     useCallback(() => {
@@ -83,16 +85,16 @@ export default function ItemEditPage() {
   );
 
   const handleAddTag = async (): Promise<void> => {
-    const name = tagInput.trim();
+    const name = form.tagInput.trim();
     if (name.length === 0 || !id) {
       return;
     }
     try {
       await itemRepository.addTagToItem(id, name);
-      setTagInput('');
+      form.setTagInput('');
       const refreshed = await itemRepository.getItemById(id);
       if (refreshed) {
-        setTags(refreshed.tags);
+        form.setTags(refreshed.tags);
       }
     } catch (error) {
       console.warn('[slice-06] 添加标签失败', error);
@@ -108,7 +110,7 @@ export default function ItemEditPage() {
       await itemRepository.removeTagFromItem(id, tag.id);
       const refreshed = await itemRepository.getItemById(id);
       if (refreshed) {
-        setTags(refreshed.tags);
+        form.setTags(refreshed.tags);
       }
     } catch (error) {
       console.warn('[slice-06] 移除标签失败', error);
@@ -121,26 +123,28 @@ export default function ItemEditPage() {
       return;
     }
     // 切片 8：URL 直达时也必须拦截只读项（tasks/slice-08.md 实现要求 6）。
-    if (loaded?.sourceReadOnly ?? false) {
+    const sourceReadOnly = loaded?.sourceReadOnly ?? false;
+    if (sourceReadOnly) {
       setFormError('只读项：此条目来自 ICS 导入，时间/标题/内容不可编辑');
       return;
     }
-    const trimmedTitle = title.trim();
-    if (trimmedTitle.length === 0) {
-      setFormError('标题不能为空');
-      return;
-    }
-    if (startAt !== null && endAt !== null && endAt < startAt) {
-      setFormError('结束时间必须不早于开始时间');
+    const validationError = form.validate();
+    if (validationError !== null) {
+      setFormError(validationError);
       return;
     }
     setFormError(null);
     setSubmitting(true);
     try {
       // title/content/type 走 §4.5 updateItem；时间字段只走 §4.24 updateItemTime。
-      const patch: UpdateItemInput = { title: trimmedTitle, content, type };
+      // 切片 14 阶段 3：categoryId/priority 一并随 updateItem 提交（repository.md v0.14）。
+      const patch: UpdateItemInput = { title: form.title.trim(), content: form.content, type: form.type };
+      if (form.categoryId !== null) {
+        patch.categoryId = form.categoryId;
+      }
+      patch.priority = form.priority;
       await itemRepository.updateItem(id, patch);
-      await itemRepository.updateItemTime(id, { startAt, endAt, allDay });
+      await itemRepository.updateItemTime(id, { startAt: form.startAt, endAt: form.endAt, allDay: form.allDay });
       // §4.27：Item 时间变更后 reconcile；失败不阻断保存，错误写日志。
       try {
         await reminderScheduler.reconcile();
@@ -162,6 +166,8 @@ export default function ItemEditPage() {
       { text: '放弃', style: 'destructive', onPress: () => router.back() },
     ]);
   };
+
+  const sourceReadOnly = loaded?.sourceReadOnly ?? false;
 
   if (loaded === undefined) {
     return (
@@ -185,7 +191,7 @@ export default function ItemEditPage() {
   return (
     <KeyboardAvoidingView style={styles.flex} behavior="padding">
       <ScrollView style={styles.scroll} contentContainerStyle={styles.container}>
-        {(loaded?.sourceReadOnly ?? false) ? (
+        {sourceReadOnly ? (
           <View style={styles.readonlyBox}>
             <Text style={styles.readonlyTitle}>来源：ICS（只读）</Text>
             <Text style={styles.readonlyText}>
@@ -193,76 +199,29 @@ export default function ItemEditPage() {
             </Text>
           </View>
         ) : null}
-        <Text style={styles.label}>标题</Text>
-        <TextInput style={styles.input} value={title} onChangeText={setTitle} placeholder="标题" />
 
-        <Text style={styles.label}>内容</Text>
-        <TextInput
-          style={[styles.input, styles.contentInput]}
-          value={content}
-          onChangeText={setContent}
-          placeholder="内容（可选）"
-          multiline
+        <ItemFormFields
+          form={form}
+          categories={categories}
+          sourceReadOnly={sourceReadOnly}
+          onAddTag={() => {
+            void handleAddTag();
+          }}
+          onRemoveTag={(tag) => {
+            void handleRemoveTag(tag);
+          }}
+          deviceTzid={deviceTzid}
         />
-
-        <Text style={styles.label}>类型</Text>
-        <View style={styles.row}>
-          {TYPE_OPTIONS.map((option) => (
-            <Pressable
-              key={option.value}
-              style={[styles.chip, type === option.value && styles.chipActive]}
-              onPress={() => setType(option.value)}
-            >
-              <Text style={[styles.chipText, type === option.value && styles.chipTextActive]}>
-                {option.label}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
-
-        <Text style={styles.label}>开始时间（按设备时区 {deviceTzid} 显示）</Text>
-        <DateTimeField label="开始" value={startAt} mode="datetime" onChange={setStartAt} />
-
-        <Text style={styles.label}>结束时间</Text>
-        <DateTimeField label="结束" value={endAt} mode="datetime" onChange={setEndAt} />
-
-        <View style={styles.switchRow}>
-          <Text style={styles.label}>全天</Text>
-          <Switch value={allDay} onValueChange={setAllDay} />
-        </View>
-
-        <Text style={styles.label}>标签</Text>
-        <View style={styles.row}>
-          {tags.length === 0 ? <Text style={styles.meta}>暂无标签</Text> : null}
-          {tags.map((tag) => (
-            <TagChip
-              key={tag.id}
-              label={tag.name}
-              onRemove={(loaded?.sourceReadOnly ?? false) ? undefined : () => handleRemoveTag(tag)}
-            />
-          ))}
-        </View>
-        {(loaded?.sourceReadOnly ?? false) ? null : (
-          <View style={styles.row}>
-            <TextInput
-              style={[styles.input, styles.tagInput]}
-              value={tagInput}
-              onChangeText={setTagInput}
-              placeholder="新标签名"
-            />
-            <Pressable style={styles.secondaryButton} onPress={handleAddTag}>
-              <Text style={styles.secondaryText}>添加</Text>
-            </Pressable>
-          </View>
-        )}
 
         {formError ? <Text style={styles.errorText}>{formError}</Text> : null}
 
         <View style={styles.row}>
           <Pressable
-            style={[styles.primaryButton, (submitting || (loaded?.sourceReadOnly ?? false)) && styles.disabled]}
-            onPress={handleSave}
-            disabled={submitting || (loaded?.sourceReadOnly ?? false)}
+            style={[styles.primaryButton, (submitting || sourceReadOnly) && styles.disabled]}
+            onPress={() => {
+              void handleSave();
+            }}
+            disabled={submitting || sourceReadOnly}
           >
             <Text style={styles.primaryText}>{submitting ? '保存中…' : '保存'}</Text>
           </Pressable>
@@ -287,60 +246,11 @@ const styles = StyleSheet.create({
     padding: 16,
     paddingBottom: 32,
   },
-  label: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#555',
-    marginTop: 12,
-    marginBottom: 6,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: '#d0d0d0',
-    borderRadius: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    backgroundColor: '#fff',
-    fontSize: 15,
-    color: '#111',
-  },
-  contentInput: {
-    minHeight: 80,
-    textAlignVertical: 'top',
-  },
-  tagInput: {
-    flex: 1,
-  },
   row: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'center',
     gap: 8,
-  },
-  chip: {
-    borderWidth: 1,
-    borderColor: '#d0d0d0',
-    borderRadius: 14,
-    paddingVertical: 5,
-    paddingHorizontal: 12,
-    backgroundColor: '#fff',
-  },
-  chipActive: {
-    borderColor: '#1e6f5c',
-    backgroundColor: '#e6f4ef',
-  },
-  chipText: {
-    fontSize: 13,
-    color: '#555',
-  },
-  chipTextActive: {
-    color: '#1e6f5c',
-    fontWeight: '600',
-  },
-  switchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
   },
   errorText: {
     fontSize: 12,

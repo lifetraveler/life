@@ -123,7 +123,7 @@ export default function TodayScreen() {
       {isViewEmpty ? (
         <View style={styles.emptyWrap}>
           <EmptyState message="今天没有安排" />
-          <Pressable style={styles.recordButton} onPress={() => router.push('/')}>
+          <Pressable style={styles.recordButton} onPress={() => router.push('/item/new')}>
             <Text style={styles.recordButtonText}>去记录</Text>
           </Pressable>
         </View>

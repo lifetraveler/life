@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.12
+版本：v0.14
 
 ## 1. 项目概览
 
@@ -136,6 +136,14 @@ AGENTS.md       本文件
 - 小组件点击条目：导航到对应 Item 详情页（复用切片 6 的 item/[id] 路由）。
 - 不得在小组件内实现完成/取消完成操作（避免在原生侧写 DB 的跨进程复杂度）；
   完成操作仍需进入 App。
+- （v0.14 阶段 7 注记，tasks/slice-14，提案 docs/proposals/slice-14-widget-phase7.md
+  已确认）：top 5 → 滚动列表护栏 50（超出组件可视高度由原生 ListView 滚动浏览）；
+  today 快照三段式（已安排在前、过期/待办可配置置底，开关 widgetShowOverdue/
+  widgetShowTodos）；新增 widget_week_snapshot_v1（今天起 7 天按天分组）与
+  widget_page_state_v1（「今日 | 周」点击页签，左右滑平台不可行）；显示配置落
+  app_settings schema v7（4 个开关列）；快照条目扩 categoryColor/categoryEmoji/
+  tags 最小子集，「不含 tags 细节」条款随之修订（展示与否由渲染侧读当下设置，
+  快照恒携带）。
 
 ### 7.17 可靠性切片闸门（v0.11）
 - 切片 11 涉及两处冻结区变更：`src/polyfill.ts` 的时区来源、`src/notifications/` 的
@@ -153,8 +161,47 @@ AGENTS.md       本文件
   不新增原生依赖，不修改 package.json 的 native 依赖。
 - 快速记录增强不修改 quick-add 路由的 deep link 约定（`life://quick-add`），
   只增加输入后行为（如保存后留在输入框、支持连续创建）。
+- （v0.14 阶段 5 注记，tasks/slice-14）内嵌录入框移除后，quick-add 落点改为
+  全屏新建页 `item/new`；上条「输入后行为」条款随之失效，deep link 约定不变，
+  详见 docs/contracts/ui.md「快速记录落点（v0.14，切片 14 阶段 5）」。
+
+### 7.20 鸿蒙评估切片（v0.13）
+- 切片 13 为纯文档评估，不修改任何源码、不升级 SDK、不引入鸿蒙依赖。
+- 产出报告：docs/proposals/harmony-assessment.md。
+- 评估结论将决定后续是否投入资源做鸿蒙原生适配。
+
+### 7.21 UI 视图架构与筛选（v0.14）
+- 首页支持切换视图：日程（Agenda，图3风格）、周（今日起 7 天滑动窗口）、月（富月历）、日（单日时间轴）。
+  切片 14 阶段 5b 起收敛为 4 视图，「今日」视图选项移除（/today、/week 独立页面契约不变）。
+- 视图内必须按日期分组（如“周五 6”、“周六 7”）。
+- 筛选面板支持按“分类（Category）”、“日历源（sourceType）”、“标签（Tag）”、“状态”进行多选过滤，并承载视图切换（点选即时生效）。
+- 小组件展示信息需包含：分类颜色点、具体时间。
+
+### 7.22 Item、Category、Tag 扩展字段及 schema v6（v0.14）
+schema 版本 5→6，新增/修改如下：
+1. `items` 表：
+   - 新增 `categoryId: string | null`（关联 categories 表，默认 'other'）
+   - 新增 `priority: number`（默认 0；0=无，1=低，2=中，3=高）
+   - **注意**：Item 本身不再有 color 字段，颜色统一由 Category 提供。
+2. `categories` 表（新增）：
+   - `id: string`（主键，预置：'work', 'personal', 'study', 'health', 'other'）
+   - `name: string`（分类名称）
+   - `color: string | null`（分类颜色）
+   - `emoji: string | null`（分类图标）
+   - `priority: number`（展示排序权重）
+3. `tags` 表：
+   - 新增 `color: string | null`
+   - 新增 `emoji: string | null`
+4. 新增 `app_settings` 表（单行，id 固定为 'global'）：
+   - `tagDisplayMode: 'text' | 'emoji' | 'both'`（默认 'text'）
+- 必须提供 migration v5→v6：新增表和字段，并插入预置分类数据。严禁重建表或清库。
+
+### 7.23 关系水合与模型查询（v0.14）
+- `WatermelonItemRepository` 的查询必须水合（Hydrate）关联的 Category 和 Tags。
+- 领域对象扩展为 `ItemWithRelations = Item & { tags: Tag[], category: Category | null }`。
+- 视图和 UI 层只消费 `ItemWithRelations`，不得在 UI 层自己去查 Category 或 Tag 表。
 
 ## 8. 当前切片
-tasks/slice-11.md → tasks/slice-12.md
+tasks/slice-14.md
 
 
