@@ -35,7 +35,15 @@ export function isAiProviderConfig(value: unknown): AiProviderConfig | null {
   if (typeof value.baseUrl !== 'string' || value.baseUrl.length === 0) return null;
   if (typeof value.apiKey !== 'string' || value.apiKey.length === 0) return null;
   if (typeof value.model !== 'string' || value.model.length === 0) return null;
-  if (value.timeoutMs !== undefined && typeof value.timeoutMs !== 'number') return null;
+  if (value.timeoutMs !== undefined) {
+    if (
+      typeof value.timeoutMs !== 'number' ||
+      !Number.isInteger(value.timeoutMs) ||
+      value.timeoutMs <= 0
+    ) {
+      return null;
+    }
+  }
   return {
     provider: 'openai-compatible',
     baseUrl: value.baseUrl,
