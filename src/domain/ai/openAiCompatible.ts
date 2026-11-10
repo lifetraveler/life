@@ -34,6 +34,11 @@ const DEFAULT_TIMEOUT_MS = 20_000;
 
 type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
+/** 阶段 2「测试连接」结果：ok 时带往返耗时，失败带可展示原因（绝不含 apiKey）。 */
+export type TestConnectionResult =
+  | { ok: true; latencyMs: number }
+  | { ok: false; reason: string };
+
 /** 从 chat-completions 信封中取 content；形状不对抛 schema-mismatch。 */
 function extractContent(body: unknown): string {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
@@ -78,6 +83,55 @@ export class OpenAICompatibleProvider implements AiParser {
     }
     this.config = config;
     this.fetchImpl = fetchImpl;
+  }
+
+  /**
+   * 阶段 2：测试连接。发最小 chat completion（max_tokens=1）验证 baseUrl /
+   * Key / model 三要素；任何失败都返回可展示原因（401/403 → 认证失败提示）。
+   */
+  async testConnection(): Promise<TestConnectionResult> {
+    const timeoutMs = this.config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const url = `${this.config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const startedAt = Date.now();
+    try {
+      let response: Response;
+      try {
+        response = await this.fetchImpl(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${this.config.apiKey}`,
+          },
+          body: JSON.stringify({
+            model: this.config.model,
+            messages: [{ role: 'user', content: 'ping' }],
+            max_tokens: 1,
+            stream: false,
+          }),
+          signal: controller.signal,
+        });
+      } catch (e) {
+        if (e instanceof Error && e.name === 'AbortError') {
+          return { ok: false, reason: `连接超时（${timeoutMs}ms）` };
+        }
+        return {
+          ok: false,
+          reason: `网络错误：${e instanceof Error ? e.message : String(e)}`,
+        };
+      }
+      const latencyMs = Date.now() - startedAt;
+      if (response.status === 401 || response.status === 403) {
+        return { ok: false, reason: `认证失败（HTTP ${response.status}，请检查 API Key）` };
+      }
+      if (!response.ok) {
+        return { ok: false, reason: `服务返回 HTTP ${response.status}` };
+      }
+      return { ok: true, latencyMs };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async parse(input: string, context: AiParseContext): Promise<ParsedItemDraft> {

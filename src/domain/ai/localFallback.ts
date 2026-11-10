@@ -56,6 +56,7 @@ import {
 } from '../recurrence/civilTime';
 import type { RecurrenceRule } from '../recurrence/types';
 import { AiParseError } from './errors';
+import type { DraftField } from './merge';
 import type {
   AiParseContext,
   AiParser,
@@ -163,9 +164,21 @@ function scan<T>(
   return null;
 }
 
+/** 前一天（addDays 负方向用；civilTime 只导出 addOneDay）。 */
+function subOneDay(date: CivilDate): CivilDate {
+  if (date.day > 1) return { year: date.year, month: date.month, day: date.day - 1 };
+  const prevMonth = date.month === 1 ? 12 : date.month - 1;
+  const prevYear = date.month === 1 ? date.year - 1 : date.year;
+  return { year: prevYear, month: prevMonth, day: daysInMonth(prevYear, prevMonth) };
+}
+
 function addDays(date: CivilDate, n: number): CivilDate {
   let d = date;
-  for (let i = 0; i < n; i += 1) d = addOneDay(d);
+  if (n >= 0) {
+    for (let i = 0; i < n; i += 1) d = addOneDay(d);
+  } else {
+    for (let i = 0; i < -n; i += 1) d = subOneDay(d);
+  }
   return d;
 }
 
@@ -237,6 +250,20 @@ const WORD_TIME_RE = new RegExp(
 
 const COLON_TIME_RE = new RegExp(`(${MERIDIEM_SRC})?\\s*(\\d{1,2}):(\\d{2})`, 'u');
 
+/** 裸词法时刻（“8点”“八点半”，无 meridiem）：供明早/今晚等复合词之后兜底。 */
+const BARE_WORD_TIME_RE = new RegExp(
+  `(${NUM_SRC})\\s*点\\s*(?:(${HALF_SRC})|(${NUM_SRC})\\s*分?)?`,
+  'u',
+);
+
+/**
+ * 纠正动词（“改成后天”“时间换成下午3点”）：多轮对话里这些词是元指令，
+ * 不属于标题。仅当 context.history 非空（非首轮）才扫描，避免
+ * “把会议室改成大间”这类普通句子首轮被误裁。
+ */
+const CORRECTION_RE =
+  /(?:时间|日期|时刻|提醒|地点|标题)?(?:改成|改为|换成|改到|调到|挪到|定在|改在|放到|定到)/u;
+
 /** 词法时刻（“下午3点半”“3点”）→ TimeToken；返回 null 表示候选作废。 */
 function convertWordTime(m: RegExpExecArray, full: string): TimeToken | null {
   if (prevCharBlocked(full, m.index, '第')) return null;
@@ -256,6 +283,24 @@ function convertWordTime(m: RegExpExecArray, full: string): TimeToken | null {
   const ct = applyMeridiem(mer, hour, minute);
   if (ct === null) return null;
   return { ct, hasMeridiem: mer !== undefined };
+}
+
+/** 裸词法时刻（无 meridiem）→ TimeToken；上下午由 dateHint 决定。 */
+function convertBareWordTime(m: RegExpExecArray, full: string): TimeToken | null {
+  if (prevCharBlocked(full, m.index, '第')) return null;
+  const hour = parseNumToken(m[1]);
+  if (hour === null) return null;
+  let minute = 0;
+  if (m[2] !== undefined) {
+    const v = HALF_MINUTES[m[2]];
+    if (v === undefined) return null;
+    minute = v;
+  } else if (m[3] !== undefined) {
+    const v = parseNumToken(m[3]);
+    if (v === null || v < 0 || v > 59) return null;
+    minute = v;
+  }
+  return { ct: { hour, minute, dayShift: 0 }, hasMeridiem: false };
 }
 
 /** 冒号时刻（“15:30”/“下午3:30”）。冒号形式默认 24 小时制。 */
@@ -535,7 +580,10 @@ export function nextOccurrenceInstant(
 // 标题
 // ---------------------------------------------------------------------------
 
-function buildTitle(input: string, spans: readonly Span[]): string {
+function buildTitle(
+  input: string,
+  spans: readonly Span[],
+): { title: string; expressed: boolean } {
   const sorted = [...spans].sort((a, b) => a.start - b.start);
   let s = '';
   let cursor = 0;
@@ -547,10 +595,14 @@ function buildTitle(input: string, spans: readonly Span[]): string {
   s += input.slice(cursor);
   s = s.replace(/[\s，,。.；;、！!？?：:·…\-—~～]+/g, ' ').trim();
   s = s.replace(/^[的得地了要]+/, '').replace(/[的得地了]+$/, '').trim();
+  // 提醒句式裁剪后常以委托代词/处置介词开头（“提醒我吃药”→“我吃药”）。
+  s = s.replace(/^(?:请|麻烦|帮我|记得|记得要|给我|把|将|我)+/, '').trim();
+  // expressed = 清理后还剩真实标题（纠正句“改成后天”会被裁空 → 标题未表达）。
+  const expressed = s.length > 0;
   if (s.length === 0) {
     s = input.replace(/[\s，,。.；;、！!？?：:]+/g, ' ').trim();
   }
-  return s.length > 0 ? s : input.trim();
+  return { title: s.length > 0 ? s : input.trim(), expressed };
 }
 
 // ---------------------------------------------------------------------------
@@ -573,6 +625,19 @@ type RecurrenceCore =
 
 export class LocalFallbackProvider implements AiParser {
   async parse(input: string, context: AiParseContext): Promise<ParsedItemDraft> {
+    return this.parseSlots(input, context).draft;
+  }
+
+  /**
+   * 槽位解析 + expressed 掩码（阶段 3 多轮合并用）：
+   * expressed 标记"本轮输入真正表达过的字段"——未表达的字段在多轮合并时
+   * 沿用上一轮卡片值（merge.ts），避免纠正句把标题/分类冲成默认值。
+   */
+  parseSlots(input: string, context: AiParseContext): {
+    draft: ParsedItemDraft;
+    expressed: ReadonlySet<DraftField>;
+  } {
+    const expressed = new Set<DraftField>();
     const trimmed = input.trim();
     if (trimmed.length === 0) {
       throw new AiParseError('empty-input', 'AI 解析输入为空');
@@ -599,6 +664,20 @@ export class LocalFallbackProvider implements AiParser {
       tags.push(raw);
       claim(claimed, titleSpans, span, true);
     }
+    if (tags.length > 0) expressed.add('tags');
+
+    // --- 纠正动词（仅非首轮：把“改成/换成…”当元指令裁出标题）---
+    if (context.history.length > 0) {
+      const correction = scan(CORRECTION_RE, trimmed, claimed, () => true);
+      if (correction !== null) {
+        claim(
+          claimed,
+          titleSpans,
+          { start: correction.index, end: correction.end },
+          true,
+        );
+      }
+    }
 
     // --- 提醒 ---
     let reminderOffsetMinutes: number | null = null;
@@ -608,6 +687,7 @@ export class LocalFallbackProvider implements AiParser {
     if (reminderScan !== null) {
       reminderOffsetMinutes = reminderScan.value;
       claim(claimed, titleSpans, { start: reminderScan.index, end: reminderScan.end }, true);
+      expressed.add('reminderOffsetMinutes');
     }
 
     // --- 重复 ---
@@ -746,17 +826,26 @@ export class LocalFallbackProvider implements AiParser {
       startCt = intervalScan.value.startT;
       endCt = intervalScan.value.endT;
       claim(claimed, titleSpans, { start: intervalScan.index, end: intervalScan.end }, true);
+      expressed.add('startAt');
+      expressed.add('endAt');
+      expressed.add('allDay');
     }
 
     // --- 单点时刻（区间未命中时；无自有 meridiem 时套用日期词暗示）---
     let singleCt: CivilTimeOfDay | null = null;
     if (startCt === null) {
-      const wordTime = scan(WORD_TIME_RE, trimmed, claimed, convertWordTime);
-      const timeScan =
-        wordTime ?? scan(COLON_TIME_RE, trimmed, claimed, convertColonTime);
-      if (timeScan !== null) {
-        let ct = timeScan.value.ct;
-        if (!timeScan.value.hasMeridiem && dateHint !== null) {
+      let timeScan = scan(WORD_TIME_RE, trimmed, claimed, convertWordTime);
+      if (timeScan === null && compound !== null && dateHint !== null) {
+        // 复合日期词“明早/今晚”末位的 早/晚 已被日期槽认领，普通词法时刻
+        // （会再次吞掉 早/晚）因 span 重叠被拒；退一步用“裸数字+点”再试，
+        // 上下午交给 dateHint 处理。
+        timeScan = scan(BARE_WORD_TIME_RE, trimmed, claimed, convertBareWordTime);
+      }
+      const finalScan =
+        timeScan ?? scan(COLON_TIME_RE, trimmed, claimed, convertColonTime);
+      if (finalScan !== null) {
+        let ct = finalScan.value.ct;
+        if (!finalScan.value.hasMeridiem && dateHint !== null) {
           const hinted = applyMeridiem(
             dateHint === 'morning' ? '早上' : '晚上',
             ct.hour,
@@ -765,11 +854,16 @@ export class LocalFallbackProvider implements AiParser {
           if (hinted !== null) ct = hinted;
         }
         singleCt = ct;
-        claim(claimed, titleSpans, { start: timeScan.index, end: timeScan.end }, true);
+        claim(claimed, titleSpans, { start: finalScan.index, end: finalScan.end }, true);
+        expressed.add('startAt');
+        expressed.add('allDay');
       }
     }
 
     // --- 组装 startAt / endAt / allDay / recurrence ---
+    if (recurrenceCore !== null) {
+      expressed.add('recurrence');
+    }
     let startAt: number | null = null;
     let endAt: number | null = null;
     let allDay = false;
@@ -788,6 +882,8 @@ export class LocalFallbackProvider implements AiParser {
         recurrence = { frequency: 'monthly', dayOfMonth: recurrenceCore.dayOfMonth, localTime };
       }
       startAt = nextOccurrenceInstant(recurrence, now, tzid, today);
+      expressed.add('startAt');
+      expressed.add('allDay');
     } else if (startCt !== null) {
       const baseDate = date ?? today;
       startAt = resolveTimeOnDate(tzid, baseDate, startCt);
@@ -815,6 +911,8 @@ export class LocalFallbackProvider implements AiParser {
     } else if (date !== null) {
       startAt = resolveCivilTimeToInstant(tzid, date.year, date.month, date.day, 0, 0);
       allDay = true;
+      expressed.add('startAt');
+      expressed.add('allDay');
     }
 
     // --- 分类 / 优先级 / 类型（仅判定，不裁剪标题）---
@@ -842,19 +940,28 @@ export class LocalFallbackProvider implements AiParser {
     } else if (isTask) {
       type = 'task';
     }
+    if (categoryId !== null) expressed.add('categoryId');
+    if (priority !== null) expressed.add('priority');
+    if (type !== 'note') expressed.add('type');
+
+    const built = buildTitle(trimmed, titleSpans);
+    if (built.expressed) expressed.add('title');
 
     return {
-      title: buildTitle(trimmed, titleSpans),
-      content: '',
-      type,
-      startAt,
-      endAt,
-      allDay,
-      categoryId,
-      tags,
-      priority,
-      recurrence,
-      reminderOffsetMinutes,
+      draft: {
+        title: built.title,
+        content: '',
+        type,
+        startAt,
+        endAt,
+        allDay,
+        categoryId,
+        tags,
+        priority,
+        recurrence,
+        reminderOffsetMinutes,
+      },
+      expressed,
     };
   }
 }
