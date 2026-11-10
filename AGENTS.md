@@ -136,6 +136,14 @@ AGENTS.md       本文件
 - 小组件点击条目：导航到对应 Item 详情页（复用切片 6 的 item/[id] 路由）。
 - 不得在小组件内实现完成/取消完成操作（避免在原生侧写 DB 的跨进程复杂度）；
   完成操作仍需进入 App。
+- （v0.14 阶段 7 注记，tasks/slice-14，提案 docs/proposals/slice-14-widget-phase7.md
+  已确认）：top 5 → 滚动列表护栏 50（超出组件可视高度由原生 ListView 滚动浏览）；
+  today 快照三段式（已安排在前、过期/待办可配置置底，开关 widgetShowOverdue/
+  widgetShowTodos）；新增 widget_week_snapshot_v1（今天起 7 天按天分组）与
+  widget_page_state_v1（「今日 | 周」点击页签，左右滑平台不可行）；显示配置落
+  app_settings schema v7（4 个开关列）；快照条目扩 categoryColor/categoryEmoji/
+  tags 最小子集，「不含 tags 细节」条款随之修订（展示与否由渲染侧读当下设置，
+  快照恒携带）。
 
 ### 7.17 可靠性切片闸门（v0.11）
 - 切片 11 涉及两处冻结区变更：`src/polyfill.ts` 的时区来源、`src/notifications/` 的
