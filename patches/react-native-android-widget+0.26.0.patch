@@ -1,6 +1,8 @@
+diff --git a/node_modules/react-native-android-widget/android/src/main/java/com/reactnativeandroidwidget/RNWidget.java b/node_modules/react-native-android-widget/android/src/main/java/com/reactnativeandroidwidget/RNWidget.java
+index df7e6a6..1deb437 100644
 --- a/node_modules/react-native-android-widget/android/src/main/java/com/reactnativeandroidwidget/RNWidget.java
 +++ b/node_modules/react-native-android-widget/android/src/main/java/com/reactnativeandroidwidget/RNWidget.java
-@@ -242,7 +242,17 @@
+@@ -242,7 +242,17 @@ public class RNWidget {
      private void addCollectionViews(int widgetId, RemoteViews remoteWidgetView, WidgetWithViews widgetWithViews, List<List<String>> lightImageNames, List<List<String>> darkImageNames) {
          remoteWidgetView.removeAllViews(R.id.rn_widget_collection_container);
  
@@ -14,7 +16,7 @@
 +        // 禁用后容器回到 XML 的 match_parent = 宿主尺寸（与密度无关），
 +        // 实测 MuMu12 + Lawnchair ListView 恢复 366x329px，今日/周两页均正常。
 +        // 代价：放弃 S+ 上该分支针对的显式尺寸修正，回到库 pre-S 行为。
-+        // 项目侧补丁存档：patches/react-native-android-widget-splus-container-size.patch
++        // 项目侧补丁存档：patches/react-native-android-widget+0.26.0.patch（postinstall 自动重打）
 +        if (false && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
              remoteWidgetView.setViewLayoutWidth(
                  R.id.rn_widget_collection_container,

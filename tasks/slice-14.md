@@ -405,9 +405,14 @@
 - patch（node_modules/react-native-android-widget/.../RNWidget.java）：禁用
   S+ 分支的 setViewLayoutWidth/Height（`if (false && …)`+注释），容器回到
   rn_widget.xml 的 match_parent=宿主尺寸（与密度无关，即库 pre-S 行为）。
-  存档：patches/react-native-android-widget-splus-container-size.patch
-  （npm install 后需 `git apply` 重打；是否改用 patch-package 由用户拍板，
-  见遗留披露）。
+- 持久化：patch-package 8.0.1（2026-11-10 用户批准引入的 devDependency，
+  §5 替代方案=手工 `git apply`，见上轮记录）；patches/
+  react-native-android-widget+0.26.0.patch 入库；package.json 加
+  `"postinstall": "patch-package"`，npm install/ci 后自动重打。补丁在净装
+  模拟环境（registry 原包+patch-package apply）验证通过 ✔，产物与验证过的
+  工作副本内容一致（仅新增行行尾 CRLF→LF 混排，javac 无关）。
+  注：patch-package 的 make 模式在本机网络环境下会卡在临时安装原包步骤，
+  补丁文件由 registry tarball 与已打补丁源码 git diff 手工构造。
 - 验证（uiautomator 复测）：今日页与周页 ListView bounds 均 = 366×329px；
   截图确认行满宽、7 条全可见、空白消失、无异常滚动条。
 - 备注：JS 侧零改动（tsc/jest 不受影响）；本机构建链 JDK17
