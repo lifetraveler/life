@@ -1,7 +1,8 @@
 import * as Notifications from 'expo-notifications';
-import type { NotificationRequest } from 'expo-notifications';
+import type { NotificationRequest, NotificationRequestInput } from 'expo-notifications';
 
 import { WatermelonReminderScheduler } from '../ReminderScheduler';
+import { NetworkTimerRegistry } from '../channels';
 import { buildOccurrenceKey } from '../../domain/recurrence';
 import type { CreateItemInput, Item } from '../../domain/item';
 import type { Category } from '../../domain/category';
@@ -19,6 +20,16 @@ import type {
 
 // —— 固定时钟锚点：2025-06-10T08:00:00Z ——
 const FIXED_NOW = 1749542400000;
+
+// DATE 触发器断言助手：运行时窄化，避免对 NotificationTriggerInput 联合类型做不合法 cast。
+function expectDateTrigger(request: NotificationRequestInput): { type: string; date: Date } {
+  const trigger = request.trigger as { date?: unknown; type?: unknown };
+  const date = trigger.date;
+  if (!(date instanceof Date)) {
+    throw new Error(`expected DATE trigger with Date value, got type=${String(trigger.type)}`);
+  }
+  return { type: String(trigger.type), date };
+}
 
 // r1：daily 09:00 UTC，startAt = 2025-06-10T00:00Z → 30 个 occurrence 全部落在调度窗口内。
 function reminderR1(): Reminder {
@@ -670,6 +681,291 @@ describe('WatermelonReminderScheduler（mock expo-notifications）', () => {
       await scheduler.reconcile();
 
       expect(await scheduler.getLastReconciledAt()).toBe(FIXED_NOW);
+    });
+  });
+
+  // —— 切片 16 阶段 2（notifications.md v0.16）：渠道分发与 once occurrenceKey ——
+
+  describe('渠道分发与 once（切片 16 阶段 2）', () => {
+    const fetchMock = jest.fn<Promise<Response>, Parameters<typeof fetch>>();
+    let nowMs = FIXED_NOW;
+
+    function makeChannelScheduler(repo: FakeRepository): WatermelonReminderScheduler {
+      return new WatermelonReminderScheduler({
+        repository: repo,
+        now: () => nowMs,
+        fetchImpl: fetchMock,
+      });
+    }
+
+    function onceReminder(
+      id: string,
+      itemId: string,
+      onceAt: { year: number; month: number; day: number; hour: number; minute: number },
+      channel: Reminder['channel'],
+      channelConfig: string | null,
+      tzid: string = 'UTC',
+    ): Reminder {
+      return {
+        id,
+        itemId,
+        frequency: 'once',
+        localTimeHour: 0,
+        localTimeMinute: 0,
+        weekdays: [],
+        dayOfMonth: 0,
+        onceAt,
+        channel,
+        channelConfig,
+        tzid,
+        startAt: FIXED_NOW,
+        enabled: true,
+        lastFiredOccurrenceKey: null,
+        lastReconciledAt: null,
+        createdAt: FIXED_NOW - 1,
+        updatedAt: FIXED_NOW - 1,
+      };
+    }
+
+    // 排干 deliver/fetch 微任务链，使 timer 触发的异步投递断言稳定。
+    async function flushAsync(): Promise<void> {
+      for (let i = 0; i < 20; i += 1) {
+        await Promise.resolve();
+      }
+    }
+
+    beforeEach(() => {
+      // timer 全链测试会把时钟推到 fireAt；每条测试复位，保证窗口过滤 (now, now+30d] 一致。
+      nowMs = FIXED_NOW;
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('once+system-notification：按确认格式路由到 expo，identifier 与 trigger.date 为绝对毫秒', async () => {
+      const fireAt = Date.UTC(2025, 5, 15, 9, 0);
+      const key = `once:rO:${fireAt}`;
+      repository.items.set('iO', activeItem('iO', '标题丙'));
+      repository.reminders.set(
+        'rO',
+        onceReminder('rO', 'iO', { year: 2025, month: 6, day: 15, hour: 9, minute: 0 }, 'system-notification', null),
+      );
+      const scheduler = makeChannelScheduler(repository);
+
+      await scheduler.scheduleForReminder('rO');
+
+      expect(scheduleNotificationAsyncMock).toHaveBeenCalledTimes(1);
+      const request = scheduleNotificationAsyncMock.mock.calls[0][0];
+      expect(request.identifier).toBe(key);
+      const trigger = expectDateTrigger(request);
+      expect(trigger.type).toBe('date');
+      expect(trigger.date.getTime()).toBe(fireAt);
+      expect(scheduledStore.has(key)).toBe(true);
+    });
+
+    it('once+webhook：定时器到点 fetch 正确 URL（timer→deliver 全链）', async () => {
+      jest.useFakeTimers();
+      const fireAt = Date.UTC(2025, 5, 15, 9, 0);
+      const key = `once:rW:${fireAt}`;
+      repository.items.set('iW', activeItem('iW', '标题丙'));
+      repository.reminders.set(
+        'rW',
+        onceReminder('rW', 'iW', { year: 2025, month: 6, day: 15, hour: 9, minute: 0 }, 'webhook', 'https://hook.example/hi'),
+      );
+      fetchMock.mockResolvedValue({ ok: true, status: 200 } as Response);
+      // 在 fake timers 就绪后创建调度器，registry 才会持有 jest 的 setTimeout。
+      const scheduler = makeChannelScheduler(repository);
+
+      await scheduler.scheduleForReminder('rW');
+
+      expect(scheduleNotificationAsyncMock).not.toHaveBeenCalled();
+      expect(scheduler.getNetworkArmedKeys()).toEqual([key]);
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      nowMs = fireAt;
+      jest.advanceTimersByTime(fireAt - FIXED_NOW);
+      await flushAsync();
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][0]).toBe('https://hook.example/hi');
+      expect(scheduler.getNetworkArmedKeys()).toEqual([]);
+    });
+
+    it('once+webhook：missed 立即补发到正确 URL，不向 OS 注册、不挂未来 timer', async () => {
+      const fireAt = Date.UTC(2025, 5, 9, 9, 0); // < FIXED_NOW → missed
+      const key = `once:rW:${fireAt}`;
+      repository.items.set('iW', activeItem('iW', '标题丙'));
+      repository.reminders.set(
+        'rW',
+        onceReminder('rW', 'iW', { year: 2025, month: 6, day: 9, hour: 9, minute: 0 }, 'webhook', 'https://hook.example/past'),
+      );
+      fetchMock.mockResolvedValue({ ok: true, status: 200 } as Response);
+      const scheduler = makeChannelScheduler(repository);
+
+      const result = await scheduler.reconcile();
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][0]).toBe('https://hook.example/past');
+      expect(result.missed.map((o) => o.occurrenceKey)).toEqual([key]);
+      expect(repository.firedMarks).toEqual([{ id: 'rW', occurrenceKey: key }]);
+      expect(scheduleNotificationAsyncMock).not.toHaveBeenCalled();
+      expect(scheduler.getNetworkArmedKeys()).toEqual([]);
+    });
+
+    it('本进程已成功投递（attempt ok）的 occurrence 不重复补发，游标照常推进', async () => {
+      const fireAt = Date.UTC(2025, 5, 9, 9, 0);
+      const key = `once:rW:${fireAt}`;
+      repository.items.set('iW', activeItem('iW', '标题丙'));
+      repository.reminders.set(
+        'rW',
+        onceReminder('rW', 'iW', { year: 2025, month: 6, day: 9, hour: 9, minute: 0 }, 'webhook', 'https://hook.example/again'),
+      );
+      fetchMock.mockResolvedValue({ ok: true, status: 200 } as Response);
+      // 注入 registry 并预记 ok：模拟本进程早前已成功投递该 occurrence。
+      const registry = new NetworkTimerRegistry({ now: () => FIXED_NOW, onFire: () => undefined });
+      registry.recordAttempt(key, 'ok');
+      const scheduler = new WatermelonReminderScheduler({
+        repository,
+        now: () => FIXED_NOW,
+        fetchImpl: fetchMock,
+        registry,
+      });
+
+      const result = await scheduler.reconcile();
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(result.missed.map((o) => o.occurrenceKey)).toEqual([key]);
+      expect(repository.firedMarks).toEqual([{ id: 'rW', occurrenceKey: key }]);
+    });
+
+    it('补发失败（非 2xx）后游标仍推进：下一轮 reconcile 不再补发（每轮至多一次机会）', async () => {
+      const fireAt = Date.UTC(2025, 5, 9, 9, 0);
+      repository.items.set('iW', activeItem('iW', '标题丙'));
+      repository.reminders.set(
+        'rW',
+        onceReminder('rW', 'iW', { year: 2025, month: 6, day: 9, hour: 9, minute: 0 }, 'webhook', 'https://hook.example/bad'),
+      );
+      fetchMock.mockResolvedValue({ ok: false, status: 500 } as Response);
+      const scheduler = makeChannelScheduler(repository);
+
+      const first = await scheduler.reconcile();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(first.missed.map((o) => o.occurrenceKey)).toEqual([`once:rW:${fireAt}`]);
+      expect(repository.firedMarks).toEqual([{ id: 'rW', occurrenceKey: `once:rW:${fireAt}` }]);
+
+      const second = await scheduler.reconcile();
+      expect(fetchMock).toHaveBeenCalledTimes(1); // 未新增调用
+      expect(second.missed).toEqual([]);
+    });
+
+    it('alarm 渠道：路由到 expo 调度，identifier = occurrenceKey', async () => {
+      const fireAt = Date.UTC(2025, 5, 16, 7, 30);
+      const key = `once:rA:${fireAt}`;
+      repository.items.set('iA', activeItem('iA', '标题丁'));
+      repository.reminders.set(
+        'rA',
+        onceReminder('rA', 'iA', { year: 2025, month: 6, day: 16, hour: 7, minute: 30 }, 'alarm', null),
+      );
+      const scheduler = makeChannelScheduler(repository);
+
+      await scheduler.scheduleForReminder('rA');
+
+      expect(scheduleNotificationAsyncMock).toHaveBeenCalledTimes(1);
+      expect(scheduleNotificationAsyncMock.mock.calls[0][0].identifier).toBe(key);
+      expect(scheduledStore.has(key)).toBe(true);
+    });
+
+    it('渠道切换卫生：system→webhook 后残留 expo 通知被清、改挂网络定时器', async () => {
+      // fake timers：测试结束时定时器仍挂载，真实 setTimeout 会吊住 jest 进程不退出。
+      jest.useFakeTimers();
+      const fireAt = Date.UTC(2025, 5, 15, 9, 0);
+      const key = `once:rX:${fireAt}`;
+      repository.items.set('iX', activeItem('iX', '标题丙'));
+      repository.reminders.set(
+        'rX',
+        onceReminder('rX', 'iX', { year: 2025, month: 6, day: 15, hour: 9, minute: 0 }, 'system-notification', null),
+      );
+      const scheduler = makeChannelScheduler(repository);
+      await scheduler.scheduleForReminder('rX');
+      expect(scheduledStore.size).toBe(1);
+
+      const reminder = repository.reminders.get('rX');
+      if (!reminder) throw new Error('rX missing');
+      reminder.channel = 'webhook';
+      reminder.channelConfig = 'https://hook.example/x';
+
+      await scheduler.scheduleForReminder('rX');
+
+      expect(scheduledStore.size).toBe(0);
+      expect(scheduler.getNetworkArmedKeys()).toEqual([key]);
+    });
+
+    it('渠道切换卫生：webhook→system 后内存定时器被清、expo 正常注册', async () => {
+      jest.useFakeTimers();
+      const fireAt = Date.UTC(2025, 5, 15, 9, 0);
+      const key = `once:rX:${fireAt}`;
+      repository.items.set('iX', activeItem('iX', '标题丙'));
+      repository.reminders.set(
+        'rX',
+        onceReminder('rX', 'iX', { year: 2025, month: 6, day: 15, hour: 9, minute: 0 }, 'webhook', 'https://hook.example/x'),
+      );
+      const scheduler = makeChannelScheduler(repository);
+      await scheduler.scheduleForReminder('rX');
+      expect(scheduler.getNetworkArmedKeys()).toEqual([key]);
+
+      const reminder = repository.reminders.get('rX');
+      if (!reminder) throw new Error('rX missing');
+      reminder.channel = 'system-notification';
+      reminder.channelConfig = null;
+
+      await scheduler.scheduleForReminder('rX');
+
+      expect(scheduler.getNetworkArmedKeys()).toEqual([]);
+      expect(scheduledStore.has(key)).toBe(true);
+    });
+
+    it('disabled 后 reconcile：网络定时器被 pruneExcept 清空', async () => {
+      jest.useFakeTimers();
+      const fireAt = Date.UTC(2025, 5, 15, 9, 0);
+      repository.items.set('iW', activeItem('iW', '标题丙'));
+      repository.reminders.set(
+        'rW',
+        onceReminder('rW', 'iW', { year: 2025, month: 6, day: 15, hour: 9, minute: 0 }, 'webhook', 'https://hook.example/x'),
+      );
+      const scheduler = makeChannelScheduler(repository);
+      await scheduler.scheduleForReminder('rW');
+      expect(scheduler.getNetworkArmedKeys()).toHaveLength(1);
+
+      const reminder = repository.reminders.get('rW');
+      if (!reminder) throw new Error('rW missing');
+      reminder.enabled = false;
+
+      await scheduler.reconcile();
+
+      expect(scheduler.getNetworkArmedKeys()).toEqual([]);
+    });
+
+    it('once 落春季 gap（America/New_York 2026-03-08 02:30）：无 occurrence，不调度不挂载', async () => {
+      repository.items.set('iG', activeItem('iG', '标题戊'));
+      repository.reminders.set(
+        'rG',
+        onceReminder(
+          'rG',
+          'iG',
+          { year: 2026, month: 3, day: 8, hour: 2, minute: 30 },
+          'webhook',
+          'https://hook.example/gap',
+          'America/New_York',
+        ),
+      );
+      const scheduler = makeChannelScheduler(repository);
+
+      await scheduler.scheduleForReminder('rG');
+
+      expect(scheduleNotificationAsyncMock).not.toHaveBeenCalled();
+      expect(scheduler.getNetworkArmedKeys()).toEqual([]);
+      expect(fetchMock).not.toHaveBeenCalled();
     });
   });
 });
