@@ -87,6 +87,12 @@ export function useFlashChat() {
       setBusy(true);
       push('user', input);
       try {
+        // 每次发送前重读配置：设置页可能在 Tab 挂载后保存/清除了 Key，
+        // 挂载时读到的 configRef 已过期（真机验收 6.33 缺陷）。
+        if (storeRef.current === null) {
+          storeRef.current = new SecureAiConfigStore();
+        }
+        configRef.current = await storeRef.current.load();
         const result = await runFlashTurn(input, {
           config: configRef.current,
           now: Date.now(),

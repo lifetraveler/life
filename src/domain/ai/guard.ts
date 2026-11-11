@@ -45,7 +45,7 @@ function isLocalTime(value: unknown): value is LocalTime {
 }
 
 /** 形状完整的 RecurrenceRule 才返回；残缺/未知形状返回 null（调用方必须整体拒绝该候选）。 */
-function isRecurrenceRule(value: unknown): RecurrenceRule | null {
+export function isRecurrenceRule(value: unknown): RecurrenceRule | null {
   if (!isRecord(value)) return null;
   const freq = value.frequency;
   const localTime = value.localTime;

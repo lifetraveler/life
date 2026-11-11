@@ -10,9 +10,9 @@ describe('runFlashTurn（阶段 3 编排）', () => {
   const NOW = new Date('2026-11-10T10:00:00+08:00').getTime();
   const TZID = 'Asia/Shanghai';
 
-  function remoteBody(draft: ParsedItemDraft): string {
+  function remoteBody(wire: unknown): string {
     return JSON.stringify({
-      choices: [{ message: { content: JSON.stringify(draft) } }],
+      choices: [{ message: { content: JSON.stringify(wire) } }],
     });
   }
 
@@ -24,15 +24,16 @@ describe('runFlashTurn（阶段 3 编排）', () => {
       })) as unknown as typeof fetch;
   }
 
-  const remoteDraft: ParsedItemDraft = {
+  // v0.16：远程模型输出民用 wire，provider 本地换算为 ParsedItemDraft。
+  const remoteWire = {
     title: '开周会',
     content: '',
     type: 'event',
-    startAt: new Date('2026-11-11T15:00:00+08:00').getTime(),
-    endAt: null,
+    start: { date: '2026-11-11', time: '15:00' },
+    end: null,
     allDay: false,
     categoryId: 'work',
-    tags: [],
+    tags: [] as string[],
     priority: 2,
     recurrence: null,
     reminderOffsetMinutes: null,
@@ -67,13 +68,25 @@ describe('runFlashTurn（阶段 3 编排）', () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
       calls.push({ url: String(url), init });
-      return new Response(remoteBody(remoteDraft), {
+      return new Response(remoteBody(remoteWire), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
     }) as unknown as typeof fetch;
 
-    const previousDraft: ParsedItemDraft = { ...remoteDraft, title: '旧标题' };
+    const previousDraft: ParsedItemDraft = {
+      title: '旧标题',
+      content: '',
+      type: 'event',
+      startAt: new Date('2026-11-11T15:00:00+08:00').getTime(),
+      endAt: null,
+      allDay: false,
+      categoryId: 'work',
+      tags: [],
+      priority: 2,
+      recurrence: null,
+      reminderOffsetMinutes: null,
+    };
     const result = await runFlashTurn('改成后天下午3点', {
       config,
       now: NOW,

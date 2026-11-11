@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.15
+版本：v0.16
 
 ## 1. 项目概览
 
@@ -216,6 +216,16 @@ schema 版本 5→6，新增/修改如下：
 - 点击“确认保存”后，才调用 `Repository.createItem` 及 `createReminder` 落库。
 - 
 ## 8. 当前切片
-tasks/slice-15.md
+tasks/slice-16.md（立项；开工闸门见 §7.26：变更提案确认前禁改提醒冻结区）
+
+### 7.26 提醒能力升级闸门（v0.16，切片 16）
+- 切片 16 涉及冻结区变更：reminders 表 schema（data-model.md §4.1 frequency 枚举、
+  notifications.md occurrenceKey/渠道抽象）与 src/notifications/ 实现。
+- 开工顺序固定：先完善变更提案 docs/proposals/slice-16-reminder-channels.md 并经用户
+  确认，再动实现；确认前禁止修改 reminders schema、Reminder 领域模型与
+  src/notifications/ 实现文件（可写提案文档与纯函数草案，不得合入）。
+- 数据模型与调度器必须分两次提交（先 schema/domain，后 notifications），便于独立回滚。
+- 渠道边界如实披露：webhook/apprise 不承诺后台常驻可靠送达（不引入 WorkManager，
+  沿切片 10 契约）；闹钟如需精确闹钟权限属 §5 构建配置保护项，须单独确认。
 
 

@@ -2,7 +2,13 @@
  * 切片 15 阶段 1：OpenAI 兼容 Provider（OpenAI / DeepSeek 等自定义 API Key）。
  *
  * 职责（§7.24）：调用 /chat/completions，取 choices[0].message.content，
- * 剥离可能的 ```json 围栏后 JSON.parse，经 isParsedItemDraft 严格校验。
+ * 剥离可能的 ```json 围栏后 JSON.parse，经 isRemoteDraftWire 严格校验，
+ * 再由 wireToParsedItemDraft 本地换算为 ParsedItemDraft（Unix 毫秒时间戳）。
+ *
+ * v0.16 变更（ai.md）：模型不再直接输出毫秒时间戳——已实证 LLM 算 epoch
+ * 不可靠（整年错、时区反算、照抄 history 旧值）。远端 wire 改用民用时间
+ * {date:"YYYY-MM-DD", time:"HH:mm"|null}，epoch 一律本地换算；重复项的
+ * startAt 进一步由 nextOccurrenceInstant 本地确定性重算。
  *
  * 拦截原则（不做任何补救）：
  * - HTTP 非 2xx → http-status（带 status）；
@@ -17,8 +23,11 @@
  */
 
 import { AiParseError } from './errors';
-import { isParsedItemDraft } from './guard';
+import { isRecurrenceRule } from './guard';
+import { nextOccurrenceInstant } from './localFallback';
 import { AI_SYSTEM_PROMPT, buildNowFacts } from './prompt';
+import { daysInMonth, getZonedParts, resolveCivilTimeToInstant } from '../recurrence/civilTime';
+import type { RecurrenceRule } from '../recurrence/types';
 import type { AiParseContext, AiParser, ChatMessage, ParsedItemDraft } from './types';
 
 export interface OpenAiCompatibleConfig {
@@ -67,6 +76,159 @@ function extractContent(body: unknown): string {
 export function stripCodeFence(text: string): string {
   const fenced = /^\s*```(?:json)?\s*([\s\S]*?)\s*```\s*$/u.exec(text);
   return fenced !== null ? fenced[1] : text;
+}
+
+// ---------------------------------------------------------------------------
+// 远端 wire 格式（ai.md v0.16）：民用时间，本地换算 epoch
+// ---------------------------------------------------------------------------
+
+/** 单个民用日期时间字段：date 必为合法日历日；time null 表示只表达日期（全天）。 */
+export interface RemoteDateTimeField {
+  date: string;
+  time: string | null;
+}
+
+/** 模型实际输出的 JSON 形状（v0.16：不含任何毫秒时间戳）。 */
+export interface RemoteDraftWire {
+  title: string;
+  content: string;
+  type: 'note' | 'task' | 'event';
+  start: RemoteDateTimeField | null;
+  end: RemoteDateTimeField | null;
+  allDay: boolean;
+  categoryId: 'work' | 'personal' | 'study' | 'health' | 'other' | null;
+  tags: string[];
+  priority: 0 | 1 | 2 | 3 | null;
+  recurrence: RecurrenceRule | null;
+  reminderOffsetMinutes: number | null;
+}
+
+const WIRE_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const WIRE_TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+function isRemoteDateTimeField(value: unknown): value is RemoteDateTimeField {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as { date?: unknown; time?: unknown };
+  if (typeof v.date !== 'string' || typeof v.time !== 'string' && v.time !== null) return false;
+  const m = WIRE_DATE_RE.exec(v.date);
+  if (m === null) return false;
+  const year = Number.parseInt(m[1], 10);
+  const month = Number.parseInt(m[2], 10);
+  const day = Number.parseInt(m[3], 10);
+  if (year < 2000 || year > 2100) return false;
+  if (month < 1 || month > 12) return false;
+  if (day < 1 || day > daysInMonth(year, month)) return false;
+  if (v.time !== null && WIRE_TIME_RE.test(v.time) === false) return false;
+  return true;
+}
+
+/** 远端响应结构守卫：任何形状偏差整体拒绝（schema-mismatch），不做补救。 */
+export function isRemoteDraftWire(value: unknown): RemoteDraftWire | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+  if (typeof v.title !== 'string' || v.title.trim().length === 0) return null;
+  if (typeof v.content !== 'string') return null;
+  if (v.type !== 'note' && v.type !== 'task' && v.type !== 'event') return null;
+  if (v.start !== null && isRemoteDateTimeField(v.start) === false) return null;
+  if (v.end !== null && isRemoteDateTimeField(v.end) === false) return null;
+  if (typeof v.allDay !== 'boolean') return null;
+  if (
+    v.categoryId !== null &&
+    v.categoryId !== 'work' &&
+    v.categoryId !== 'personal' &&
+    v.categoryId !== 'study' &&
+    v.categoryId !== 'health' &&
+    v.categoryId !== 'other'
+  ) {
+    return null;
+  }
+  if (Array.isArray(v.tags) === false || v.tags.some((t) => typeof t !== 'string')) return null;
+  if (
+    v.priority !== null &&
+    (typeof v.priority !== 'number' ||
+      Number.isInteger(v.priority) === false ||
+      v.priority < 0 ||
+      v.priority > 3)
+  ) {
+    return null;
+  }
+  const recurrence = isRecurrenceRule(v.recurrence);
+  if (v.recurrence !== null && recurrence === null) return null;
+  if (
+    v.reminderOffsetMinutes !== null &&
+    (typeof v.reminderOffsetMinutes !== 'number' ||
+      Number.isInteger(v.reminderOffsetMinutes) === false ||
+      v.reminderOffsetMinutes < 1)
+  ) {
+    return null;
+  }
+  return {
+    title: v.title,
+    content: v.content,
+    type: v.type,
+    start: v.start as RemoteDateTimeField | null,
+    end: v.end as RemoteDateTimeField | null,
+    allDay: v.allDay,
+    categoryId: v.categoryId as RemoteDraftWire['categoryId'],
+    tags: v.tags as string[],
+    priority: v.priority as RemoteDraftWire['priority'],
+    recurrence: recurrence,
+    reminderOffsetMinutes: v.reminderOffsetMinutes as RemoteDraftWire['reminderOffsetMinutes'],
+  };
+}
+
+function resolveDateTimeField(field: RemoteDateTimeField, tzid: string): number | null {
+  const m = WIRE_DATE_RE.exec(field.date);
+  if (m === null) return null;
+  const year = Number.parseInt(m[1], 10);
+  const month = Number.parseInt(m[2], 10);
+  const day = Number.parseInt(m[3], 10);
+  let hour = 0;
+  let minute = 0;
+  if (field.time !== null) {
+    const t = WIRE_TIME_RE.exec(field.time);
+    if (t === null) return null;
+    hour = Number.parseInt(t[1], 10);
+    minute = Number.parseInt(t[2], 10);
+  }
+  // DST gap 返回 null（与 LocalFallbackProvider 语义一致：该时刻不存在 → 未设时间）。
+  return resolveCivilTimeToInstant(tzid, year, month, day, hour, minute);
+}
+
+/** 民用 wire → 领域草稿（epoch 本地换算）。start 缺失时 end 一并丢弃（无起点不成区间）。 */
+export function wireToParsedItemDraft(
+  wire: RemoteDraftWire,
+  context: AiParseContext,
+): ParsedItemDraft {
+  const startAt = wire.start === null ? null : resolveDateTimeField(wire.start, context.tzid);
+  const endAt =
+    wire.start === null || wire.end === null ? null : resolveDateTimeField(wire.end, context.tzid);
+  const allDay = wire.start !== null && (wire.start.time === null || wire.allDay);
+  const recurrence = wire.recurrence;
+  let recurrenceCopy: RecurrenceRule | null = null;
+  if (recurrence !== null) {
+    const localTime = { ...recurrence.localTime };
+    if (recurrence.frequency === 'daily') {
+      recurrenceCopy = { frequency: 'daily', localTime };
+    } else if (recurrence.frequency === 'weekly') {
+      recurrenceCopy = { frequency: 'weekly', weekdays: [...recurrence.weekdays], localTime };
+    } else {
+      recurrenceCopy = { frequency: 'monthly', dayOfMonth: recurrence.dayOfMonth, localTime };
+    }
+  }
+  return {
+    title: wire.title,
+    content: wire.content,
+    type: wire.type,
+    startAt,
+    endAt,
+    allDay,
+    categoryId: wire.categoryId,
+    tags: [...wire.tags],
+    priority: wire.priority,
+    recurrence: recurrenceCopy,
+    reminderOffsetMinutes: wire.reminderOffsetMinutes,
+  };
 }
 
 export class OpenAICompatibleProvider implements AiParser {
@@ -197,9 +359,20 @@ export class OpenAICompatibleProvider implements AiParser {
         throw new AiParseError('invalid-json', 'AI 返回内容不是合法 JSON（已拦截，不做补救）');
       }
 
-      const draft = isParsedItemDraft(candidate);
-      if (draft === null) {
-        throw new AiParseError('schema-mismatch', 'AI 返回 JSON 未通过 isParsedItemDraft 校验（已拦截）');
+      const wire = isRemoteDraftWire(candidate);
+      if (wire === null) {
+        throw new AiParseError('schema-mismatch', 'AI 返回 JSON 未通过 isRemoteDraftWire 校验（已拦截）');
+      }
+      const draft = wireToParsedItemDraft(wire, context);
+      // 重复项的下一次发生完全由 (rule, now, tzid) 决定，模型给的时刻不携带
+      // 额外信息——一律本地确定性重算，与 LocalFallbackProvider 语义对齐。
+      if (draft.recurrence !== null) {
+        const parts = getZonedParts(context.now, context.tzid);
+        const today = { year: parts.year, month: parts.month, day: parts.day };
+        const local = nextOccurrenceInstant(draft.recurrence, context.now, context.tzid, today);
+        if (local !== null) {
+          return { ...draft, startAt: local };
+        }
       }
       return draft;
     } finally {

@@ -285,6 +285,17 @@ export default function ItemDetailPage() {
           <Pressable style={styles.secondaryButton} onPress={confirmArchiveItem}>
             <Text style={styles.secondaryText}>归档</Text>
           </Pressable>
+          {/* 切片 15（用户验收补充）：local 条目此前无任何删除入口（删除本地副本
+              按钮只对 ics/system-calendar 渲染）。复用切片 8 的删除链路：
+              先 cancelForReminder 全部提醒，再 deleteItem，最后 reconcile。 */}
+          {item.sourceType === 'local' ? (
+            <Pressable
+              style={[styles.secondaryButton, styles.dangerButton]}
+              onPress={confirmDeleteLocalCopy}
+            >
+              <Text style={[styles.secondaryText, styles.dangerText]}>删除记录</Text>
+            </Pressable>
+          ) : null}
         </View>
       ) : null}
 

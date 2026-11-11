@@ -61,3 +61,14 @@
 - 从最新 main 新建 task/slice-15。
 - 由于引入了 expo-secure-store，必须重新构建 dev client。
 - push 遇 reset 加 HTTP/1.1。
+
+## 完成记录（2026-11-11，详见 tasks/slice-15-closeout.md）
+- 阶段 1–4 全部完成；验收 1–10 全过（真机=MuMu 模拟器 emulator-5554，Android 15）。
+- 计划外变更（用户当场确认）：契约 ai.md v0.15.1（ParsedItemDraft 补 tags/priority）
+  与 v0.16（远端模型响应改民用时间 wire，epoch 一律本地换算——LLM 直接算毫秒时间戳
+  已实证不可靠：整年错/时区反算/照抄 history）。AiParser 对外签名不变。
+- 阶段 4 缺陷修复 2 处：useFlashChat 每次发送前重载配置（设置页保存即时生效）；
+  详情页 local 条目补「删除记录」入口（复用切片 8 删除链路）。
+- 已知限制：一次性提醒（reminderOffsetMinutes 且无 recurrence）不落库，卡片保留
+  意图 + 确认后提示；真正落库与提醒渠道扩展（闹钟/系统通知/webhook/apprise）
+  立项为切片 16（tasks/slice-16.md），须先过变更提案。

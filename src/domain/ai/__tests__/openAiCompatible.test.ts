@@ -3,7 +3,7 @@
  * 安全断言：任何错误消息都不得包含 apiKey。
  */
 
-import { OpenAICompatibleProvider, stripCodeFence } from '../openAiCompatible';
+import { OpenAICompatibleProvider, stripCodeFence, isRemoteDraftWire, wireToParsedItemDraft } from '../openAiCompatible';
 import { AiParseError } from '../errors';
 import type { AiParseContext } from '../types';
 import { resolveCivilTimeToInstant } from '../../recurrence/civilTime';
@@ -18,12 +18,13 @@ const NOW = mustAt(2026, 11, 10, 10, 0);
 const CONTEXT: AiParseContext = { now: NOW, tzid: TZID, history: [] };
 const API_KEY = 'sk-test-secret-key-do-not-leak';
 
-const validDraftJson = JSON.stringify({
+// v0.16：模型输出民用时间 wire，epoch 由 provider 本地换算。
+const validWireJson = JSON.stringify({
   title: '开会',
   content: '',
   type: 'event',
-  startAt: NOW + 3600_000,
-  endAt: null,
+  start: { date: '2026-11-11', time: '15:00' },
+  end: null,
   allDay: false,
   categoryId: 'work',
   tags: [],
@@ -89,7 +90,7 @@ describe('OpenAICompatibleProvider', () => {
   });
 
   it('发请求带 Authorization Bearer 与正确 URL/model/temperature', async () => {
-    const { fetchImpl, calls } = makeFetch(() => okEnvelope(validDraftJson));
+    const { fetchImpl, calls } = makeFetch(() => okEnvelope(validWireJson));
     const provider = makeProvider(fetchImpl);
     const draft = await provider.parse('明天下午3点开会', CONTEXT);
     expect(draft.title).toBe('开会');
@@ -118,7 +119,7 @@ describe('OpenAICompatibleProvider', () => {
   });
 
   it('history 作为前置消息发送（user/assistant 顺序保持）', async () => {
-    const { fetchImpl, calls } = makeFetch(() => okEnvelope(validDraftJson));
+    const { fetchImpl, calls } = makeFetch(() => okEnvelope(validWireJson));
     const provider = makeProvider(fetchImpl);
     await provider.parse('改成明天', {
       now: NOW,
@@ -137,8 +138,67 @@ describe('OpenAICompatibleProvider', () => {
     ]);
   });
 
+  it('recurrence 非空时 startAt 本地重算（模型给的首日被覆盖）', async () => {
+    const draftWithRecurrence = JSON.stringify({
+      title: '喝水',
+      content: '',
+      type: 'task',
+      start: { date: '2026-11-10', time: '09:00' },
+      end: null,
+      allDay: false,
+      categoryId: 'health',
+      tags: ['健康'],
+      priority: null,
+      recurrence: { frequency: 'daily', localTime: { hour: 9, minute: 0 } },
+      reminderOffsetMinutes: null,
+    });
+    const { fetchImpl } = makeFetch(() => okEnvelope(draftWithRecurrence));
+    const provider = makeProvider(fetchImpl);
+    const draft = await provider.parse('每天9点喝水', CONTEXT);
+    // daily 9:00，NOW=2026-11-10 10:00 → 今天 09:00 已过 → 明天 09:00。
+    expect(draft.startAt).toBe(mustAt(2026, 11, 11, 9, 0));
+    expect(draft.recurrence).toEqual({
+      frequency: 'daily',
+      localTime: { hour: 9, minute: 0 },
+    });
+  });
+
+  it('recurrence 非空且模型 start 为 null 时本地补算', async () => {
+    const draftNullStart = JSON.stringify({
+      title: '晨会',
+      content: '',
+      type: 'event',
+      start: null,
+      end: null,
+      allDay: false,
+      categoryId: 'work',
+      tags: [],
+      priority: null,
+      recurrence: {
+        frequency: 'weekly',
+        weekdays: [3],
+        localTime: { hour: 8, minute: 0 },
+      },
+      reminderOffsetMinutes: null,
+    });
+    const { fetchImpl } = makeFetch(() => okEnvelope(draftNullStart));
+    const provider = makeProvider(fetchImpl);
+    const draft = await provider.parse('每周三8点晨会', CONTEXT);
+    // NOW=2026-11-10 周二 → 下一个周三 = 2026-11-11 08:00。
+    expect(draft.startAt).toBe(mustAt(2026, 11, 11, 8, 0));
+  });
+
+  it('民用时间本地换算：start 15:00 → 次日 15:00 的毫秒时间戳', async () => {
+    const { fetchImpl } = makeFetch(() => okEnvelope(validWireJson));
+    const provider = makeProvider(fetchImpl);
+    const draft = await provider.parse('明天下午3点开会', CONTEXT);
+    expect(draft.startAt).toBe(mustAt(2026, 11, 11, 15, 0));
+    expect(draft.allDay).toBe(false);
+    expect(draft.endAt).toBeNull();
+  });
+
   it('content 带 ```json 围栏时剥离后仍能解析', async () => {
-    const fenced = '```json\n' + validDraftJson + '\n```';
+    const fenced = '```json\n' + validWireJson + '\n```';
     const { fetchImpl } = makeFetch(() => okEnvelope(fenced));
     const provider = makeProvider(fetchImpl);
     await expect(provider.parse('开会', CONTEXT)).resolves.toMatchObject({
@@ -215,8 +275,7 @@ describe('OpenAICompatibleProvider', () => {
 
   it('stripCodeFence 剥围栏、无围栏原样返回', () => {
     expect(stripCodeFence('```json\n{"a":1}\n```')).toBe('{"a":1}');
-    expect(stripCodeFence('{"a":1}')).toBe('{"a":1}');
-    expect(stripCodeFence('```\n{"a":1}\n```')).toBe('{"a":1}');
+    expect(stripCodeFence('{"a":1}')).toBe('{"a":1}');    expect(stripCodeFence('```\n{"a":1}\n```')).toBe('{"a":1}');
   });
 
   describe('testConnection（阶段 2）', () => {
@@ -270,5 +329,83 @@ describe('OpenAICompatibleProvider', () => {
       const result = await provider.testConnection();
       expect(result).toMatchObject({ ok: false, reason: expect.stringContaining('网络错误') });
     });
+  });
+});
+
+describe('isRemoteDraftWire / wireToParsedItemDraft（v0.16 民用 wire）', () => {
+  const validWire: Record<string, unknown> = {
+    title: '开会',
+    content: '',
+    type: 'event',
+    start: { date: '2026-11-11', time: '15:00' },
+    end: { date: '2026-11-11', time: '16:00' },
+    allDay: false,
+    categoryId: 'work',
+    tags: ['工作'],
+    priority: 2,
+    recurrence: null,
+    reminderOffsetMinutes: 10,
+  };
+  const patchWire = (patch: Record<string, unknown>): unknown => ({ ...validWire, ...patch });
+
+  it('合法 wire 通过守卫并整体换算（含 end）', () => {
+    const wire = isRemoteDraftWire(validWire);
+    expect(wire).not.toBeNull();
+    const draft = wireToParsedItemDraft(wire as NonNullable<typeof wire>, CONTEXT);
+    expect(draft.startAt).toBe(mustAt(2026, 11, 11, 15, 0));
+    expect(draft.endAt).toBe(mustAt(2026, 11, 11, 16, 0));
+    expect(draft.allDay).toBe(false);
+    expect(draft.tags).toEqual(['工作']);
+  });
+
+  it('非法形状整体拒绝：不存在的日历日 / 非法时刻 / 空标题 / 越界优先级', () => {
+    const bad = (patch: Record<string, unknown>): unknown => ({ ...validWire, ...patch });
+    expect(isRemoteDraftWire(bad({ start: { date: '2026-02-30', time: '15:00' } }))).toBeNull();
+    expect(isRemoteDraftWire(bad({ start: { date: '2026-13-01', time: '15:00' } }))).toBeNull();
+    expect(isRemoteDraftWire(bad({ start: { date: '2026-11-11', time: '25:00' } }))).toBeNull();
+    expect(isRemoteDraftWire(bad({ title: '  ' }))).toBeNull();
+    expect(isRemoteDraftWire(bad({ priority: 4 }))).toBeNull();
+    expect(isRemoteDraftWire(bad({ start: { date: '11/12/2026', time: null } }))).toBeNull();
+    expect(isRemoteDraftWire(bad({ recurrence: { frequency: 'hourly' } }))).toBeNull();
+  });
+
+  it('time null → 全天 00:00；start 显式 null → startAt null 且 end 一并丢弃；start 键缺失整体拒绝', () => {
+    const allDayWire = isRemoteDraftWire(
+      patchWire({ start: { date: '2026-11-11', time: null }, allDay: true, end: null }),
+    );
+    expect(allDayWire).not.toBeNull();
+    const allDayDraft = wireToParsedItemDraft(allDayWire as NonNullable<typeof allDayWire>, CONTEXT);
+    expect(allDayDraft.allDay).toBe(true);
+    expect(allDayDraft.startAt).toBe(mustAt(2026, 11, 11, 0, 0));
+
+    const noTimeWire = isRemoteDraftWire(patchWire({ start: null, end: null }));
+    expect(noTimeWire).not.toBeNull();
+    const noTimeDraft = wireToParsedItemDraft(noTimeWire as NonNullable<typeof noTimeWire>, CONTEXT);
+    expect(noTimeDraft.startAt).toBeNull();
+    expect(noTimeDraft.endAt).toBeNull();
+    expect(noTimeDraft.allDay).toBe(false);
+
+    // start 键缺失（undefined）属于形状不完整：整体拒绝，不做补救。
+    const { start: _s, end: _e, ...noTimeBase } = validWire;
+    expect(isRemoteDraftWire(noTimeBase)).toBeNull();
+  });
+
+  it('DST gap 时刻换算为 null（America/New_York 2026-03-08 02:30）', () => {
+    const nyNow = resolveCivilTimeToInstant('America/New_York', 2026, 3, 9, 12, 0);
+    if (nyNow === null) throw new Error('NY 基准时间不应为 null');
+    const nyContext: AiParseContext = { now: nyNow, tzid: 'America/New_York', history: [] };
+    const wire = isRemoteDraftWire(
+      patchWire({ start: { date: '2026-03-08', time: '02:30' }, end: null }),
+    );
+    expect(wire).not.toBeNull();
+    const draft = wireToParsedItemDraft(wire as NonNullable<typeof wire>, nyContext);
+    expect(draft.startAt).toBeNull();
+  });
+
+  it('tags 复制不共享引用', () => {
+    const wire = isRemoteDraftWire(validWire) as NonNullable<ReturnType<typeof isRemoteDraftWire>>;
+    const draft = wireToParsedItemDraft(wire, CONTEXT);
+    draft.tags.push('改动');
+    expect(wire.tags).toEqual(['工作']);
   });
 });
