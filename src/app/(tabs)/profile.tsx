@@ -358,6 +358,10 @@ export default function SettingsPage() {
           <Text style={styles.navLabel}>标签管理</Text>
           <Text style={styles.navChevron}>›</Text>
         </Pressable>
+        <Pressable style={styles.navRow} onPress={() => router.push('/settings/ai')}>
+          <Text style={styles.navLabel}>AI 配置</Text>
+          <Text style={styles.navChevron}>›</Text>
+        </Pressable>
       </View>
 
       <View style={styles.section}>
