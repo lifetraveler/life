@@ -121,3 +121,26 @@ Item 新增字段：
 ### 数据结构关系
 - Item 通过 `category_id` 关联 Category。
 - 任何查询 Item 的接口（如今日视图、搜索、Agenda）必须返回完整的 Category 对象，以便 UI 渲染颜色条和 Emoji。
+
+## Reminder 一次性频率与多渠道字段（v0.16，切片 16 阶段 1；遵循 docs/proposals/slice-16-reminder-channels.md）
+
+§4.17 的 frequency 三值冻结由本节扩展：'daily' | 'weekly' | 'monthly' | 'once'。其余 §4.17 规则（weekdays JSON 字符串、tzid 白名单、migration 纪律）不变。
+
+### Schema v7 → v8
+reminders 表在 `enabled` 之后追加 3 列（addColumns，严禁重建表/清库，v7 step 不动）：
+- once_civil_json: string | null（单列 JSON；v8 前存量行与重复规则为 null）
+- channel: string（NOT NULL；addColumns 自动回填类型零值 ''，随后同迁移事务内 `UPDATE "reminders" SET "channel" = 'system-notification';` 无条件回填）
+- channel_config: string | null
+
+### once 频率语义
+- 一次性提醒的时刻存于 once_civil_json：固定键序 `{year,month,day,hour,minute}` 的单列 JSON 字符串（民用时刻，按 tzid 解释；提案 §2.2 拍板，否决 5 列 INTEGER 方案）。
+- 校验范围：year 1–9999、month 1–12、day 1–31、hour 0–23、minute 0–59；day 的月内日历有效性（如 2 月 30 日）在阶段 2 civil→epoch 换算时判定。
+- frequency='once' 时 once_civil_json 必填（Repository 写路径强制）；localTimeHour/localTimeMinute/weekdays/dayOfMonth 为 NOT NULL 列，落占位零值 0/0/''/0，不承载语义；切回重复频率时 once_civil_json 清 null。
+- localTime/weekdays/dayOfMonth 与 once 的占位零值映射由 Repository 归一化统一执行，调度器不得自行解析 once_civil_json 以外的规则字段推断 once 时刻。
+- startAt 语义不变（绝对毫秒时间戳）；once 的绝对触发时刻以 onceAt+tzid 换算为准（阶段 2），occurrenceKey 规则见 notifications.md（阶段 2 追加）。
+
+### 渠道字段语义
+- channel ∈ 'system-notification' | 'alarm' | 'webhook' | 'apprise'，缺省 'system-notification'。
+- channel_config：webhook/apprise 渠道存非空白配置字符串（trim 后落库）；system-notification/alarm 渠道强制 null。
+- 读取层防御：库中 channel 为非法值（含 LokiJS 忽略 'sql' 迁移步骤产生的 ''）时回退默认 'system-notification'，不抛错；once_civil_json 坏 JSON 读回抛明确错误，不静默（对齐 weekdays 纪律）。
+- 回滚：v8 为加列迁移，回滚丢弃 3 新列，无数据保全要求（提案 §4）。

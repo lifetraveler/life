@@ -30,6 +30,10 @@ function reminderR1(): Reminder {
     localTimeMinute: 0,
     weekdays: [],
     dayOfMonth: 0,
+    // 切片 16 编译必需夹具补字段（§7.13）：onceAt/channel/channelConfig。
+    onceAt: null,
+    channel: 'system-notification',
+    channelConfig: null,
     tzid: 'UTC',
     startAt: 1749513600000,
     enabled: true,
@@ -50,6 +54,10 @@ function reminderR2(): Reminder {
     localTimeMinute: 0,
     weekdays: [],
     dayOfMonth: 0,
+    // 切片 16 编译必需夹具补字段（§7.13）：onceAt/channel/channelConfig。
+    onceAt: null,
+    channel: 'system-notification',
+    channelConfig: null,
     tzid: 'UTC',
     startAt: 1749427200000,
     enabled: true,

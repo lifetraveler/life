@@ -125,6 +125,9 @@ function frequencyHeadline(frequency: ReminderFrequency): string {
       return '每周';
     case 'monthly':
       return '每月';
+    case 'once':
+      // 切片 16：once 无规则时间语义，具体时刻由 onceAt 提供（阶段 3 渲染）。
+      return '单次';
   }
 }
 
@@ -133,11 +136,14 @@ function frequencyHeadline(frequency: ReminderFrequency): string {
  * - daily → '每天 09:00'
  * - weekly → '每周一、周三 09:00'
  * - monthly → '每月 15 日 09:00'
+ * - once → '单次（时区）'（切片 16：localTime 是占位零值，不渲染伪 00:00；
+ *   onceAt 民用时刻展示属阶段 3 UI）
  * 后缀始终带规则时区（规则时间按 tzid 的民用时间触发，与设备时区无关）。
  */
 export function formatReminderRuleSummary(reminder: Pick<Reminder, 'frequency' | 'localTimeHour' | 'localTimeMinute' | 'weekdays' | 'dayOfMonth' | 'tzid'>): string {
   const time = formatLocalTime(reminder.localTimeHour, reminder.localTimeMinute);
   let head: string;
+  let timeSuffix: string;
   if (reminder.frequency === 'weekly') {
     const labels = reminder.weekdays
       .slice()
@@ -145,10 +151,16 @@ export function formatReminderRuleSummary(reminder: Pick<Reminder, 'frequency' |
       .map((day) => WEEKDAY_SHORT_LABELS[day] ?? `周${day}`)
       .join('、');
     head = `每周${labels}`;
+    timeSuffix = ` ${time}`;
   } else if (reminder.frequency === 'monthly') {
     head = `每月 ${reminder.dayOfMonth} 日`;
+    timeSuffix = ` ${time}`;
+  } else if (reminder.frequency === 'once') {
+    head = frequencyHeadline(reminder.frequency);
+    timeSuffix = '';
   } else {
     head = frequencyHeadline(reminder.frequency);
+    timeSuffix = ` ${time}`;
   }
-  return `${head} ${time}（${reminder.tzid}）`;
+  return `${head}${timeSuffix}（${reminder.tzid}）`;
 }

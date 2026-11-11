@@ -3,8 +3,10 @@ import { appSchema, tableSchema } from '@nozbe/watermelondb';
 /**
  * schema 版本号：任何表/列变更必须 +1 并提供 migration（AGENTS.md §4.1 / §4.6）。
  * v7（切片 14 阶段 7a）：app_settings 新增小组件显示开关 4 列（docs/proposals/slice-14-widget-phase7.md）。
+ * v8（切片 16 阶段 1）：reminders 新增 once_civil_json / channel / channel_config 列
+ * （AGENTS.md §7.26，docs/proposals/slice-16-reminder-channels.md）。
  */
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 export const schema = appSchema({
   version: SCHEMA_VERSION,
@@ -66,6 +68,14 @@ export const schema = appSchema({
     // 切片 5（AGENTS.md §4.17）：提醒规则表，schema v3。
     // weekdays 存 JSON 数组字符串（冻结决定）；last_* 两列 nullable（isOptional），
     // 由 Repository 初始化为 null，仅调度器经 markReminderFired / markReminderReconciled 写入。
+    // v8（切片 16 阶段 1，AGENTS.md §7.26 / docs/proposals/slice-16-reminder-channels.md）：
+    // - once_civil_json：once 一次性提醒的民用触发时刻，单列 JSON
+    //   {"year":…,"month":…,"day":…,"hour":…,"minute":…}；仅 frequency='once' 非空，
+    //   其他频率恒为 null（写路径归一）。isOptional：存量重复规则行回填 null。
+    // - channel：提醒渠道（非可选）。addColumns 对既有行自动回填类型零值 ''，
+    //   同一 migration step 内 unsafeExecuteSql UPDATE 全表回填 'system-notification'
+    //   （v7 widget_show_overdue 同款先例），行为与升级前一致。
+    // - channel_config：webhook URL / apprise 配置 JSON；system-notification / alarm 渠道恒为 null。
     tableSchema({
       name: 'reminders',
       columns: [
@@ -78,6 +88,9 @@ export const schema = appSchema({
         { name: 'tzid', type: 'string' },
         { name: 'start_at', type: 'number' },
         { name: 'enabled', type: 'boolean' },
+        { name: 'once_civil_json', type: 'string', isOptional: true },
+        { name: 'channel', type: 'string' },
+        { name: 'channel_config', type: 'string', isOptional: true },
         { name: 'last_fired_occurrence_key', type: 'string', isOptional: true },
         { name: 'last_reconciled_at', type: 'number', isOptional: true },
         { name: 'created_at', type: 'number' },

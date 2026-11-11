@@ -27,10 +27,13 @@ import type { NotificationPermissionState } from '../notifications';
 
 const FREQUENCIES: readonly ReminderFrequency[] = ['daily', 'weekly', 'monthly'];
 
+// 切片 16：frequency 扩展 'once' 后 Record 必须穷举；列表行可能展示存量 once 提醒，
+// 但创建表单不提供 once（onceAt 民用时刻输入属阶段 3 UI，本调试页不提前实现）。
 const FREQUENCY_LABELS: Record<ReminderFrequency, string> = {
   daily: '每天',
   weekly: '每周',
   monthly: '每月',
+  once: '单次',
 };
 
 const WEEKDAY_LABELS: Record<number, string> = {
