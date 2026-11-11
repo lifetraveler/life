@@ -8,7 +8,8 @@
  */
 
 import { formatLocalDate, formatLocalTime, getZonedParts } from '../domain/recurrence/civilTime';
-import type { Reminder, ReminderFrequency } from '../domain/reminder';
+import type { Reminder, ReminderChannel, ReminderFrequency } from '../domain/reminder';
+import { REMINDER_CHANNEL_LABELS } from './reminderForm';
 
 /**
  * 设备当前 IANA 时区（§4.27：详情页按设备当前 IANA 时区格式化）；取不到时回退 UTC。
@@ -126,9 +127,18 @@ function frequencyHeadline(frequency: ReminderFrequency): string {
     case 'monthly':
       return '每月';
     case 'once':
-      // 切片 16：once 无规则时间语义，具体时刻由 onceAt 提供（阶段 3 渲染）。
       return '单次';
   }
+}
+
+/** 两位补零（once 摘要的月/日/时/分渲染用） */
+function pad2(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+/** 阶段 3：提醒渠道中文标签（标签唯一来源在 reminderForm.REMINDER_CHANNEL_LABELS） */
+export function formatReminderChannelLabel(channel: ReminderChannel): string {
+  return REMINDER_CHANNEL_LABELS[channel];
 }
 
 /**
@@ -136,11 +146,11 @@ function frequencyHeadline(frequency: ReminderFrequency): string {
  * - daily → '每天 09:00'
  * - weekly → '每周一、周三 09:00'
  * - monthly → '每月 15 日 09:00'
- * - once → '单次（时区）'（切片 16：localTime 是占位零值，不渲染伪 00:00；
- *   onceAt 民用时刻展示属阶段 3 UI）
+ * - once → '单次 11-12 08:50（时区）'（切片 16 阶段 3：onceAt 民用时刻展示；
+ *   onceAt 缺省时退化为 '单次（时区）'）
  * 后缀始终带规则时区（规则时间按 tzid 的民用时间触发，与设备时区无关）。
  */
-export function formatReminderRuleSummary(reminder: Pick<Reminder, 'frequency' | 'localTimeHour' | 'localTimeMinute' | 'weekdays' | 'dayOfMonth' | 'tzid'>): string {
+export function formatReminderRuleSummary(reminder: Pick<Reminder, 'frequency' | 'localTimeHour' | 'localTimeMinute' | 'weekdays' | 'dayOfMonth' | 'onceAt' | 'tzid'>): string {
   const time = formatLocalTime(reminder.localTimeHour, reminder.localTimeMinute);
   let head: string;
   let timeSuffix: string;
@@ -157,7 +167,10 @@ export function formatReminderRuleSummary(reminder: Pick<Reminder, 'frequency' |
     timeSuffix = ` ${time}`;
   } else if (reminder.frequency === 'once') {
     head = frequencyHeadline(reminder.frequency);
-    timeSuffix = '';
+    const once = reminder.onceAt;
+    timeSuffix = once !== null
+      ? ` ${pad2(once.month)}-${pad2(once.day)} ${pad2(once.hour)}:${pad2(once.minute)}`
+      : '';
   } else {
     head = frequencyHeadline(reminder.frequency);
     timeSuffix = ` ${time}`;

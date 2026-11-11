@@ -5,6 +5,7 @@ import {
   formatItemEnd,
   formatItemStart,
   formatItemTime,
+  formatReminderChannelLabel,
   formatReminderRuleSummary,
   getDeviceTzid,
 } from '../timeFormat';
@@ -83,6 +84,7 @@ describe('timeFormat（切片 6 展示格式化，显式 tzid）', () => {
     const base = {
       localTimeHour: 9,
       localTimeMinute: 5,
+      onceAt: null,
       tzid: 'Asia/Shanghai',
     };
 
@@ -101,6 +103,36 @@ describe('timeFormat（切片 6 展示格式化，显式 tzid）', () => {
       expect(formatReminderRuleSummary({ ...base, frequency: 'monthly', weekdays: [], dayOfMonth: 31 }))
         .toBe('每月 31 日 09:05（Asia/Shanghai）');
     });
+
+    // 切片 16 阶段 3 追加：once 渲染触发时刻（MM-DD HH:MM），不渲染伪 00:00 占位。
+    it('once + onceAt → 单次 MM-DD HH:mm（tzid）', () => {
+      expect(
+        formatReminderRuleSummary({
+          ...base,
+          frequency: 'once',
+          weekdays: [],
+          dayOfMonth: 0,
+          onceAt: { year: 2026, month: 11, day: 12, hour: 8, minute: 50 },
+        }),
+      ).toBe('单次 11-12 08:50（Asia/Shanghai）');
+    });
+
+    it('once 且 onceAt null → 退化为「单次（tzid）」，不渲染伪 00:00', () => {
+      expect(
+        formatReminderRuleSummary({ ...base, frequency: 'once', weekdays: [], dayOfMonth: 0, onceAt: null }),
+      ).toBe('单次（Asia/Shanghai）');
+    });
+  });
+});
+
+// ─── 切片 16 阶段 3 追加：渠道标签 ───
+
+describe('formatReminderChannelLabel（切片 16 阶段 3）', () => {
+  it('四渠道中文标签（标签源为 reminderForm 的 REMINDER_CHANNEL_LABELS）', () => {
+    expect(formatReminderChannelLabel('system-notification')).toBe('系统通知');
+    expect(formatReminderChannelLabel('alarm')).toBe('闹钟');
+    expect(formatReminderChannelLabel('webhook')).toBe('Webhook');
+    expect(formatReminderChannelLabel('apprise')).toBe('Apprise');
   });
 });
 

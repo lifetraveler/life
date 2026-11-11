@@ -3,7 +3,9 @@ import { Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-nati
 
 import type { Reminder, ReminderFrequency } from '../domain/reminder';
 import DateTimeField from './DateTimeField';
+import ReminderChannelFields from './ReminderChannelFields';
 import {
+  parseAppriseFormFields,
   validateReminderForm,
   WEEKDAY_OPTIONS,
 } from './reminderForm';
@@ -14,7 +16,9 @@ import TzPicker from './TzPicker';
  * Reminder 表单（切片 6）：创建与编辑共用（AGENTS.md §4.27）。
  * - 编辑模式传 initial（Reminder），提交回传完整表单值，由父级决定 create/update；
  * - 校验为纯函数 validateReminderForm（与 Repository 归一化规则一致）；
- * - tz 选择器只含白名单两项（§4.25）。
+ * - tz 选择器只含白名单两项（§4.25）；
+ * - 切片 16 阶段 3：新增 once 频率（触发时刻 = onceAt 民用文本输入，不走设备时区
+ *   的 DateTimeField）与渠道选择（ReminderChannelFields 子组件）。
  */
 interface ReminderFormProps {
   initial?: Reminder;
@@ -27,19 +31,43 @@ const FREQUENCY_OPTIONS: ReadonlyArray<{ value: ReminderFrequency; label: string
   { value: 'daily', label: '每天' },
   { value: 'weekly', label: '每周' },
   { value: 'monthly', label: '每月' },
+  { value: 'once', label: '单次' },
 ];
+
+/** OnceCivilTime → 'YYYY-MM-DD' 文本（编辑回填用） */
+function formatOnceDateParts(year: number, month: number, day: number): string {
+  const monthText = String(month).padStart(2, '0');
+  const dayText = String(day).padStart(2, '0');
+  return `${String(year).padStart(4, '0')}-${monthText}-${dayText}`;
+}
 
 function initialValues(initial?: Reminder): ReminderFormValues {
   if (initial) {
+    const onceAt =
+      initial.frequency === 'once' && initial.onceAt !== null
+        ? {
+            date: formatOnceDateParts(initial.onceAt.year, initial.onceAt.month, initial.onceAt.day),
+            hour: initial.onceAt.hour,
+            minute: initial.onceAt.minute,
+          }
+        : { date: '', hour: null, minute: null };
+    const appriseFields = initial.channel === 'apprise'
+      ? parseAppriseFormFields(initial.channelConfig)
+      : { baseUrl: '', key: '' };
     return {
       frequency: initial.frequency,
       localTimeHour: initial.localTimeHour,
       localTimeMinute: initial.localTimeMinute,
       weekdays: [...initial.weekdays],
       dayOfMonth: initial.dayOfMonth > 0 ? initial.dayOfMonth : null,
+      onceAt,
       tzid: initial.tzid,
       startAt: initial.startAt,
       enabled: initial.enabled,
+      channel: initial.channel,
+      channelConfigText: initial.channel === 'webhook' ? (initial.channelConfig ?? '') : '',
+      appriseBaseUrl: appriseFields.baseUrl,
+      appriseKey: appriseFields.key,
     };
   }
   return {
@@ -48,9 +76,14 @@ function initialValues(initial?: Reminder): ReminderFormValues {
     localTimeMinute: 0,
     weekdays: [],
     dayOfMonth: null,
+    onceAt: { date: '', hour: null, minute: null },
     tzid: 'Asia/Shanghai',
     startAt: Date.now(),
     enabled: true,
+    channel: 'system-notification',
+    channelConfigText: '',
+    appriseBaseUrl: '',
+    appriseKey: '',
   };
 }
 
@@ -72,6 +105,22 @@ export default function ReminderForm({ initial, submitLabel, onSubmit, onCancel 
         : [...current.weekdays, day];
       return { ...current, weekdays: selected };
     });
+  };
+
+  const patchOnceHour = (text: string): void => {
+    const hour = Number.parseInt(text, 10);
+    setValues((current) => ({
+      ...current,
+      onceAt: { ...current.onceAt, hour: Number.isNaN(hour) ? null : hour },
+    }));
+  };
+
+  const patchOnceMinute = (text: string): void => {
+    const minute = Number.parseInt(text, 10);
+    setValues((current) => ({
+      ...current,
+      onceAt: { ...current.onceAt, minute: Number.isNaN(minute) ? null : minute },
+    }));
   };
 
   const handleSubmit = async (): Promise<void> => {
@@ -105,33 +154,37 @@ export default function ReminderForm({ initial, submitLabel, onSubmit, onCancel 
         })}
       </View>
 
-      <View style={styles.fieldRow}>
-        <Text style={styles.label}>时间</Text>
-        <TextInput
-          style={[styles.timeInput, errors.localTime && styles.inputError]}
-          value={values.localTimeHour === null ? '' : String(values.localTimeHour)}
-          onChangeText={(text) => {
-            const hour = Number.parseInt(text, 10);
-            patch({ localTimeHour: Number.isNaN(hour) ? null : hour });
-          }}
-          placeholder="时(0-23)"
-          keyboardType="number-pad"
-          maxLength={2}
-        />
-        <Text style={styles.colon}>:</Text>
-        <TextInput
-          style={[styles.timeInput, errors.localTime && styles.inputError]}
-          value={values.localTimeMinute === null ? '' : String(values.localTimeMinute)}
-          onChangeText={(text) => {
-            const minute = Number.parseInt(text, 10);
-            patch({ localTimeMinute: Number.isNaN(minute) ? null : minute });
-          }}
-          placeholder="分(0-59)"
-          keyboardType="number-pad"
-          maxLength={2}
-        />
-      </View>
-      {errors.localTime ? <Text style={styles.errorText}>{errors.localTime}</Text> : null}
+      {values.frequency !== 'once' ? (
+        <>
+          <View style={styles.fieldRow}>
+            <Text style={styles.label}>时间</Text>
+            <TextInput
+              style={[styles.timeInput, errors.localTime && styles.inputError]}
+              value={values.localTimeHour === null ? '' : String(values.localTimeHour)}
+              onChangeText={(text) => {
+                const hour = Number.parseInt(text, 10);
+                patch({ localTimeHour: Number.isNaN(hour) ? null : hour });
+              }}
+              placeholder="时(0-23)"
+              keyboardType="number-pad"
+              maxLength={2}
+            />
+            <Text style={styles.colon}>:</Text>
+            <TextInput
+              style={[styles.timeInput, errors.localTime && styles.inputError]}
+              value={values.localTimeMinute === null ? '' : String(values.localTimeMinute)}
+              onChangeText={(text) => {
+                const minute = Number.parseInt(text, 10);
+                patch({ localTimeMinute: Number.isNaN(minute) ? null : minute });
+              }}
+              placeholder="分(0-59)"
+              keyboardType="number-pad"
+              maxLength={2}
+            />
+          </View>
+          {errors.localTime ? <Text style={styles.errorText}>{errors.localTime}</Text> : null}
+        </>
+      ) : null}
 
       {values.frequency === 'weekly' ? (
         <>
@@ -175,6 +228,43 @@ export default function ReminderForm({ initial, submitLabel, onSubmit, onCancel 
           {errors.dayOfMonth ? <Text style={styles.errorText}>{errors.dayOfMonth}</Text> : null}
         </>
       ) : null}
+
+      {values.frequency === 'once' ? (
+        <>
+          <View style={styles.fieldRow}>
+            <Text style={styles.label}>触发时刻</Text>
+            <TextInput
+              style={[styles.dateInput, errors.onceAt && styles.inputError]}
+              value={values.onceAt.date}
+              onChangeText={(text) => patch({ onceAt: { ...values.onceAt, date: text } })}
+              placeholder="YYYY-MM-DD"
+              autoCapitalize="none"
+              autoCorrect={false}
+              maxLength={10}
+            />
+            <TextInput
+              style={[styles.timeInput, errors.onceAt && styles.inputError]}
+              value={values.onceAt.hour === null ? '' : String(values.onceAt.hour)}
+              onChangeText={patchOnceHour}
+              placeholder="时"
+              keyboardType="number-pad"
+              maxLength={2}
+            />
+            <Text style={styles.colon}>:</Text>
+            <TextInput
+              style={[styles.timeInput, errors.onceAt && styles.inputError]}
+              value={values.onceAt.minute === null ? '' : String(values.onceAt.minute)}
+              onChangeText={patchOnceMinute}
+              placeholder="分"
+              keyboardType="number-pad"
+              maxLength={2}
+            />
+          </View>
+          {errors.onceAt ? <Text style={styles.errorText}>{errors.onceAt}</Text> : null}
+        </>
+      ) : null}
+
+      <ReminderChannelFields values={values} errors={errors} onPatch={patch} />
 
       <TzPicker value={values.tzid} onChange={(tzid) => patch({ tzid })} />
       {errors.tzid ? <Text style={styles.errorText}>{errors.tzid}</Text> : null}
@@ -257,6 +347,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     width: 64,
+    fontSize: 15,
+    backgroundColor: '#fff',
+  },
+  dateInput: {
+    borderWidth: 1,
+    borderColor: '#d0d0d0',
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    width: 132,
     fontSize: 15,
     backgroundColor: '#fff',
   },
