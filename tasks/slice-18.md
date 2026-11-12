@@ -30,8 +30,8 @@
 - 验证：tsc 0 错、jest 845 全过（新增 toggleReminderChannel 3 用例/多渠道 validate 2/buildCreate 组合 2）、expo-doctor 仅 2 项既有咨询性警告。
 
 ### 阶段 4：真机联调与收尾
-- 跑通 tsc 和 jest。
-- 真机验证：多选渠道下发，Webhook 和系统通知同时到达；修改并生效 Chips 增量。
+- 跑通 tsc 和 jest。✅（tsc 0 错、jest 66 套件 845 全过、expo-doctor 仅 2 项既有咨询性警告；closeout 见 tasks/slice-18-closeout.md）
+- 真机验证：多选渠道下发，Webhook 和系统通知同时到达；修改并生效 Chips 增量。（待用户执行：①同勾「系统通知」+「Webhook」到点双触发 ②Chips 改 [15,120] 表单显示「+15分钟/+2小时」③预设设为默认后新建 Webhook 提醒自动选中）
 
 ## 验收标准
 1. tsc 和 jest 全过。单测覆盖 Schema v10 迁移与多渠道去重。

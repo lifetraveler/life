@@ -241,9 +241,7 @@ schema 版本 5→6，新增/修改如下：
 - **Schema v10 迁移**：完成上述模型变更，旧数据平滑升级（单渠道转多渠道路径兼容）。
 
 ## 8. 当前切片
-tasks/slice-17.md（已完成：渠道配置中心 + Webhook 载荷适配 + once 录入增强 + 导入预览，
-closeout 见 tasks/slice-17-closeout.md；后续切片候选（Chips 增量值可改 / 渠道预设默认填充 /
-多渠道同开——需变更提案）见 closeout「后续切片候选」节）
+tasks/slice-18.md（已完成阶段 1–3：多渠道并行与偏好设置——schema v10（channels_json/channel_configs_json/chips_increments/is_default）、域模型 channels/channelConfigs、调度器家族感知 diff + 网络复合键定时器、UI 多渠道表单 + Chips 增量设置 + 预设默认填充；变更提案 docs/proposals/slice-18-multi-channel.md 已确认；closeout 见 tasks/slice-18-closeout.md。真机验收（多渠道同时到达 / Chips [15,120] 生效 / 默认预设自动选中）待用户执行，详见 closeout「遗留披露」节）
 
 
 
