@@ -184,7 +184,7 @@ SystemImportResult：
 - 所有原先返回 `Item[]` 或 `ItemWithTags[]` 的查询接口（如 `listItems`、`searchItems`、`listScheduledItemsInRange` 等），统一升级为返回 `ItemWithRelations[]`。
   - `ItemWithRelations` 定义为：`Item & { tags: Tag[], category: Category | null }`。
 - 若关联的 Category 未被找到（数据异常），`category` 字段返回 null，由 UI 层回退到默认灰色和无 Emoji 的展示。
-## 渠道预设与 ICS 导入预览接口（v0.17，切片 17 阶段 1 落地）
+## 渠道预设与导入预览接口（v0.17，切片 17 阶段 1/2 落地）
 
 > 依据：AGENTS.md §7.27（渠道配置中心）与 §7.28（导入预览）的仓库层支撑；先例为
 > 「Category 与标签接口（v0.14）」的契约外显式扩展风格。
@@ -218,3 +218,29 @@ SystemImportResult：
     assertNoDuplicateSourceUid / importItemsInBatches 的 skippedDuplicate 完全同键，
     保证「预览标记 = 实际落库行为」；sourceUid=null 恒 isDuplicate=false（无 UID 不去重）。
   - 确认导入时 entries 里被勾选的 input 可直接喂 importItemsInBatches（不新增导入路径）。
+
+### 系统日历导入预览与确认（v0.17，切片 17 阶段 2 落地）
+
+> §7.28 要求系统日历导入与 ICS 一致「先预览、默认勾选新增项、确认后才落库」；
+> 原 importSystemCalendarEvents（v0.9，签名冻结、保留不动）一体化读取+落库，
+> 无法支撑「取消勾选不落库」，故按契约外显式扩展补两个方法（先例同 deleteItem / observe*）。
+
+- `generateSystemCalendarPreview(input: SystemCalendarImportInput): Promise<SystemCalendarPreviewResult>`
+  - 纯读不写：与 importSystemCalendarEvents 共用同一套校验/分流/映射管道
+    （range 有限且 start<end 否则抛错；startDate 不可解析入 failures；范围外计入
+    outOfRangeCount；映射复用 mapSystemEventToImportedItem，不复制逻辑）。
+  - `SystemCalendarPreviewEntry = { input: ImportedItemInput; isDuplicate: boolean; existingItemId: string | null; externalId: string | null }`
+  - 去重标记为无事务纯读（竞态由确认落库时的同键重查兜底，与 generateIcsPreview 同一原则）；
+    判定键 (sourceType='system-calendar', source_uid) 与落库去重完全同键，
+    保证「预览标记 = 实际落库行为」。
+  - sourceUid 策略计数不在预览期透出（确认导入的结果页语义不变）。
+- `importSystemCalendarEntries(inputs: ImportedItemInput[]): Promise<ImportBatchResult>`
+  - 只消费调用方传入的 inputs（必须来自 generateSystemCalendarPreview 产出的
+    entry.input），不做读取/映射；落库固定 §7.15 语义（type='event'/
+    sourceType='system-calendar'/sourceReadOnly=true，allDay 归一化与既有路径共用预处理）。
+  - 与 importItemsInBatches 同纪律：IMPORT_BATCH_SIZE 分批、事务内同键重查去重
+    （覆盖预览与确认之间的并发窗口）；sourceUid=null 不去重直接落库（与 ICS 一致）。
+  - 预览后新出现的重复与非只读冲突统一计入 skippedDuplicateCount（一次性确认
+    流程中两者对用户的呈现语义相同：该 UID 本地已有，跳过）。
+  - 确认导入后的 reconcile 触发与结果页复用 /import-result（fileName='系统日历'），
+    属 UI 层职责，不在本接口约束内。

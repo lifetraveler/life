@@ -62,6 +62,7 @@ import type {
   ImportBatchResult,
   ItemRepository,
   SystemCalendarImportInput,
+  SystemCalendarPreviewResult,
   SystemImportResult,
   VisualPatch,
 } from './ItemRepository';
@@ -1207,6 +1208,130 @@ export class WatermelonItemRepository implements ItemRepository {
       record.categoryId = DEFAULT_CATEGORY_ID;
       record.priority = 0;
     });
+  }
+
+  // —— 切片 17 阶段 2：系统日历导入预览（repository.md v0.17 补记，契约外显式扩展）——
+
+  /**
+   * 读取 + 映射 + 标记去重，纯读不写：与 importSystemCalendarEvents 共用同一套
+   * 校验/分流/映射管道（不含落库与事务），确认导入走 importSystemCalendarEntries。
+   * 去重标记为无事务纯读（预览与确认之间的竞态由确认落库时的同键重查兜底，
+   * 与 generateIcsPreview 同一原则）。
+   */
+  async generateSystemCalendarPreview(
+    input: SystemCalendarImportInput,
+  ): Promise<SystemCalendarPreviewResult> {
+    const { calendarIds, rangeStartMs, rangeEndMs } = input;
+    if (!Number.isFinite(rangeStartMs) || !Number.isFinite(rangeEndMs)) {
+      throw new Error(
+        'generateSystemCalendarPreview: rangeStartMs/rangeEndMs must be finite numbers',
+      );
+    }
+    if (rangeStartMs >= rangeEndMs) {
+      throw new Error(
+        'generateSystemCalendarPreview: rangeStartMs must be earlier than rangeEndMs',
+      );
+    }
+    const distinctCalendarIds = [
+      ...new Set(calendarIds.filter((id) => typeof id === 'string' && id.length > 0)),
+    ];
+
+    const events: SystemCalendarEvent[] =
+      distinctCalendarIds.length === 0
+        ? []
+        : await this.systemCalendar.reader.getEvents(distinctCalendarIds, rangeStartMs, rangeEndMs);
+
+    const result: SystemCalendarPreviewResult = {
+      entries: [],
+      failures: [],
+      totalRead: events.length,
+      outOfRangeCount: 0,
+    };
+
+    // startDate 不可解析的事件无法参与范围过滤与去重 → 直接分流 failed（与导入一致）。
+    const parseable: SystemCalendarEvent[] = [];
+    for (const event of events) {
+      if (event.startDate === null || !Number.isFinite(event.startDate)) {
+        result.failures.push({
+          externalId: event.externalId,
+          title: systemEventDisplayTitle(event.title),
+          reason: '事件缺少有效的开始时间（startDate 不可解析）',
+        });
+      } else {
+        parseable.push(event);
+      }
+    }
+
+    const inRange = filterEventsInRange(parseable, rangeStartMs, rangeEndMs);
+    result.outOfRangeCount = parseable.length - inRange.length;
+
+    for (const event of inRange) {
+      try {
+        const mapped = await mapSystemEventToImportedItem(event, this.systemCalendar.sha256);
+        // 查询结构与 findSystemCalendarDuplicateInTransaction 一致；预览阶段无写事务。
+        const found = await loadItemsWithRelationsByItemQuery(
+          this.db,
+          this.db
+            .get<ItemModel>(ITEMS_TABLE)
+            .query(
+              Q.where('source_type', 'system-calendar'),
+              Q.where('source_uid', mapped.sourceUid),
+            ),
+        );
+        const existing = found[0] ?? null;
+        result.entries.push({
+          input: mapped.input,
+          isDuplicate: existing !== null,
+          existingItemId: existing?.id ?? null,
+          externalId: event.externalId,
+        });
+      } catch (error) {
+        result.failures.push({
+          externalId: event.externalId,
+          title: systemEventDisplayTitle(event.title),
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return result;
+  }
+
+  /**
+   * 按预览勾选结果落库（切片 17 阶段 2）：只消费调用方传入的 inputs，不做读取/映射。
+   * 与 importSystemCalendarEvents 同纪律：IMPORT_BATCH_SIZE 分批、事务内同键重查去重
+   * （覆盖预览与确认之间的并发窗口）、§7.15 固定列由 insertSystemCalendarItemInTransaction
+   * 写入。确认时新出现的重复与非只读冲突统一计入 skippedDuplicateCount（一次性确认
+   * 流程中两者对用户的呈现语义相同：该 UID 本地已有，跳过）。
+   */
+  async importSystemCalendarEntries(inputs: ImportedItemInput[]): Promise<ImportBatchResult> {
+    const result: ImportBatchResult = { createdCount: 0, skippedDuplicateCount: 0, failures: [] };
+    // 切片 14：导入项落默认分类 'other'，先保证预置行就位（与既有导入路径一致）。
+    await this.ensureSeeded();
+    for (let offset = 0; offset < inputs.length; offset += IMPORT_BATCH_SIZE) {
+      const batch = inputs.slice(offset, offset + IMPORT_BATCH_SIZE);
+      await this.db.write(async () => {
+        for (const item of batch) {
+          try {
+            if (item.sourceUid !== null) {
+              const existing = await this.findSystemCalendarDuplicateInTransaction(item.sourceUid);
+              if (existing !== null) {
+                result.skippedDuplicateCount += 1;
+                continue;
+              }
+            }
+            await this.insertSystemCalendarItemInTransaction(item);
+            result.createdCount += 1;
+          } catch (error) {
+            result.failures.push({
+              title: item.title,
+              sourceUid: item.sourceUid,
+              reason: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+      });
+    }
+    return result;
   }
 
   // —— 切片 7：视图查询（repository.md「视图查询接口（v0.7）」，签名冻结）——

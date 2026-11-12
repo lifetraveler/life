@@ -21,6 +21,7 @@ function validValues(overrides: Partial<ReminderFormValues> = {}): ReminderFormV
     channelConfigText: '',
     appriseBaseUrl: '',
     appriseKey: '',
+    channelPresetId: null,
     ...overrides,
   };
 }

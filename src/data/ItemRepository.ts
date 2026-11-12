@@ -117,6 +117,41 @@ export interface IcsPreviewResult {
 }
 
 /**
+ * 切片 17 阶段 2：系统日历导入预览单条（契约外显式扩展，repository.md v0.17 补记）。
+ * 与 IcsPreviewEntry 同构思路；确认导入时勾选的 input 直接喂
+ * importSystemCalendarEntries——isDuplicate 判定键与该方法的落库去重键一致
+ * （(sourceType='system-calendar', source_uid)），保证「预览标记 = 实际落库行为」。
+ */
+export interface SystemCalendarPreviewEntry {
+  /** mapSystemEventToImportedItem 的映射结果原样透传（确认导入时直接使用）。 */
+  input: ImportedItemInput;
+  /**
+   * (sourceType='system-calendar', source_uid) 已存在本地库（sourceReadOnly=true
+   * 计重复；非只读命中同键，见 importSystemCalendarEvents 的冲突语义）。
+   */
+  isDuplicate: boolean;
+  /** 命中的本地项 id；isDuplicate=false 时为 null。 */
+  existingItemId: string | null;
+  /** 系统事件 id（expo-calendar event.id；与 failed 清单的 externalId 同源）。 */
+  externalId: string | null;
+}
+
+/**
+ * 切片 17 阶段 2：系统日历导入预览结果（纯读不写——生成预览不落库，
+ * 确认导入走本切片新增的 importSystemCalendarEntries）。
+ * sourceUid 策略计数不在预览期重复透出（preview 页不展示；确认导入的结果页语义不变）。
+ */
+export interface SystemCalendarPreviewResult {
+  entries: SystemCalendarPreviewEntry[];
+  /** startDate 不可解析等无法进入映射的事件（与 importSystemCalendarEvents 同分流语义）。 */
+  failures: SystemImportFailure[];
+  /** 读取到的事件总数（reader 返回的全部事件，含范围外与解析失败）。 */
+  totalRead: number;
+  /** 被所选时间范围排除的事件数（startDate 不可解析的不计入，已入 failures）。 */
+  outOfRangeCount: number;
+}
+
+/**
  * Repository 接口（AGENTS.md §4.2 / §4.5 / §4.7）。
  *
  * - createItem / listItems：切片 1 契约签名，不得变更。
@@ -302,4 +337,26 @@ export interface ItemRepository {
    * deviceTzid 显式传参（与 parseIcs 一致，§4.9 视图函数同纪律：不读设备默认时区）。
    */
   generateIcsPreview(icsText: string, deviceTzid: string): Promise<IcsPreviewResult>;
+
+  // —— 切片 17 阶段 2：系统日历导入预览（repository.md v0.17 补记，契约外显式扩展，
+  //    先例依据同 deleteItem / observe*：AGENTS.md §7.28 导入预览要求系统日历导入
+  //    与 ICS 一致先预览再确认，原 importSystemCalendarEvents 一体化读取+落库
+  //    无法支撑「取消勾选不落库」）——
+  /**
+   * 读取系统日历事件并映射 + 标记本地去重状态，纯读不写。校验与分流语义与
+   * importSystemCalendarEvents 一致（range 有限且 start<end 否则抛错；startDate
+   * 不可解析入 failures；范围外计入 outOfRangeCount）。
+   */
+  generateSystemCalendarPreview(
+    input: SystemCalendarImportInput,
+  ): Promise<SystemCalendarPreviewResult>;
+  /**
+   * 按预览勾选结果落库系统日历条目：inputs 必须来自 generateSystemCalendarPreview
+   * 产出的 entry.input（本方法不做读取/映射）。落库固定 type='event'/
+   * sourceType='system-calendar'/sourceReadOnly=true（§7.15），allDay 归一化与
+   * importSystemCalendarEvents 共用预处理。落库时在事务内按同键重查去重（防预览后
+   * 并发写入的竞态窗口）：预览期标记的重复不应被再次传入；确认时新出现的重复与
+   * 非只读冲突均计入 skippedDuplicateCount（结果页统一呈现为「跳过（重复）」）。
+   */
+  importSystemCalendarEntries(inputs: ImportedItemInput[]): Promise<ImportBatchResult>;
 }

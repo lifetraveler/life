@@ -18,6 +18,7 @@ import type {
 } from '../domain/reminder';
 import { REMINDER_CHANNELS } from '../domain/reminder';
 import { REMINDER_TZ_WHITELIST, isWhitelistedReminderTz } from '../data/reminderTzWhitelist';
+import type { ChannelPreset } from '../domain/channelPreset';
 
 /** 表单可编辑值：数值字段允许 null（未填），提交前必须通过 validateReminderForm */
 export interface ReminderFormValues {
@@ -39,6 +40,12 @@ export interface ReminderFormValues {
   /** apprise 渠道的 BaseURL / Key 两个独立输入（stateful 简写；urls/stateless 不在 UI 暴露） */
   appriseBaseUrl: string;
   appriseKey: string;
+  /**
+   * 切片 17 阶段 2：当前选中渠道预设的 id（纯 UI 状态，不进入 Repository 输入）。
+   * 选中预设 = 整串值复制进 channelConfigText / apprise 字段，此后与预设无关联
+   * （删除预设不影响已保存提醒，§7.27）；null 表示未选或为「当前配置（未关联预设）」。
+   */
+  channelPresetId: string | null;
 }
 
 export interface ReminderFormErrors {
@@ -233,6 +240,45 @@ export function validateReminderForm(values: ReminderFormValues): ReminderFormEr
   }
 
   return errors;
+}
+
+/**
+ * 切片 17 阶段 2：渠道预设的展示与匹配纯函数（预设下拉与设置页共用）。
+ */
+
+/** 预设摘要：webhook 显示目标 URL（整串 URL 形态原样展示），apprise 显示 BaseURL */
+export function channelPresetSummary(preset: ChannelPreset): string {
+  if (preset.type === 'webhook') {
+    try {
+      const parsed: unknown = JSON.parse(preset.configJson);
+      if (
+        typeof parsed === 'object'
+        && parsed !== null
+        && !Array.isArray(parsed)
+        && 'url' in parsed
+        && typeof parsed['url'] === 'string'
+      ) {
+        return parsed['url'];
+      }
+    } catch {
+      // 非 JSON → 整串视为 URL 形态，原样展示
+    }
+    return preset.configJson;
+  }
+  return parseAppriseFormFields(preset.configJson).baseUrl;
+}
+
+/** 当前表单值是否与某预设的 configJson 一致（webhook 整串比对；apprise 比对回填字段） */
+export function matchesChannelPreset(
+  channel: 'webhook' | 'apprise',
+  values: ReminderFormValues,
+  preset: ChannelPreset,
+): boolean {
+  if (channel === 'webhook') {
+    return preset.configJson === values.channelConfigText.trim();
+  }
+  const fields = parseAppriseFormFields(preset.configJson);
+  return fields.baseUrl === values.appriseBaseUrl.trim() && fields.key === values.appriseKey.trim();
 }
 
 /** 校验通过后构造 Repository 输入；weekdays/dayOfMonth 与切片 5 语义一致（非本 frequency 归零）。 */

@@ -11,17 +11,17 @@ import {
 import { useRouter } from 'expo-router';
 
 import { itemRepository } from '../data';
-import type { SystemImportResult } from '../data/ItemRepository';
 import { expoSystemCalendarReader } from '../data/systemCalendarAdapters';
 import type { SystemCalendarInfo } from '../domain/systemCalendar/types';
-import { reminderScheduler } from '../notifications';
-import SystemImportResultView from '../ui/SystemImportResultView';
+import { setLastImportPreview } from '../ui/importPreviewStore';
 
 /**
  * 切片 9：系统日历导入页（tasks/slice-09.md 实现要求 1/4）：
  * - 进入页面经 requestCalendarPermissionsAsync 申请读取权限（拒绝不崩溃，可重试）；
  * - 展示 API 返回的日历列表（多选，默认全选）+ 未来时间范围（7/30/90/365 天，默认 90）；
- * - 导入 → 结果内联展示 → fire-and-forget reconcile() → 「查看今日视图」；
+ * - 切片 17 阶段 2（AGENTS.md §7.28）：选择后先经 generateSystemCalendarPreview
+ *   生成预览（纯读不落库），push /import-preview 勾选确认，确认导入与 reconcile
+ *   在预览页完成并统一走 /import-result 结果页；
  * - 不提供任何写入系统日历的能力（无写回调用路径）。
  */
 
@@ -30,7 +30,7 @@ type RangeDays = (typeof RANGE_OPTIONS)[number];
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-type Phase = 'loading' | 'permission-denied' | 'select' | 'importing' | 'done';
+type Phase = 'loading' | 'permission-denied' | 'select' | 'previewing';
 
 export default function SystemCalendarImportPage() {
   const router = useRouter();
@@ -38,7 +38,6 @@ export default function SystemCalendarImportPage() {
   const [calendars, setCalendars] = useState<SystemCalendarInfo[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [rangeDays, setRangeDays] = useState<RangeDays>(90);
-  const [result, setResult] = useState<SystemImportResult | null>(null);
   const [permissionHint, setPermissionHint] = useState<string | null>(null);
 
   const requestPermissionAndLoad = useCallback(async (): Promise<void> => {
@@ -71,34 +70,46 @@ export default function SystemCalendarImportPage() {
     );
   }, []);
 
-  const handleImport = useCallback(async (): Promise<void> => {
+  const handlePreview = useCallback(async (): Promise<void> => {
     if (selectedIds.length === 0) {
       Alert.alert('请至少选择一个日历');
       return;
     }
-    setPhase('importing');
+    setPhase('previewing');
     try {
       const rangeStartMs = Date.now();
       const rangeEndMs = rangeStartMs + rangeDays * DAY_MS;
-      const imported = await itemRepository.importSystemCalendarEvents({
+      // 切片 17 阶段 2（§7.28）：先预览（纯读不落库），勾选确认在 /import-preview 完成。
+      const preview = await itemRepository.generateSystemCalendarPreview({
         calendarIds: selectedIds,
         rangeStartMs,
         rangeEndMs,
       });
-      setResult(imported);
-      setPhase('done');
-      // 任务卡实现要求 4：导入完成后触发一次 reconcile()；fire-and-forget，失败不阻断结果展示。
-      void reminderScheduler
-        .reconcile()
-        .catch((error: unknown) => {
-          console.warn('[slice-09] 导入后 reconcile 失败', error);
-        });
+      setLastImportPreview({
+        source: 'system-calendar',
+        fileName: null,
+        entries: preview.entries.map((entry) => ({
+          input: entry.input,
+          floating: false,
+          isDuplicate: entry.isDuplicate,
+          existingItemId: entry.existingItemId,
+        })),
+        failures: preview.failures.map((failure) => ({
+          summary: failure.title,
+          reason: failure.reason,
+        })),
+        sameFileDuplicates: [],
+        duplicateCount: preview.entries.filter((entry) => entry.isDuplicate).length,
+        meta: `来源：系统日历（未来 ${rangeDays} 天）· 读取 ${preview.totalRead} 条 · 范围外 ${preview.outOfRangeCount} 条`,
+      });
+      router.push('/import-preview');
     } catch (error) {
-      console.warn('[slice-09] 系统日历导入失败', error);
-      Alert.alert('导入失败', error instanceof Error ? error.message : String(error));
+      console.warn('[slice-09] 系统日历预览失败', error);
+      Alert.alert('生成预览失败', error instanceof Error ? error.message : String(error));
+    } finally {
       setPhase('select');
     }
-  }, [rangeDays, selectedIds]);
+  }, [rangeDays, selectedIds, router]);
 
   if (phase === 'loading') {
     return (
@@ -143,7 +154,7 @@ export default function SystemCalendarImportPage() {
                 key={cal.id}
                 style={styles.calendarRow}
                 onPress={() => toggleCalendar(cal.id)}
-                disabled={phase === 'importing'}
+                disabled={phase === 'previewing'}
               >
                 <Text style={styles.checkbox}>{checked ? '☑' : '☐'}</Text>
                 <View style={styles.calendarText}>
@@ -166,7 +177,7 @@ export default function SystemCalendarImportPage() {
               key={days}
               style={[styles.rangeButton, rangeDays === days && styles.rangeButtonActive]}
               onPress={() => setRangeDays(days)}
-              disabled={phase === 'importing'}
+              disabled={phase === 'previewing'}
             >
               <Text style={[styles.rangeText, rangeDays === days && styles.rangeTextActive]}>
                 {days} 天
@@ -178,27 +189,18 @@ export default function SystemCalendarImportPage() {
       </View>
 
       <Pressable
-        style={[styles.primaryButton, phase === 'importing' && styles.disabled]}
+        style={[styles.primaryButton, phase === 'previewing' && styles.disabled]}
         onPress={() => {
-          void handleImport();
+          void handlePreview();
         }}
-        disabled={phase === 'importing'}
+        disabled={phase === 'previewing'}
       >
-        {phase === 'importing' ? (
+        {phase === 'previewing' ? (
           <ActivityIndicator color="#fff" />
         ) : (
-          <Text style={styles.primaryText}>开始导入</Text>
+          <Text style={styles.primaryText}>预览可导入项</Text>
         )}
       </Pressable>
-
-      {phase === 'done' && result ? (
-        <View style={styles.resultArea}>
-          <SystemImportResultView result={result} />
-          <Pressable style={styles.secondaryButton} onPress={() => router.push('/today')}>
-            <Text style={styles.secondaryText}>查看今日视图</Text>
-          </Pressable>
-        </View>
-      ) : null}
     </ScrollView>
   );
 }
@@ -295,9 +297,6 @@ const styles = StyleSheet.create({
   },
   disabled: {
     opacity: 0.5,
-  },
-  resultArea: {
-    gap: 12,
   },
   secondaryButton: {
     borderWidth: 1,

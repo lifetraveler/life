@@ -15,9 +15,11 @@ import type {
   ImportBatchResult,
   ItemRepository,
   SystemCalendarImportInput,
+  SystemCalendarPreviewResult,
   SystemImportResult,
   VisualPatch,
 } from '../../data/ItemRepository';
+import type { ImportedItemInput } from '../../domain/item';
 import type {
   ChannelPreset,
   CreateChannelPresetInput,
@@ -358,6 +360,17 @@ class FakeRepository implements ItemRepository {
     _input: SystemCalendarImportInput,
   ): Promise<SystemImportResult> {
     throw new Error('FakeRepository: importSystemCalendarEvents 未实现');
+  }
+
+  // 切片 17 阶段 2：接口新增方法，调度器单测不触及（§7.13 夹具编译必需）。
+  async generateSystemCalendarPreview(
+    _input: SystemCalendarImportInput,
+  ): Promise<SystemCalendarPreviewResult> {
+    throw new Error('FakeRepository: generateSystemCalendarPreview 未实现');
+  }
+
+  async importSystemCalendarEntries(_inputs: ImportedItemInput[]): Promise<ImportBatchResult> {
+    throw new Error('FakeRepository: importSystemCalendarEntries 未实现');
   }
 
   // 切片 14：分类与全局设置接口方法，调度器单测不触及，为满足接口而存在
