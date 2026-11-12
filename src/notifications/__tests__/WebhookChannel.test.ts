@@ -116,3 +116,167 @@ describe('WebhookChannel（切片 16 阶段 2）', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe('WebhookChannel 载荷适配（切片 17 阶段 1，AGENTS.md §7.27）', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    registry = new NetworkTimerRegistry({ now: () => TEST_NOW, onFire: () => undefined });
+  });
+
+  afterEach(() => {
+    registry.clearTimers();
+  });
+
+  it('json 模式自定义 payloadTemplate：string 叶子替换、结构保留、标量透传，整体 JSON.stringify', async () => {
+    const repository = stubRepositoryWith(testItem('iW', '标题丙'));
+    const channel = new WebhookChannel(makeDeps(repository));
+    const reminder = testReminder(
+      'rW',
+      'iW',
+      'webhook',
+      JSON.stringify({
+        url: 'https://hook.example/json',
+        mode: 'json',
+        payloadTemplate: {
+          msgtype: 'text',
+          text: { content: '{{title}}\n{{body}}' },
+          key: '{{occurrenceKey}}',
+          at: { isAtAll: false },
+          count: 3,
+        },
+      }),
+    );
+    fetchMock.mockResolvedValue({ ok: true, status: 200 } as Response);
+
+    const status = await channel.deliver(reminder, 'daily:rW:42', TEST_NOW);
+
+    expect(status).toBe('ok');
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init?.headers).toEqual({ 'Content-Type': 'application/json' });
+    expect(JSON.parse((init?.body ?? '') as string)).toEqual({
+      msgtype: 'text',
+      text: { content: '标题丙\n测试内容' },
+      key: 'daily:rW:42',
+      at: { isAtAll: false },
+      count: 3,
+    });
+  });
+
+  it('form 模式（Zulip external/zulip 形态）：默认表单头、URLSearchParams 编码、headers 可覆盖', async () => {
+    const repository = stubRepositoryWith(testItem('iW', '标题丙'));
+    const channel = new WebhookChannel(makeDeps(repository));
+    const reminder = testReminder(
+      'rW',
+      'iW',
+      'webhook',
+      JSON.stringify({
+        url: 'https://zulip.example/api/v1/external/zulip',
+        mode: 'form',
+        payloadTemplate: { type: 'stream', topic: '{{title}}', content: '{{body}}' },
+      }),
+    );
+    fetchMock.mockResolvedValue({ ok: true, status: 200 } as Response);
+
+    const status = await channel.deliver(reminder, 'once:rW:form', TEST_NOW);
+
+    expect(status).toBe('ok');
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('https://zulip.example/api/v1/external/zulip');
+    expect(init?.headers).toEqual({ 'Content-Type': 'application/x-www-form-urlencoded' });
+    const params = new URLSearchParams((init?.body ?? '') as string);
+    expect(params.get('type')).toBe('stream');
+    expect(params.get('topic')).toBe('标题丙');
+    expect(params.get('content')).toBe('测试内容');
+  });
+
+  it('text 模式：默认纯文本头、{{var}} 渲染后作为原始 body', async () => {
+    const repository = stubRepositoryWith(testItem('iW', '标题丙'));
+    const channel = new WebhookChannel(makeDeps(repository));
+    const reminder = testReminder(
+      'rW',
+      'iW',
+      'webhook',
+      JSON.stringify({
+        url: 'https://hook.example/text',
+        mode: 'text',
+        payloadTemplate: '[{{title}}] {{content}}',
+      }),
+    );
+    fetchMock.mockResolvedValue({ ok: true, status: 200 } as Response);
+
+    const status = await channel.deliver(reminder, 'once:rW:text', TEST_NOW);
+
+    expect(status).toBe('ok');
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init?.headers).toEqual({ 'Content-Type': 'text/plain; charset=utf-8' });
+    expect(init?.body).toBe('[标题丙] 测试内容');
+  });
+
+  it('config.headers 覆盖 mode 默认头（键合并，同键以 config 为准）', async () => {
+    const repository = stubRepositoryWith(testItem('iW', '标题丙'));
+    const channel = new WebhookChannel(makeDeps(repository));
+    const reminder = testReminder(
+      'rW',
+      'iW',
+      'webhook',
+      JSON.stringify({
+        url: 'https://hook.example/headers',
+        mode: 'json',
+        payloadTemplate: '{{title}}',
+        headers: { 'Content-Type': 'application/json; charset=utf-8', 'X-Token': 't1' },
+      }),
+    );
+    fetchMock.mockResolvedValue({ ok: true, status: 200 } as Response);
+
+    await channel.deliver(reminder, 'once:rW:hdr', TEST_NOW);
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init?.headers).toEqual({
+      'Content-Type': 'application/json; charset=utf-8',
+      'X-Token': 't1',
+    });
+  });
+
+  it('新形态非法配置（mode 枚举外）→ failed 且不发起 fetch，不抛出', async () => {
+    const repository = stubRepositoryWith(testItem('iW', '标题丙'));
+    const channel = new WebhookChannel(makeDeps(repository));
+    const reminder = testReminder(
+      'rW',
+      'iW',
+      'webhook',
+      JSON.stringify({ url: 'https://hook.example/x', mode: 'graphql' }),
+    );
+
+    const status = await channel.deliver(reminder, 'once:rW:badmode', TEST_NOW);
+
+    expect(status).toBe('failed');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(registry.attemptStatus('once:rW:badmode')).toBe('failed');
+  });
+
+  it('旧形态纯 URL 与新形态 JSON 配置可共存（同一存量库混用零回归）', async () => {
+    const repository = stubRepositoryWith(testItem('iW', '标题丙'));
+    const channel = new WebhookChannel(makeDeps(repository));
+    fetchMock.mockResolvedValue({ ok: true, status: 200 } as Response);
+
+    const legacy = testReminder('rL', 'iW', 'webhook', 'https://hook.example/legacy');
+    const modern = testReminder(
+      'rM',
+      'iW',
+      'webhook',
+      JSON.stringify({ url: 'https://hook.example/modern', payloadTemplate: { k: '{{itemId}}' } }),
+    );
+    await channel.deliver(legacy, 'once:rL:1', TEST_NOW);
+    await channel.deliver(modern, 'once:rM:1', TEST_NOW);
+
+    const [legacyUrl, legacyInit] = fetchMock.mock.calls[0];
+    const [modernUrl] = fetchMock.mock.calls[1];
+    expect(legacyUrl).toBe('https://hook.example/legacy');
+    expect(legacyInit?.headers).toEqual({ 'Content-Type': 'application/json' });
+    expect(JSON.parse((legacyInit?.body ?? '') as string)).toMatchObject({
+      type: 'life-reminder',
+      occurrenceKey: 'once:rL:1',
+    });
+    expect(modernUrl).toBe('https://hook.example/modern');
+  });
+});

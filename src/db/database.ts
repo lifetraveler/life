@@ -5,6 +5,7 @@ import SQLiteAdapter from '@nozbe/watermelondb/adapters/sqlite';
 
 import AppSettingsModel from './models/AppSettingsModel';
 import CategoryModel from './models/CategoryModel';
+import ChannelPresetModel from './models/ChannelPresetModel';
 import ItemModel from './models/ItemModel';
 import ItemTagModel from './models/ItemTagModel';
 import ReminderModel from './models/ReminderModel';
@@ -25,7 +26,15 @@ const adapter = new SQLiteAdapter({
 
 export const database = new Database({
   adapter,
-  modelClasses: [ItemModel, TagModel, ItemTagModel, ReminderModel, CategoryModel, AppSettingsModel],
+  modelClasses: [
+    ItemModel,
+    TagModel,
+    ItemTagModel,
+    ReminderModel,
+    CategoryModel,
+    AppSettingsModel,
+    ChannelPresetModel,
+  ],
 });
 
 // 切片 14（AGENTS.md §7.22）：全新安装的预置分类/设置行（升级安装由 migration v6 插入）。

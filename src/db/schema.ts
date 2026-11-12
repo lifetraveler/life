@@ -5,8 +5,9 @@ import { appSchema, tableSchema } from '@nozbe/watermelondb';
  * v7（切片 14 阶段 7a）：app_settings 新增小组件显示开关 4 列（docs/proposals/slice-14-widget-phase7.md）。
  * v8（切片 16 阶段 1）：reminders 新增 once_civil_json / channel / channel_config 列
  * （AGENTS.md §7.26，docs/proposals/slice-16-reminder-channels.md）。
+ * v9（切片 17 阶段 1）：新增 channel_presets 表（AGENTS.md §7.27 渠道配置中心）。
  */
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 export const schema = appSchema({
   version: SCHEMA_VERSION,
@@ -121,6 +122,27 @@ export const schema = appSchema({
         { name: 'widget_show_todos', type: 'boolean' },
         { name: 'widget_show_category_emoji', type: 'boolean' },
         { name: 'widget_show_tags', type: 'boolean' },
+      ],
+    }),
+    // 切片 17 阶段 1（AGENTS.md §7.27 渠道配置中心，schema v9）：渠道预设表。
+    // 把 Webhook/Apprise 的常用配置抽为全局预设，详情页只做选择（阶段 2 UI），不必每次输长 URL。
+    // - type 仅 'webhook' | 'apprise'：只给“有配置”的渠道建预设，
+    //   system-notification / alarm 无配置可预设，不进枚举（AGENTS.md §7.27）。
+    // - config_json 存渠道配置 JSON 原文：webhook → WebhookChannelConfig（url/mode/headers/
+    //   payloadTemplate，见 notifications.md v0.17），apprise → AppriseChannelConfig（baseUrl+key/urls）。
+    //   选中预设时整串复制进 reminders.channel_config；写路径经对应渠道守卫校验后才落库
+    //   （webhook → parseWebhookChannelConfig，apprise → parseAppriseChannelConfig）。
+    // - name 不强制唯一（trim 非空由 Repository 层保证，不建 SQLite 唯一约束，同 tags.name 先例）。
+    // - created_at 供预设列表稳定排序（created_at 降序），对齐 tags 表先例；
+    //   预设支持编辑（阶段 2）但 MVP 不需要 updated_at（同 categories 无时间戳先例）。
+    // - 无预置数据、无 seed：预设全部由用户在设置页创建（阶段 2）。
+    tableSchema({
+      name: 'channel_presets',
+      columns: [
+        { name: 'name', type: 'string' },
+        { name: 'type', type: 'string', isIndexed: true },
+        { name: 'config_json', type: 'string' },
+        { name: 'created_at', type: 'number' },
       ],
     }),
   ],

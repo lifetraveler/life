@@ -184,3 +184,37 @@ SystemImportResult：
 - 所有原先返回 `Item[]` 或 `ItemWithTags[]` 的查询接口（如 `listItems`、`searchItems`、`listScheduledItemsInRange` 等），统一升级为返回 `ItemWithRelations[]`。
   - `ItemWithRelations` 定义为：`Item & { tags: Tag[], category: Category | null }`。
 - 若关联的 Category 未被找到（数据异常），`category` 字段返回 null，由 UI 层回退到默认灰色和无 Emoji 的展示。
+## 渠道预设与 ICS 导入预览接口（v0.17，切片 17 阶段 1 落地）
+
+> 依据：AGENTS.md §7.27（渠道配置中心）与 §7.28（导入预览）的仓库层支撑；先例为
+> 「Category 与标签接口（v0.14）」的契约外显式扩展风格。
+
+### 渠道预设（channel_presets，schema v9）
+
+- `listChannelPresets(): Promise<ChannelPreset[]>`
+  - 按 created_at 降序（新建的在前）。created_at 并列无业务语义，不追加次级排序。
+- `createChannelPreset(input: { name: string; type: ChannelPresetType; configJson: string }): Promise<ChannelPreset>`
+  - name trim 后必须非空；type 枚举外抛错；configJson 经对应渠道守卫校验后才落库
+    （webhook → WebhookChannelConfig 守卫、apprise → AppriseChannelConfig 守卫，
+    错误消息原样抛出，保证「存进预设的配置必然能被渠道投递解析」）。
+  - createdAt 由 WatermelonDB 自动写入，输入不提供。
+- `updateChannelPreset(id: string, patch: { name?: string; configJson?: string }): Promise<ChannelPreset>`
+  - patch 合并语义（仅提供要改的字段）；type 创建后不可变（改类型等于换配置语义，
+    应删除重建）；configJson 按该预设的既有 type 重新过守卫；name trim 后非空。
+  - 空 patch（两个字段都缺省）抛错；预设不存在抛 `updateChannelPreset: channel preset not found: <id>`。
+- `deleteChannelPreset(id: string): Promise<void>`
+  - 预设不存在抛明确错误。删除预设不影响已引用其 configJson 的既有提醒
+    （详情页选用预设是整串复制进 reminders.channel_config 的值语义，无外键引用）。
+- 读取层防御：channel_presets 行 type 非法（绕过 Repository 的外部直写、未来版本回退）
+  时抛错不静默（weekdays 同款纪律）。
+
+### ICS 导入预览（v0.17，切片 17 阶段 1；阶段 3 落 UI）
+
+- `generateIcsPreview(icsText: string, deviceTzid: string): Promise<IcsPreviewResult>`
+  - 纯读不写：解析复用 parseIcs（不复制解析逻辑），不落库。
+  - `IcsPreviewEntry = { input: ImportedItemInput; floating: boolean; isDuplicate: boolean; existingItemId: string | null }`
+  - `IcsPreviewResult = { entries: IcsPreviewEntry[]; failures: IcsParseFailure[]; sameFileDuplicates: SameFileDuplicate[]; duplicateCount: number }`
+  - 去重判定：一次查询 source_type='ics' 的 items 建 uid→id 映射，判定键与
+    assertNoDuplicateSourceUid / importItemsInBatches 的 skippedDuplicate 完全同键，
+    保证「预览标记 = 实际落库行为」；sourceUid=null 恒 isDuplicate=false（无 UID 不去重）。
+  - 确认导入时 entries 里被勾选的 input 可直接喂 importItemsInBatches（不新增导入路径）。

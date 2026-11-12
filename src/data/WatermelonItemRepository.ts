@@ -26,6 +26,13 @@ import {
 } from '../domain/search';
 import { DEFAULT_CATEGORY_ID, isValidItemPriority } from '../domain/category';
 import type { Category } from '../domain/category';
+import {
+  isChannelPresetType,
+  type ChannelPreset,
+  type ChannelPresetType,
+  type CreateChannelPresetInput,
+  type UpdateChannelPresetInput,
+} from '../domain/channelPreset';
 import { normalizeTagName } from '../domain/tag';
 import type { ItemWithTags, Tag } from '../domain/tag';
 import type { ItemWithRelations } from '../domain/relations/itemWithRelations';
@@ -37,15 +44,21 @@ import {
 import type { AppSettings } from '../domain/settings';
 import AppSettingsModel from '../db/models/AppSettingsModel';
 import CategoryModel from '../db/models/CategoryModel';
+import ChannelPresetModel from '../db/models/ChannelPresetModel';
 import ItemModel from '../db/models/ItemModel';
 import ItemTagModel from '../db/models/ItemTagModel';
 import ReminderModel from '../db/models/ReminderModel';
 import TagModel from '../db/models/TagModel';
 import { seedPresetData } from '../db/seed';
+import { parseIcs } from '../domain/ics/parseIcs';
+import { parseAppriseChannelConfig } from '../notifications/channels/appriseConfig';
+import { parseWebhookChannelConfig } from '../notifications/channels/webhookConfig';
 import { normalizeAllDayTimestamps } from './allDayNormalize';
 import { getDeviceTzid } from './deviceTimezone';
 import { assertValidItemTimePatch, assertValidItemTimeRange } from './itemTimeRules';
 import type {
+  IcsPreviewEntry,
+  IcsPreviewResult,
   ImportBatchResult,
   ItemRepository,
   SystemCalendarImportInput,
@@ -74,6 +87,8 @@ const REMINDERS_TABLE = 'reminders';
 // 切片 14（AGENTS.md §7.22，schema v6）：分类与全局设置表。
 const CATEGORIES_TABLE = 'categories';
 const APP_SETTINGS_TABLE = 'app_settings';
+// 切片 17 阶段 1（AGENTS.md §7.27，schema v9）：渠道预设表。
+const CHANNEL_PRESETS_TABLE = 'channel_presets';
 
 /** repository.md v0.8：导入超过 500 条时分批写入，每批 100 条。 */
 const IMPORT_BATCH_SIZE = 100;
@@ -219,6 +234,46 @@ function toDomainReminder(model: ReminderModel): Reminder {
     createdAt: model.createdAt.getTime(),
     updatedAt: model.updatedAt.getTime(),
   };
+}
+
+/**
+ * 切片 17 阶段 1（AGENTS.md §7.27，schema v9）：channel_presets 行 → 领域 ChannelPreset。
+ * type 读到非法值时抛错不静默（parseWeekdaysJson 同纪律）：channel_presets 无 migration
+ * 回填、无 '' 零值来源（写路径严格守卫），出现非法值即数据异常。
+ */
+function toDomainChannelPreset(model: ChannelPresetModel): ChannelPreset {
+  if (!isChannelPresetType(model.type)) {
+    throw new Error(`channel_presets row ${model.id} has invalid type: ${String(model.type)}`);
+  }
+  return {
+    id: model.id,
+    name: model.name,
+    type: model.type,
+    configJson: model.configJson,
+    createdAt: model.createdAt.getTime(),
+  };
+}
+
+/**
+ * 渠道预设 configJson 写路径校验：经对应渠道守卫解析，解析失败抛守卫的明确错误
+ * （守卫错误自带 'WebhookChannel: ' / 'AppriseChannel: ' 前缀，deliver 与预设写路径
+ * 共用同一份校验，保证「存进预设的配置必然能被渠道投递解析」）。
+ * 注：从 notifications/channels 导入的是纯 TS 配置守卫（无 expo-notifications / RN 依赖），
+ * 与 parseIcs 从 domain 导入同理，不违反 §4.3（UI/domain 不得 import 通知实现）。
+ */
+function assertValidChannelPresetConfig(
+  type: ChannelPresetType,
+  configJson: string,
+  context: string,
+): void {
+  if (typeof configJson !== 'string' || configJson.trim().length === 0) {
+    throw new Error(`${context}: configJson must be a non-empty JSON string`);
+  }
+  if (type === 'webhook') {
+    parseWebhookChannelConfig(configJson);
+  } else {
+    parseAppriseChannelConfig(configJson);
+  }
 }
 
 /**
@@ -1625,6 +1680,126 @@ export class WatermelonItemRepository implements ItemRepository {
         }
       });
     });
+  }
+
+  // —— 切片 17 阶段 1：渠道预设（repository.md v0.17，契约外显式扩展，先例见接口文件）——
+
+  /** 全部预设，created_at 降序（新建的在前）；created_at 并列无业务语义，不追加次级排序。 */
+  async listChannelPresets(): Promise<ChannelPreset[]> {
+    const models = await this.db
+      .get<ChannelPresetModel>(CHANNEL_PRESETS_TABLE)
+      .query(Q.sortBy('created_at', 'desc'))
+      .fetch();
+    return models.map(toDomainChannelPreset);
+  }
+
+  async createChannelPreset(input: CreateChannelPresetInput): Promise<ChannelPreset> {
+    const name = input.name.trim();
+    if (name.length === 0) {
+      throw new Error('createChannelPreset: name must not be blank');
+    }
+    if (!isChannelPresetType(input.type)) {
+      throw new Error(`createChannelPreset: invalid preset type: ${String(input.type)}`);
+    }
+    assertValidChannelPresetConfig(input.type, input.configJson, 'createChannelPreset');
+    return this.db.write(async () => {
+      const created = await this.db.get<ChannelPresetModel>(CHANNEL_PRESETS_TABLE).create((record) => {
+        record.name = name;
+        record.type = input.type;
+        record.configJson = input.configJson;
+        // createdAt 由 WatermelonDB 自动写入（Model/helpers.js createTimestampsFor）。
+      });
+      return toDomainChannelPreset(created);
+    });
+  }
+
+  /**
+   * 更新预设（patch 合并语义；type 不可更新——改类型等于换配置语义，应删除重建）。
+   * configJson 按该预设的既有 type 重新过守卫（type 未变，校验口径不变）。
+   */
+  async updateChannelPreset(id: string, patch: UpdateChannelPresetInput): Promise<ChannelPreset> {
+    if (patch.name === undefined && patch.configJson === undefined) {
+      throw new Error('updateChannelPreset: patch must contain at least one of name / configJson');
+    }
+    if (patch.name !== undefined && patch.name.trim().length === 0) {
+      throw new Error('updateChannelPreset: name must not be blank');
+    }
+    return this.db.write(async () => {
+      const models = await this.db
+        .get<ChannelPresetModel>(CHANNEL_PRESETS_TABLE)
+        .query(Q.where('id', id))
+        .fetch();
+      const model = models[0];
+      if (!model) {
+        throw new Error(`updateChannelPreset: channel preset not found: ${id}`);
+      }
+      const type = toDomainChannelPreset(model).type; // 非法 type 即抛（数据异常显性化）
+      if (patch.configJson !== undefined) {
+        assertValidChannelPresetConfig(type, patch.configJson, 'updateChannelPreset');
+      }
+      await model.update((draft) => {
+        if (patch.name !== undefined) {
+          draft.name = patch.name.trim();
+        }
+        if (patch.configJson !== undefined) {
+          draft.configJson = patch.configJson;
+        }
+      });
+      return toDomainChannelPreset(model);
+    });
+  }
+
+  /** 删除预设；不存在时抛明确错误。删除不影响已引用其 configJson 的既有提醒（复制值语义）。 */
+  async deleteChannelPreset(id: string): Promise<void> {
+    await this.db.write(async () => {
+      const models = await this.db
+        .get<ChannelPresetModel>(CHANNEL_PRESETS_TABLE)
+        .query(Q.where('id', id))
+        .fetch();
+      const model = models[0];
+      if (!model) {
+        throw new Error(`deleteChannelPreset: channel preset not found: ${id}`);
+      }
+      await model.destroyPermanently();
+    });
+  }
+
+  // —— 切片 17 阶段 1：导入预览（repository.md v0.17「导入预览接口」，纯读不写）——
+
+  /**
+   * 解析 ICS 文本（复用 parseIcs，不复制解析逻辑）并标记本地去重状态：
+   * 一次查询 source_type='ics' 的 items 建 uid→id 映射（N 条事件不查 N 次），
+   * 判定键与 assertNoDuplicateSourceUid / importItemsInBatches 的 skippedDuplicate
+   * 完全同键，保证「预览标记 = 实际落库行为」。sourceUid=null 恒 false（无 UID 不去重）。
+   */
+  async generateIcsPreview(icsText: string, deviceTzid: string): Promise<IcsPreviewResult> {
+    const parsed = parseIcs(icsText, deviceTzid);
+    const icsItemModels = await this.db
+      .get<ItemModel>(ITEMS_TABLE)
+      .query(Q.where('source_type', 'ics'))
+      .fetch();
+    const uidToItemId = new Map<string, string>();
+    for (const model of icsItemModels) {
+      if (model.sourceUid !== null && !uidToItemId.has(model.sourceUid)) {
+        uidToItemId.set(model.sourceUid, model.id);
+      }
+    }
+    const entries: IcsPreviewEntry[] = parsed.events.map((event) => {
+      const uid = event.input.sourceUid;
+      const existingItemId = uid === null ? null : (uidToItemId.get(uid) ?? null);
+      return {
+        input: event.input,
+        floating: event.floating,
+        isDuplicate: existingItemId !== null,
+        existingItemId,
+      };
+    });
+    return {
+      entries,
+      failures: parsed.failures,
+      sameFileDuplicates: parsed.sameFileDuplicates,
+      duplicateCount: entries.filter((entry) => entry.isDuplicate).length,
+    };
   }
 
   /**
