@@ -5,11 +5,10 @@ import DateTimePicker, {
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { getDeviceTzid } from './timeFormat';
-import {
-  onceAtPlusOneHour,
-  onceAtPlusTenMinutes,
-  onceAtTomorrowMorningNine,
-} from './onceAtChips';
+import { onceAtPlusMinutes, onceAtTomorrowMorningNine } from './onceAtChips';
+
+/** 快捷 Chips 默认增量（与 DEFAULT_APP_SETTINGS.chipsIncrements 一致；父级未传时兜底） */
+const DEFAULT_CHIPS_INCREMENTS: readonly number[] = [10, 60];
 
 /**
  * once 触发时刻选择字段（切片 17 阶段 2，AGENTS.md §7.28：废弃手输、必须 Picker + 快捷 Chips）。
@@ -35,8 +34,18 @@ interface OnceAtFieldProps {
   value: OnceAtFormValue;
   /** onceAt 的解释时区（reminder.tzid，非设备时区） */
   tzid: string;
+  /** 快捷 Chips 增量（分钟，1–4 项，来自 app_settings.chipsIncrements）；缺省 [10, 60] */
+  chipsIncrements?: number[];
   onChange: (next: OnceAtFormValue) => void;
   error?: string;
+}
+
+/** 增量分钟 → Chip 文本：整小时显示「+N小时」，其余显示「+N分钟」（120 → +2小时） */
+export function formatChipIncrementLabel(minutes: number): string {
+  if (minutes >= 60 && minutes % 60 === 0) {
+    return `+${minutes / 60}小时`;
+  }
+  return `+${minutes}分钟`;
 }
 
 type PickerStep = 'idle' | 'date' | 'time';
@@ -60,10 +69,22 @@ function pickerDateSeed(value: OnceAtFormValue, fallback: Date): Date {
   return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
 }
 
-export default function OnceAtField({ label, value, tzid, onChange, error }: OnceAtFieldProps) {
+export default function OnceAtField({
+  label,
+  value,
+  tzid,
+  chipsIncrements,
+  onChange,
+  error,
+}: OnceAtFieldProps) {
   const [step, setStep] = useState<PickerStep>('idle');
   const deviceTzid = getDeviceTzid();
   const now = Date.now();
+  // 读层防御兜底（parseChipsIncrements 已保证形状，此处再防未传/坏引用）
+  const increments =
+    Array.isArray(chipsIncrements) && chipsIncrements.length > 0
+      ? chipsIncrements
+      : DEFAULT_CHIPS_INCREMENTS;
 
   const dateDisplay = value.date === '' ? '未设置' : value.date;
   const timeDisplay =
@@ -124,18 +145,15 @@ export default function OnceAtField({ label, value, tzid, onChange, error }: Onc
       </View>
 
       <View style={styles.chipRow}>
-        <Pressable
-          style={styles.chip}
-          onPress={() => applyChip(onceAtPlusTenMinutes(now, tzid))}
-        >
-          <Text style={styles.chipText}>+10分钟</Text>
-        </Pressable>
-        <Pressable
-          style={styles.chip}
-          onPress={() => applyChip(onceAtPlusOneHour(now, tzid))}
-        >
-          <Text style={styles.chipText}>+1小时</Text>
-        </Pressable>
+        {increments.map((minutes) => (
+          <Pressable
+            key={minutes}
+            style={styles.chip}
+            onPress={() => applyChip(onceAtPlusMinutes(now, tzid, minutes))}
+          >
+            <Text style={styles.chipText}>{formatChipIncrementLabel(minutes)}</Text>
+          </Pressable>
+        ))}
         <Pressable
           style={styles.chip}
           onPress={() => applyChip(onceAtTomorrowMorningNine(now, tzid))}

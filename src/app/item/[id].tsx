@@ -59,6 +59,8 @@ export default function ItemDetailPage() {
   // undefined=加载中；null=条目不存在（占位态）
   const [item, setItem] = useState<ItemWithRelations | null | undefined>(undefined);
   const [reminders, setReminders] = useState<Reminder[]>([]);
+  // 切片 18 阶段 3：once 快捷 Chips 增量（app_settings.chipsIncrements，§7.29）
+  const [chipsIncrements, setChipsIncrements] = useState<number[]>([10, 60]);
   const [formMode, setFormMode] = useState<FormMode>(null);
   const [saveReconcile, setSaveReconcile] = useState<ReconcileResult | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -88,6 +90,11 @@ export default function ItemDetailPage() {
   useFocusEffect(
     useCallback(() => {
       void load();
+      // Chips 增量读取失败不阻断页面（保持默认 [10, 60]）。
+      itemRepository
+        .getSettings()
+        .then((settings) => setChipsIncrements(settings.chipsIncrements))
+        .catch((error) => console.warn('[slice-18] Chips 增量读取失败', error));
     }, [load]),
   );
 
@@ -351,6 +358,7 @@ export default function ItemDetailPage() {
         {formMode?.kind === 'create' ? (
           <ReminderFormEditor
             submitLabel="创建"
+            chipsIncrements={chipsIncrements}
             onSubmit={handleCreateReminder}
             onCancel={() => setFormMode(null)}
           />
@@ -386,6 +394,7 @@ export default function ItemDetailPage() {
                   <ReminderFormEditor
                     initial={reminder}
                     submitLabel="保存"
+                    chipsIncrements={chipsIncrements}
                     onSubmit={(values) => handleUpdateReminder(reminder, values)}
                     onCancel={() => setFormMode(null)}
                   />
