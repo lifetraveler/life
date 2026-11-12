@@ -235,8 +235,9 @@ schema 版本 5→6，新增/修改如下：
 - **导入预览**：ICS 和系统日历导入时必须先进入预览页，展示解析结果，默认勾选新增项，确认后才落库。
 
 ## 8. 当前切片
-tasks/slice-16.md（已完成：一次性提醒 + 四渠道推送，closeout 见 tasks/slice-16-closeout.md；
-后续切片候选（Webhook 内容适配 / 渠道配置迁设置页 / once 触发时刻录入增强）见 closeout「后续切片候选」节）
+tasks/slice-17.md（已完成：渠道配置中心 + Webhook 载荷适配 + once 录入增强 + 导入预览，
+closeout 见 tasks/slice-17-closeout.md；后续切片候选（Chips 增量值可改 / 渠道预设默认填充 /
+多渠道同开——需变更提案）见 closeout「后续切片候选」节）
 
 
 
