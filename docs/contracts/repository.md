@@ -244,3 +244,37 @@ SystemImportResult：
     流程中两者对用户的呈现语义相同：该 UID 本地已有，跳过）。
   - 确认导入后的 reconcile 触发与结果页复用 /import-result（fileName='系统日历'），
     属 UI 层职责，不在本接口约束内。
+
+## Reminder 多渠道并行与偏好设置接口（v0.18，切片 18 阶段 1 落地）
+
+> 依据：AGENTS.md §7.29 与 docs/proposals/slice-18-multi-channel.md（已确认）。
+> 领域模型 Reminder 的 channel/channelConfig 单渠道字段删除，改为 channels/channelConfigs
+> （语义见 data-model.md「Reminder 多渠道并行与偏好设置字段」v0.18 节）；本节只记录
+> Repository 接口面的变化。
+
+### Reminder 创建/更新（createReminder / updateReminder）
+- `createReminder` 输入：`channels?: ReminderChannel[]`（缺省 `['system-notification']`）、
+  `channelConfigs?: Partial<Record<ReminderChannel, string>>`（仅网络渠道条目）；原单渠道
+  `channel`/`channelConfig` 输入字段删除。
+- `updateReminder` patch：`channels?` 整体替换、`channelConfigs?: Partial<Record<ReminderChannel,
+  string | null>>` per-key merge（显式 null 清除该键，未提及键保留）；current 由读取层
+  legacy bridge 解析后参与 merge。校验失败的抛错文案同 data-model.md v0.18 节
+  （空数组 / expo 互斥 / 空白 config 等）。
+- 落库写 channels_json（恒非 null）与 channel_configs_json（空对象落 null）；旧列
+  channel/channel_config 不再写入。
+
+### 渠道预设扩展（is_default）
+- `createChannelPreset` 输入增加 `isDefault?: boolean`（缺省 false）。
+- `updateChannelPreset` patch 扩为 `{ name?; configJson?; isDefault? }`，至少一项（空 patch
+  抛错文案更新为 name / configJson / isDefault）；`isDefault: true` 时同 type 其余预设的
+  is_default 在同一 db.write 事务内自动置 false（同 type 至多一个默认，不变量）；
+  isDefault=false 只取消自身不产生连锁。
+- `ChannelPreset` 领域对象增加 `isDefault: boolean`；读取层 false 回填由 v10 addColumns
+  自动完成（NOT NULL boolean）。
+
+### 全局设置扩展（chipsIncrements）
+- `AppSettings` 领域对象增加 `chipsIncrements: number[]`（once 快捷增量分钟数组）。
+- `getSettings` 兜底建行时写入默认 `[10, 60]`（seed 与 ensure 路径一致）。
+- `updateSettings` patch 增加 `chipsIncrements?`：写前经严格校验（1–4 项、每项 1–10080
+  整数分钟，越界/非整数/空/超限抛明确错误），通过后序列化落库；读层防御归一规则见
+  data-model.md v0.18 节（读宽松、写严格）。

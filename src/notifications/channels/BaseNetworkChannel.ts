@@ -10,12 +10,12 @@
  */
 import { describeError } from './shared';
 import type { Item } from '../../domain/item';
-import type { Reminder } from '../../domain/reminder';
 import type {
   NetworkChannelDeps,
   NetworkDeliverStatus,
   NetworkReminderChannel,
   ReminderChannelId,
+  ScopedReminder,
 } from './types';
 
 export abstract class BaseNetworkChannel implements NetworkReminderChannel {
@@ -27,7 +27,7 @@ export abstract class BaseNetworkChannel implements NetworkReminderChannel {
   }
 
   /** 不向 OS 注册：登记内存定时器（幂等 replace，重建/刷新均安全）。 */
-  async schedule(reminder: Reminder, occurrenceKey: string, fireAt: number): Promise<void> {
+  async schedule(reminder: ScopedReminder, occurrenceKey: string, fireAt: number): Promise<void> {
     this.deps.registry.replace(occurrenceKey, {
       reminderId: reminder.id,
       fireAt,
@@ -46,7 +46,7 @@ export abstract class BaseNetworkChannel implements NetworkReminderChannel {
 
   /** 到点投递（定时器触发与 reconcile missed 补发共用入口）；吞错返回状态。 */
   async deliver(
-    reminder: Reminder,
+    reminder: ScopedReminder,
     occurrenceKey: string,
     fireAt: number,
   ): Promise<NetworkDeliverStatus> {
@@ -80,7 +80,7 @@ export abstract class BaseNetworkChannel implements NetworkReminderChannel {
    * 抛错由 deliver 统一捕获记 'failed'。
    */
   protected abstract send(
-    reminder: Reminder,
+    reminder: ScopedReminder,
     occurrenceKey: string,
     fireAt: number,
     item: Item,

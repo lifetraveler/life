@@ -15,6 +15,8 @@ import type { ReminderFrequency } from '../../domain/reminder';
  *   仅调度器经 markReminderFired / markReminderReconciled 写入。
  * - 切片 16（schema v8，AGENTS.md §7.26）：once_civil_json / channel / channel_config
  *   三列；解析与归一化同样收敛在 reminderRuleMapping.ts。
+ * - 切片 18（schema v10，AGENTS.md §7.29）：channels_json / channel_configs_json
+ *   多渠道两列；旧 channel / channel_config 转为 deprecated 的 legacy bridge 数据源。
  */
 export default class ReminderModel extends Model {
   static table = 'reminders';
@@ -56,13 +58,31 @@ export default class ReminderModel extends Model {
   @text('once_civil_json') onceCivilJson!: string | null;
 
   /**
-   * 切片 16（schema v8）：提醒渠道。存量行经 migration 回填 'system-notification'；
+   * 切片 16（schema v8）：提醒渠道。v10 起该列 deprecated——v10 写路径不再更新，
+   * 仅作为 legacy bridge 数据源（channels_json 为空时由 toDomain 推导，见提案 §4）；
+   * 存量行经 migration 回填 'system-notification'；
    * LokiJS 测试适配器忽略 'sql' 步骤时读到 ''，由 toDomainReminder 防御回退默认渠道。
    */
   @text('channel') channel!: string;
 
-  /** 切片 16（schema v8）：渠道配置（webhook URL / apprise 配置 JSON）；渠道无关时 null */
+  /**
+   * 切片 16（schema v8）：渠道配置（webhook URL / apprise 配置 JSON）；渠道无关时 null。
+   * v10 起该列 deprecated，语义同 channel 列（仅 legacy bridge 数据源）。
+   */
   @text('channel_config') channelConfig!: string | null;
+
+  /**
+   * 切片 18（schema v10，AGENTS.md §7.29）：多渠道 JSON 字符串数组
+   * （如 ["system-notification","webhook"]）；null = 未迁移旧行（legacy bridge 触发条件）。
+   * 解析与归一收敛在 reminderRuleMapping.resolveReminderChannelRow。
+   */
+  @text('channels_json') channelsJson!: string | null;
+
+  /**
+   * 切片 18（schema v10）：渠道配置字典 JSON（键为网络渠道 id，值为配置原文）；
+   * null = 无任何渠道配置。仅在 channels_json 非空（已迁移行）时被读取（all-or-nothing）。
+   */
+  @text('channel_configs_json') channelConfigsJson!: string | null;
 
   @text('last_fired_occurrence_key') lastFiredOccurrenceKey!: string | null;
 

@@ -49,10 +49,10 @@ function reminderR1(): Reminder {
     localTimeMinute: 0,
     weekdays: [],
     dayOfMonth: 0,
-    // 切片 16 编译必需夹具补字段（§7.13）：onceAt/channel/channelConfig。
+    // 切片 16 编译必需夹具补字段（§7.13）：onceAt；切片 18 改多渠道夹具字段。
     onceAt: null,
-    channel: 'system-notification',
-    channelConfig: null,
+    channels: ['system-notification'],
+    channelConfigs: {},
     tzid: 'UTC',
     startAt: 1749513600000,
     enabled: true,
@@ -73,10 +73,10 @@ function reminderR2(): Reminder {
     localTimeMinute: 0,
     weekdays: [],
     dayOfMonth: 0,
-    // 切片 16 编译必需夹具补字段（§7.13）：onceAt/channel/channelConfig。
+    // 切片 16 编译必需夹具补字段（§7.13）：onceAt；切片 18 改多渠道夹具字段。
     onceAt: null,
-    channel: 'system-notification',
-    channelConfig: null,
+    channels: ['system-notification'],
+    channelConfigs: {},
     tzid: 'UTC',
     startAt: 1749427200000,
     enabled: true,
@@ -394,6 +394,7 @@ class FakeRepository implements ItemRepository {
       widgetShowTodos: false,
       widgetShowCategoryEmoji: false,
       widgetShowTags: false,
+      chipsIncrements: [10, 60],
     };
   }
 
@@ -743,7 +744,7 @@ describe('WatermelonReminderScheduler（mock expo-notifications）', () => {
       id: string,
       itemId: string,
       onceAt: { year: number; month: number; day: number; hour: number; minute: number },
-      channel: Reminder['channel'],
+      channel: Reminder['channels'][number],
       channelConfig: string | null,
       tzid: string = 'UTC',
     ): Reminder {
@@ -756,8 +757,8 @@ describe('WatermelonReminderScheduler（mock expo-notifications）', () => {
         weekdays: [],
         dayOfMonth: 0,
         onceAt,
-        channel,
-        channelConfig,
+        channels: [channel],
+        channelConfigs: channelConfig !== null ? { [channel]: channelConfig } : {},
         tzid,
         startAt: FIXED_NOW,
         enabled: true,
@@ -933,8 +934,8 @@ describe('WatermelonReminderScheduler（mock expo-notifications）', () => {
 
       const reminder = repository.reminders.get('rX');
       if (!reminder) throw new Error('rX missing');
-      reminder.channel = 'webhook';
-      reminder.channelConfig = 'https://hook.example/x';
+      reminder.channels = ['webhook'];
+      reminder.channelConfigs = { webhook: 'https://hook.example/x' };
 
       await scheduler.scheduleForReminder('rX');
 
@@ -957,8 +958,8 @@ describe('WatermelonReminderScheduler（mock expo-notifications）', () => {
 
       const reminder = repository.reminders.get('rX');
       if (!reminder) throw new Error('rX missing');
-      reminder.channel = 'system-notification';
-      reminder.channelConfig = null;
+      reminder.channels = ['system-notification'];
+      reminder.channelConfigs = {};
 
       await scheduler.scheduleForReminder('rX');
 

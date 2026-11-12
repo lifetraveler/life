@@ -109,8 +109,9 @@ describe('createReminder：once（切片 16）', () => {
     expect(reminder.localTimeMinute).toBe(0);
     expect(reminder.weekdays).toEqual([]);
     expect(reminder.dayOfMonth).toBe(0);
-    expect(reminder.channel).toBe('system-notification');
-    expect(reminder.channelConfig).toBeNull();
+    // 切片 18：多渠道形状；缺省渠道集合 = DEFAULT_REMINDER_CHANNELS。
+    expect(reminder.channels).toEqual(['system-notification']);
+    expect(reminder.channelConfigs).toEqual({});
 
     const raw = await rawReminderRow(database, reminder.id);
     expect(raw.onceCivilJson).toBe(ONCE_JSON);
@@ -118,7 +119,10 @@ describe('createReminder：once（切片 16）', () => {
     expect(raw.dayOfMonth).toBe(0);
     expect(raw.localTimeHour).toBe(0);
     expect(raw.localTimeMinute).toBe(0);
-    expect(raw.channel).toBe('system-notification');
+    expect(raw.channelsJson).toBe('["system-notification"]');
+    expect(raw.channelConfigsJson).toBeNull();
+    // 旧单渠道列在 v10 新行上不再写入：非可选 string 列被 sanitizedRaw 以 '' 零值回填。
+    expect(raw.channel).toBe('');
     expect(raw.channelConfig).toBeNull();
   });
 
@@ -163,36 +167,46 @@ describe('createReminder：once（切片 16）', () => {
     ).rejects.toThrow(/tzid "Asia\/Tokyo" is not supported/);
   });
 
-  it('webhook 渠道：channelConfig trim 后落库；alarm 渠道：channelConfig 强制 null', async () => {
+  it('webhook 渠道：config trim 后落库；alarm 渠道：expo 键静默跳过（提案 §5 互斥/无配置）', async () => {
     const { repository, database } = makeFixture();
     const itemId = await createOwnerItem(repository);
 
     const webhook = await repository.createReminder(
-      baseOnceInput(itemId, { channel: 'webhook', channelConfig: '  https://example.com/hook  ' }),
+      baseOnceInput(itemId, {
+        channels: ['webhook'],
+        channelConfigs: { webhook: '  https://example.com/hook  ' },
+      }),
     );
-    expect(webhook.channel).toBe('webhook');
-    expect(webhook.channelConfig).toBe('https://example.com/hook');
+    expect(webhook.channels).toEqual(['webhook']);
+    expect(webhook.channelConfigs).toEqual({ webhook: 'https://example.com/hook' });
     const rawWebhook = await rawReminderRow(database, webhook.id);
-    expect(rawWebhook.channelConfig).toBe('https://example.com/hook');
+    expect(rawWebhook.channelConfigsJson).toBe('{"webhook":"https://example.com/hook"}');
 
     const alarm = await repository.createReminder(
-      baseOnceInput(itemId, { channel: 'alarm', channelConfig: 'should-drop' }),
+      baseOnceInput(itemId, { channels: ['alarm'], channelConfigs: { alarm: 'should-drop' } }),
     );
-    expect(alarm.channel).toBe('alarm');
-    expect(alarm.channelConfig).toBeNull();
+    expect(alarm.channels).toEqual(['alarm']);
+    expect(alarm.channelConfigs).toEqual({});
     const rawAlarm = await rawReminderRow(database, alarm.id);
-    expect(rawAlarm.channelConfig).toBeNull();
+    expect(rawAlarm.channelConfigsJson).toBeNull();
   });
 
-  it('webhook 缺 channelConfig 接受（宽松态，阶段 3 UI 补齐），落 null；纯空白抛明确错误', async () => {
-    const { repository } = makeFixture();
+  it('webhook 缺 config 条目接受（宽松态，阶段 3 UI 补齐）；config 纯空白抛明确错误', async () => {
+    const { repository, database } = makeFixture();
     const itemId = await createOwnerItem(repository);
 
-    const webhook = await repository.createReminder(baseOnceInput(itemId, { channel: 'webhook' }));
-    expect(webhook.channelConfig).toBeNull();
+    const webhook = await repository.createReminder(
+      baseOnceInput(itemId, { channels: ['webhook'] }),
+    );
+    expect(webhook.channels).toEqual(['webhook']);
+    expect(webhook.channelConfigs).toEqual({});
+    const raw = await rawReminderRow(database, webhook.id);
+    expect(raw.channelConfigsJson).toBeNull();
 
     await expect(
-      repository.createReminder(baseOnceInput(itemId, { channel: 'apprise', channelConfig: '   ' })),
+      repository.createReminder(
+        baseOnceInput(itemId, { channels: ['apprise'], channelConfigs: { apprise: '   ' } }),
+      ),
     ).rejects.toThrow(/whitespace-only/);
   });
 });
@@ -280,27 +294,30 @@ describe('updateReminder：once 切换与渠道（切片 16）', () => {
     expect(updated.frequency).toBe('once');
   });
 
-  it('webhook → system-notification：渠道切换后旧 channelConfig 强制清空', async () => {
+  it('webhook → system-notification：渠道切换后旧 config 条目被剪除（per-key merge + prune）', async () => {
     const { repository, database } = makeFixture();
     const itemId = await createOwnerItem(repository);
 
     const webhook = await repository.createReminder(
-      baseOnceInput(itemId, { channel: 'webhook', channelConfig: 'https://example.com/hook' }),
+      baseOnceInput(itemId, {
+        channels: ['webhook'],
+        channelConfigs: { webhook: 'https://example.com/hook' },
+      }),
     );
-    expect(webhook.channelConfig).toBe('https://example.com/hook');
+    expect(webhook.channelConfigs).toEqual({ webhook: 'https://example.com/hook' });
 
     const switched = await repository.updateReminder(webhook.id, {
-      channel: 'system-notification',
+      channels: ['system-notification'],
     });
-    expect(switched.channel).toBe('system-notification');
-    expect(switched.channelConfig).toBeNull();
+    expect(switched.channels).toEqual(['system-notification']);
+    expect(switched.channelConfigs).toEqual({});
     const raw = await rawReminderRow(database, webhook.id);
-    expect(raw.channelConfig).toBeNull();
+    expect(raw.channelConfigsJson).toBeNull();
   });
 });
 
 describe('读取层防御（切片 16：模拟 LokiJS 忽略回填 SQL / 存量脏数据）', () => {
-  it("channel='' （LokiJS 忽略 v8 sql 步骤的产物）读回回退默认渠道，不抛错", async () => {
+  it("legacy 桥：channels_json 置空 + channel=''（LokiJS 忽略 v8 sql 步骤的产物）读回回退默认渠道，不抛错", async () => {
     const { repository, database } = makeFixture();
     const itemId = await createOwnerItem(repository);
     const once = await repository.createReminder(baseOnceInput(itemId));
@@ -308,17 +325,20 @@ describe('读取层防御（切片 16：模拟 LokiJS 忽略回填 SQL / 存量�
     await database.write(async () => {
       const record = await database.get<ReminderModel>('reminders').find(once.id);
       await record.update((draft) => {
+        // 模拟 v9 存量行：多渠道列无数据，仅旧单渠道列（清零值）。
+        draft.channelsJson = null;
+        draft.channelConfigsJson = null;
         draft.channel = '';
       });
     });
 
     const reminders = await repository.listRemindersByItem(itemId);
     expect(reminders).toHaveLength(1);
-    expect(reminders[0]?.channel).toBe('system-notification');
-    expect(reminders[0]?.channelConfig).toBeNull();
+    expect(reminders[0]?.channels).toEqual(['system-notification']);
+    expect(reminders[0]?.channelConfigs).toEqual({});
   });
 
-  it("channel='bogus'（枚举外脏数据）读回回退默认渠道，不抛错", async () => {
+  it("legacy 桥：channels_json 置空 + channel='bogus'（枚举外脏数据）读回回退默认渠道，不抛错", async () => {
     const { repository, database } = makeFixture();
     const itemId = await createOwnerItem(repository);
     const once = await repository.createReminder(baseOnceInput(itemId));
@@ -326,12 +346,13 @@ describe('读取层防御（切片 16：模拟 LokiJS 忽略回填 SQL / 存量�
     await database.write(async () => {
       const record = await database.get<ReminderModel>('reminders').find(once.id);
       await record.update((draft) => {
+        draft.channelsJson = null;
         draft.channel = 'bogus';
       });
     });
 
     const reminders = await repository.listRemindersByItem(itemId);
-    expect(reminders[0]?.channel).toBe('system-notification');
+    expect(reminders[0]?.channels).toEqual(['system-notification']);
   });
 
   it('once_civil_json 坏 JSON 读回抛明确错误，不静默（对齐 weekdays 纪律）', async () => {

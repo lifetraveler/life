@@ -144,3 +144,44 @@ reminders 表在 `enabled` 之后追加 3 列（addColumns，严禁重建表/清
 - channel_config：webhook/apprise 渠道存非空白配置字符串（trim 后落库）；system-notification/alarm 渠道强制 null。
 - 读取层防御：库中 channel 为非法值（含 LokiJS 忽略 'sql' 迁移步骤产生的 ''）时回退默认 'system-notification'，不抛错；once_civil_json 坏 JSON 读回抛明确错误，不静默（对齐 weekdays 纪律）。
 - 回滚：v8 为加列迁移，回滚丢弃 3 新列，无数据保全要求（提案 §4）。
+## Reminder 多渠道并行与偏好设置字段（v0.18，切片 18 阶段 1；遵循 docs/proposals/slice-18-multi-channel.md）
+
+§7.29：单渠道升级为多渠道并行（一个 Reminder 可同时配置多个通知渠道）。本节覆盖
+v0.16「渠道字段语义」中单渠道（channel/channel_config）的领域语义；旧列仅作 legacy
+bridge 数据源保留（见下），域模型不再暴露。
+
+### Schema v9 → v10（3 个 addColumns，严禁重建表/清库，v9 step 不动）
+- reminders.channels_json: string | null（isOptional TEXT；已迁移行存 `ReminderChannel[]` 数组 JSON，写路径恒写非 null）
+- reminders.channel_configs_json: string | null（isOptional TEXT；仅网络渠道条目的 JSON 对象，空对象落 null）
+- app_settings.chips_increments: string | null（isOptional TEXT；once 快捷增量分钟数组 JSON，默认 [10,60]）
+- channel_presets.is_default: boolean（NOT NULL；addColumns 自动回填 false，写路径显式赋值）
+
+### 多渠道字段语义（决策点①②⑤见提案 §1，均已确认）
+- channels：元素 ∈ 'system-notification' | 'alarm' | 'webhook' | 'apprise'，去重后按
+  canonical 序（system-notification, alarm, webhook, apprise）存储；至少 1 项（空数组抛错）；
+  至多一个 expo 渠道（system-notification/alarm 互斥，写路径抛错，决策点①——expo 渠道
+  共享 expo-notifications 的 identifier 命名空间，同时调度会互相覆盖）。
+- channelConfigs：仅含网络渠道（webhook/apprise）键；值 trim 后非空白（空白抛错）；
+  落库前按生效 channels prune（未启用渠道的配置不落库）。
+- 写路径 patch 语义：channels 整体替换（不与 current 并集）；channelConfigs 按 per-key
+  merge（patch 未提及的键保留），显式 null 清除该键（决策点④）。
+- 旧列 channel/channel_config 保留（迁移层无 dropColumn），写路径不再写入；schema v8
+  的「channel NOT NULL」由 WatermelonDB sanitizedRaw 类型零值 '' 回填（新行），读层 bridge
+  视 '' 为「无 legacy 渠道」。
+
+### 读取层 legacy bridge（决策点③）
+- channels_json 为 null / '' / 坏 JSON / 非 JSON 数组 → 视为 v9 存量行：以旧列
+  channel/channel_config 构造单元素渠道集合（channel 非法或 '' 回退 'system-notification'，
+  与 v0.16 读取层防御同款纪律；网络渠道且 config 非空白时才生成 configs 条目，否则空对象）。
+- channels_json 为合法数组 → 只认新列（旧列值忽略，即使非空）；数组内非法元素丢弃、
+  去重、canonical 序；空数组/全非法回退默认渠道 ['system-notification']。
+- channel_configs_json 为 null / '' / 坏 JSON / 非 JSON 对象 → 空对象；非枚举键、不在生效
+  channels 的键、expo 渠道键、非字符串值一律丢弃，不抛错。
+
+### chips_increments 与 is_default
+- chips_increments：1–4 项（CHIPS_MIN/MAX_ITEMS）、每项 1–10080 整数分钟
+  （CHIPS_MIN/MAX_MINUTES）。读层防御归一：坏项丢弃、超 4 项截断、空/坏 JSON 回退默认
+  [10,60]，不抛错；写路径严格校验抛明确错误（读宽松、写严格的既有纪律）。
+- is_default：同 type 至多一个 true，由 Repository 在同一 db.write 事务内保证
+  （新默认写入时同 type 其余行自动取消）。
+- 回滚：v10 均为加列迁移，回滚丢弃新列，无数据保全要求（提案 §9）。

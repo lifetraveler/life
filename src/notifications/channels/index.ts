@@ -9,8 +9,9 @@ export type {
   NetworkReminderChannel,
   ReminderChannel,
   ReminderChannelId,
+  ScopedReminder,
 } from './types';
-export { isNetworkReminderChannel } from './types';
+export { isNetworkReminderChannel, scopeReminderToChannel } from './types';
 export { NetworkTimerRegistry } from './networkTimers';
 export type { NetworkAttemptStatus, NetworkTimerEntry } from './networkTimers';
 export { createReminderChannel } from './channelFactory';

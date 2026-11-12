@@ -120,7 +120,7 @@ export default function ItemDetailPage() {
 
   const handleUpdateReminder = async (target: Reminder, values: ReminderFormValues): Promise<void> => {
     try {
-      // 切片 16 阶段 3：patch 组装收敛到纯函数（含 onceAt / channel / channelConfig）。
+      // 切片 16 阶段 3：patch 组装收敛到纯函数（含 onceAt / channels / channelConfigs）。
       const patch: UpdateReminderInput = buildUpdateReminderInput(values, target);
       await itemRepository.updateReminder(target.id, patch);
       // 任务卡实现要求 5：tzid 切换（或任意编辑）后，旧 tzid/旧规则的通知必须被
@@ -368,7 +368,7 @@ export default function ItemDetailPage() {
                 <Text style={styles.line}>{formatReminderRuleSummary(reminder)}</Text>
                 <Text style={styles.meta}>
                   {reminder.enabled ? '已启用' : '已停用'} · 渠道{' '}
-                  {formatReminderChannelLabel(reminder.channel)} · 生效起点{' '}
+                  {reminder.channels.map((channel) => formatReminderChannelLabel(channel)).join('、')} · 生效起点{' '}
                   {formatItemTime(reminder.startAt, reminder.tzid)} · 上次对账{' '}
                   {reminder.lastReconciledAt === null
                     ? '从未'

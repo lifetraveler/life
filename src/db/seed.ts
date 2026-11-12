@@ -11,7 +11,11 @@
 import { Database, Q } from '@nozbe/watermelondb';
 
 import { PRESET_CATEGORIES } from '../domain/category';
-import { APP_SETTINGS_ROW_ID, DEFAULT_APP_SETTINGS } from '../domain/settings';
+import {
+  APP_SETTINGS_ROW_ID,
+  DEFAULT_APP_SETTINGS,
+  serializeChipsIncrements,
+} from '../domain/settings';
 import AppSettingsModel from './models/AppSettingsModel';
 import CategoryModel from './models/CategoryModel';
 
@@ -44,6 +48,8 @@ export async function seedPresetData(db: Database): Promise<void> {
         record.widgetShowTodos = DEFAULT_APP_SETTINGS.widgetShowTodos;
         record.widgetShowCategoryEmoji = DEFAULT_APP_SETTINGS.widgetShowCategoryEmoji;
         record.widgetShowTags = DEFAULT_APP_SETTINGS.widgetShowTags;
+        // 切片 18（schema v10）：chips 增量默认值（唯一数据源 DEFAULT_APP_SETTINGS，防漂移）。
+        record.chipsIncrementsJson = serializeChipsIncrements(DEFAULT_APP_SETTINGS.chipsIncrements);
       });
     }
   });

@@ -1,5 +1,5 @@
 import { Model } from '@nozbe/watermelondb';
-import { date, readonly, text } from '@nozbe/watermelondb/decorators';
+import { date, field, readonly, text } from '@nozbe/watermelondb/decorators';
 
 import type { ChannelPresetType } from '../../domain/channelPreset';
 
@@ -22,6 +22,13 @@ export default class ChannelPresetModel extends Model {
 
   /** 渠道配置 JSON 原文（webhook → WebhookChannelConfig；apprise → AppriseChannelConfig） */
   @text('config_json') configJson!: string;
+
+  /**
+   * 切片 18（schema v10，AGENTS.md §7.29）：默认预设标记。
+   * 非可选 boolean，既有行经 addColumns 自动回填 false；「同 type 至多一个 true」
+   * 由 Repository 写路径在同事务内保证（docs/proposals/slice-18-multi-channel.md §3.3）。
+   */
+  @field('is_default') isDefault!: boolean;
 
   /** 毫秒时间戳（WatermelonDB create 时自动写入，Model/helpers.js createTimestampsFor）；列表排序用 */
   @readonly @date('created_at') createdAt!: Date;

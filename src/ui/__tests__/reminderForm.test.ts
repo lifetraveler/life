@@ -174,20 +174,20 @@ describe('buildCreateReminderInput', () => {
 });
 
 describe('buildCreateReminderInput（切片 16 阶段 3：渠道与 once）', () => {
-  it('webhook：channelConfig 为 trim 后 URL；system-notification 渠道 config 恒 null', () => {
+  it('webhook：config 为 trim 后 URL；system-notification 渠道 configs 恒空（切片 18 多渠道形状）', () => {
     const webhook = buildCreateReminderInput(
       validValues({ channel: 'webhook', channelConfigText: '  https://example.com/hook  ' }),
       'item-1',
     );
-    expect(webhook.channel).toBe('webhook');
-    expect(webhook.channelConfig).toBe('https://example.com/hook');
+    expect(webhook.channels).toEqual(['webhook']);
+    expect(webhook.channelConfigs).toEqual({ webhook: 'https://example.com/hook' });
 
     const sys = buildCreateReminderInput(validValues(), 'item-1');
-    expect(sys.channel).toBe('system-notification');
-    expect(sys.channelConfig).toBeNull();
+    expect(sys.channels).toEqual(['system-notification']);
+    expect(sys.channelConfigs).toEqual({});
   });
 
-  it('apprise：channelConfig 序列化为 {baseUrl,key} JSON（trim）', () => {
+  it('apprise：config 序列化为 {baseUrl,key} JSON（trim）', () => {
     const apprise = buildCreateReminderInput(
       validValues({
         channel: 'apprise',
@@ -196,8 +196,10 @@ describe('buildCreateReminderInput（切片 16 阶段 3：渠道与 once）', ()
       }),
       'item-1',
     );
-    expect(apprise.channel).toBe('apprise');
-    expect(apprise.channelConfig).toBe(JSON.stringify({ baseUrl: 'https://apprise.example.com/', key: 'k1' }));
+    expect(apprise.channels).toEqual(['apprise']);
+    expect(apprise.channelConfigs).toEqual({
+      apprise: JSON.stringify({ baseUrl: 'https://apprise.example.com/', key: 'k1' }),
+    });
   });
 
   it('once：localTime 归零、onceAt 由表单文本解析、非 weekly/monthly 字段归零', () => {
@@ -228,8 +230,8 @@ describe('buildUpdateReminderInput（切片 16 阶段 3）', () => {
       tzid: 'Asia/Shanghai',
       startAt: 1749427200000,
       enabled: true,
-      channel: 'system-notification',
-      channelConfig: null,
+      channels: ['system-notification'],
+      channelConfigs: {},
       lastFiredOccurrenceKey: null,
       lastReconciledAt: null,
       createdAt: 0,
@@ -245,8 +247,8 @@ describe('buildUpdateReminderInput（切片 16 阶段 3）', () => {
     );
     expect(patch.frequency).toBe('daily');
     expect(patch.onceAt).toBeNull();
-    expect(patch.channel).toBe('alarm');
-    expect(patch.channelConfig).toBeNull();
+    expect(patch.channels).toEqual(['alarm']);
+    expect(patch.channelConfigs).toEqual({});
     expect(patch.startAt).toBe(1749427200000);
     expect(patch.tzid).toBe('Asia/Shanghai');
     expect(patch.enabled).toBe(true);
@@ -264,8 +266,8 @@ describe('buildUpdateReminderInput（切片 16 阶段 3）', () => {
     );
     expect(patch.frequency).toBe('once');
     expect(patch.onceAt).toEqual({ year: 2026, month: 11, day: 12, hour: 8, minute: 50 });
-    expect(patch.channel).toBe('webhook');
-    expect(patch.channelConfig).toBe('https://example.com/hook');
+    expect(patch.channels).toEqual(['webhook']);
+    expect(patch.channelConfigs).toEqual({ webhook: 'https://example.com/hook' });
     expect(patch.localTimeHour).toBe(0);
     expect(patch.localTimeMinute).toBe(0);
   });

@@ -245,5 +245,37 @@ export default schemaMigrations({
         }),
       ],
     },
+    {
+      // 切片 18 阶段 1（AGENTS.md §7.29 多渠道并行与偏好设置，
+      // docs/proposals/slice-18-multi-channel.md）：v10 三表加列；
+      // v2–v9 step 保持原样，不得修改。
+      // - 全部 addColumns，零 unsafeExecuteSql、零 UPDATE：
+      //   * reminders.channels_json / channel_configs_json 可空列回填 null；
+      //     旧数据由读取层 legacy bridge 归一（resolveReminderChannelRow，
+      //     提案 §4）——不做 SQL 回填：channel_config 含任意双引号（webhook JSON），
+      //     字符串拼接转义风险高，且 LokiJS 适配器忽略 'sql' 步骤无法单测；
+      //   * app_settings.chips_increments 可空列回填 null，读取层防御归一默认 [10,60]；
+      //   * channel_presets.is_default 非可选 boolean：addColumns 自动回填 false
+      //     （v7 widget_show_* 先例），无需 UPDATE；
+      // - 列定义与 schema.ts 的 tableSchema 严格一致（漂移会被模式不匹配检测抛错）。
+      toVersion: 10,
+      steps: [
+        addColumns({
+          table: 'reminders',
+          columns: [
+            { name: 'channels_json', type: 'string', isOptional: true },
+            { name: 'channel_configs_json', type: 'string', isOptional: true },
+          ],
+        }),
+        addColumns({
+          table: 'app_settings',
+          columns: [{ name: 'chips_increments', type: 'string', isOptional: true }],
+        }),
+        addColumns({
+          table: 'channel_presets',
+          columns: [{ name: 'is_default', type: 'boolean' }],
+        }),
+      ],
+    },
   ],
 });

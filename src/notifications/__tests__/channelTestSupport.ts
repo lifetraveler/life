@@ -1,6 +1,8 @@
 import type { Item } from '../../domain/item';
 import type { ItemRepository } from '../../data/ItemRepository';
 import type { Reminder } from '../../domain/reminder';
+import { scopeReminderToChannel } from '../channels';
+import type { ScopedReminder } from '../channels';
 import { NetworkTimerRegistry } from '../channels/networkTimers';
 
 /**
@@ -32,13 +34,18 @@ export function testItem(id: string, title: string): Item {
   };
 }
 
+/**
+ * 单渠道夹具（切片 18 适配）：按多渠道域模型构造单渠道 Reminder，
+ * 再经 scopeReminderToChannel 收敛为渠道实现消费的单渠道视角投影。
+ * 返回 ScopedReminder（Reminder 超集），deliver/schedule 直接消费。
+ */
 export function testReminder(
   id: string,
   itemId: string,
-  channel: Reminder['channel'],
+  channel: Reminder['channels'][number],
   channelConfig: string | null,
-): Reminder {
-  return {
+): ScopedReminder {
+  const reminder: Reminder = {
     id,
     itemId,
     frequency: 'daily',
@@ -47,8 +54,8 @@ export function testReminder(
     weekdays: [],
     dayOfMonth: 0,
     onceAt: null,
-    channel,
-    channelConfig,
+    channels: [channel],
+    channelConfigs: channelConfig !== null ? { [channel]: channelConfig } : {},
     tzid: 'UTC',
     startAt: TEST_NOW,
     enabled: true,
@@ -57,6 +64,7 @@ export function testReminder(
     createdAt: TEST_NOW - 1,
     updatedAt: TEST_NOW - 1,
   };
+  return scopeReminderToChannel(reminder, channel);
 }
 
 /**

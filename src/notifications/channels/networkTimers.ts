@@ -11,7 +11,7 @@
  * - attempts 记录按 occurrenceKey 记录最近一次投递结果，随进程生命周期存在，
  *   clearTimers / cancel 不清除（reconcile 靠它抑制已成功 occurrence 的重复补发）。
  */
-import type { Reminder } from '../../domain/reminder';
+import type { ScopedReminder } from './types';
 import { describeError } from './shared';
 
 /** 单次网络投递结果（与 channels/types 的 NetworkDeliverStatus 同形，此处独立声明避免循环 import）。 */
@@ -21,8 +21,11 @@ export type NetworkTimerEntry = {
   reminderId: string;
   /** 绝对毫秒触发时刻 */
   fireAt: number;
-  /** 触发时刻的 reminder 快照（deliver 用它取 channelConfig 等字段） */
-  reminder: Reminder;
+  /**
+   * 触发时刻的 reminder 快照（deliver 用它取 channelConfig 等字段）。
+   * 切片 18（提案 §6.2）：多渠道域模型按投递渠道收敛后的单渠道视角投影。
+   */
+  reminder: ScopedReminder;
 };
 
 export type NetworkTimerRegistryDeps = {

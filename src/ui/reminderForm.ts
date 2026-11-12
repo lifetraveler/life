@@ -34,7 +34,11 @@ export interface ReminderFormValues {
   /** 规则生效起点（绝对毫秒）；默认取创建表单时的当前时刻。once 下不参与触发计算（展示用） */
   startAt: number | null;
   enabled: boolean;
-  /** 提醒渠道（切片 16 阶段 3）；缺省 system-notification 与升级前行为一致 */
+  /**
+   * 主渠道（切片 18 阶段 1 机械适配）：阶段 1 表单仍为单选交互，
+   * 提交时包装成 channels:[channel]（提案 §8 阶段 3 才开放多选 UI）。
+   * 缺省 system-notification 与升级前行为一致。
+   */
   channel: ReminderChannel;
   /** webhook 渠道的 URL 原始输入（切渠道不清空，保留用户已输入内容） */
   channelConfigText: string;
@@ -177,24 +181,34 @@ export function parseAppriseFormFields(config: string | null): { baseUrl: string
   return { baseUrl, key };
 }
 
-/** 渠道 + 渠道配置（apprise 按 stateful 简写序列化为 {baseUrl,key} JSON） */
+/**
+ * 渠道 + 渠道配置 → 多渠道形状（切片 18，提案 §5/§8 阶段 1 机械适配）：
+ * 表单单选交互包装成 channels:[channel]；网络渠道按其形态产出 channelConfigs 条目
+ * （webhook = URL/配置 JSON 原文，apprise = stateful 简写 {baseUrl,key} JSON）；
+ * expo 渠道无配置条目。写路径最终归一化仍由 Repository 负责。
+ */
 function buildChannelFields(
   values: ReminderFormValues,
-): { channel: ReminderChannel; channelConfig: string | null } {
+): { channels: ReminderChannel[]; channelConfigs: Partial<Record<ReminderChannel, string>> } {
   if (values.channel === 'webhook') {
-    return { channel: values.channel, channelConfig: values.channelConfigText.trim() };
+    return {
+      channels: [values.channel],
+      channelConfigs: { webhook: values.channelConfigText.trim() },
+    };
   }
   if (values.channel === 'apprise') {
     return {
-      channel: values.channel,
-      channelConfig: JSON.stringify({
-        baseUrl: values.appriseBaseUrl.trim(),
-        key: values.appriseKey.trim(),
-      }),
+      channels: [values.channel],
+      channelConfigs: {
+        apprise: JSON.stringify({
+          baseUrl: values.appriseBaseUrl.trim(),
+          key: values.appriseKey.trim(),
+        }),
+      },
     };
   }
-  // system-notification / alarm：渠道无关，config 恒 null（Repository 强制归一）
-  return { channel: values.channel, channelConfig: null };
+  // system-notification / alarm：渠道无关，无配置条目（Repository 强制归一）
+  return { channels: [values.channel], channelConfigs: {} };
 }
 
 /** 全部字段合法时返回空对象 {}（无错误键） */
@@ -316,7 +330,7 @@ export function buildCreateReminderInput(
   itemId: string,
 ): CreateReminderInput {
   const isOnce = values.frequency === 'once';
-  const { channel, channelConfig } = buildChannelFields(values);
+  const channelFields = buildChannelFields(values);
   return {
     itemId,
     frequency: values.frequency,
@@ -325,8 +339,8 @@ export function buildCreateReminderInput(
     weekdays: values.frequency === 'weekly' ? values.weekdays : [],
     dayOfMonth: values.frequency === 'monthly' ? (values.dayOfMonth ?? 1) : 0,
     onceAt: isOnce ? buildOnceCivilTime(values.onceAt) : null,
-    channel,
-    channelConfig,
+    channels: channelFields.channels,
+    channelConfigs: channelFields.channelConfigs,
     tzid: values.tzid,
     startAt: values.startAt ?? 0,
     enabled: values.enabled,
@@ -343,7 +357,7 @@ export function buildUpdateReminderInput(
   target: Reminder,
 ): UpdateReminderInput {
   const isOnce = values.frequency === 'once';
-  const { channel, channelConfig } = buildChannelFields(values);
+  const channelFields = buildChannelFields(values);
   return {
     frequency: values.frequency,
     localTimeHour: isOnce ? 0 : (values.localTimeHour ?? 0),
@@ -351,8 +365,8 @@ export function buildUpdateReminderInput(
     weekdays: values.frequency === 'weekly' ? values.weekdays : [],
     dayOfMonth: values.frequency === 'monthly' ? (values.dayOfMonth ?? 1) : 0,
     onceAt: isOnce ? buildOnceCivilTime(values.onceAt) : null,
-    channel,
-    channelConfig,
+    channels: channelFields.channels,
+    channelConfigs: channelFields.channelConfigs,
     startAt: values.startAt ?? target.startAt,
     enabled: values.enabled,
     tzid: values.tzid,

@@ -11,14 +11,44 @@
  * - 类型层面不依赖 expo-notifications / react-native，便于纯逻辑单测。
  */
 import type { ItemRepository } from '../../data/ItemRepository';
-import type { Reminder } from '../../domain/reminder';
+import type { Reminder, ReminderChannel as DomainReminderChannel } from '../../domain/reminder';
 import type { NetworkTimerRegistry } from './networkTimers';
 
 /**
  * 提醒渠道 id（domain ReminderChannel 的别名）。
  * 起别名是为了与本文件的核心接口 ReminderChannel（渠道实例）区分。
+ * 切片 18（提案 §6.2）：原 `Reminder['channel']` 索引类型随域模型删字段失效，
+ * 改为直接引用 domain 的 ReminderChannel。
  */
-export type ReminderChannelId = Reminder['channel'];
+export type ReminderChannelId = DomainReminderChannel;
+
+/**
+ * 单渠道视角的 Reminder 投影（切片 18，提案 §6.2）：
+ * 多渠道域模型 → 渠道实现继续消费的 `channel` / `channelConfig` 两字段。
+ * 由 scopeReminderToChannel 构造；除新增两字段外与 Reminder 完全共享。
+ */
+export type ScopedReminder = Reminder & {
+  /** 本次投递/调度目标渠道 id */
+  channel: ReminderChannelId;
+  /** 该渠道的配置原文；expo 渠道 / 未配置时为 null */
+  channelConfig: string | null;
+};
+
+/**
+ * 将多渠道 Reminder 收敛为单渠道视角（切片 18，提案 §6.2）：
+ * channel = channelId；channelConfig = reminder.channelConfigs[channelId] ?? null
+ * （expo 渠道无配置条目，恒 null）。其余字段原样共享（浅拷贝，不深拷贝 tags 等引用）。
+ */
+export function scopeReminderToChannel(
+  reminder: Reminder,
+  channelId: ReminderChannelId,
+): ScopedReminder {
+  return {
+    ...reminder,
+    channel: channelId,
+    channelConfig: reminder.channelConfigs[channelId] ?? null,
+  };
+}
 
 /**
  * 渠道投递结果：'ok' = 远端确认接收（2xx），'failed' = 投递失败。
@@ -34,7 +64,7 @@ export type NetworkDeliverStatus = 'ok' | 'failed';
  */
 export interface ReminderChannel {
   readonly channel: ReminderChannelId;
-  schedule(reminder: Reminder, occurrenceKey: string, fireAt: number): Promise<void>;
+  schedule(reminder: ScopedReminder, occurrenceKey: string, fireAt: number): Promise<void>;
   cancel(reminderId: string, occurrenceKey?: string): Promise<void>;
 }
 
@@ -46,7 +76,7 @@ export interface ReminderChannel {
  */
 export interface NetworkReminderChannel extends ReminderChannel {
   deliver(
-    reminder: Reminder,
+    reminder: ScopedReminder,
     occurrenceKey: string,
     fireAt: number,
   ): Promise<NetworkDeliverStatus>;

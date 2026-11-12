@@ -20,6 +20,7 @@ import type { NotificationBehavior } from 'expo-notifications';
 import type { ItemRepository } from '../data/ItemRepository';
 import { toRecurrenceRule } from '../data/reminderRuleMapping';
 import type { ReconcileResult, Reminder, ReminderChannel as ReminderChannelId } from '../domain/reminder';
+import { DEFAULT_REMINDER_CHANNEL, isExpoReminderChannel } from '../domain/reminder';
 import type { Item } from '../domain/item';
 import type { Occurrence } from '../domain/recurrence';
 import { buildOnceOccurrence, expandOccurrences } from '../domain/recurrence';
@@ -40,7 +41,9 @@ import type {
   NetworkTimerRegistry as NetworkTimerRegistryType,
   NetworkReminderChannel,
   ReminderChannel,
+  ScopedReminder,
 } from './channels';
+import { scopeReminderToChannel } from './channels';
 import { describeError } from './channels/shared';
 
 /** 单条 reminder 最多调度的通知数（§4.16/§4.20 冻结）。 */
@@ -149,6 +152,21 @@ export class WatermelonReminderScheduler implements ReminderScheduler {
     return scheduled.map((notification) => notification.identifier);
   }
 
+  /**
+   * 阶段 1 编译兼容 shim（切片 18 提案 §6.7，阶段 2 fan-out 时移除）：
+   * 多渠道 Reminder → 单有效渠道视角。有效渠道 = 首个 expo 渠道 ?? 首个渠道
+   * （读层保证 ≥1，防御再兜底 DEFAULT）。阶段 1 存量数据均为单渠道，行为与 v9
+   * 逐字节等同；多渠道行（阶段 3 UI 开放前仅可能经 Repository API 产生）在本阶段
+   * 只按有效渠道调度，其余渠道阶段 2 fan-out 接管。
+   */
+  private shimScoped(reminder: Reminder): ScopedReminder {
+    const effective =
+      reminder.channels.find(isExpoReminderChannel) ??
+      reminder.channels[0] ??
+      DEFAULT_REMINDER_CHANNEL;
+    return scopeReminderToChannel(reminder, effective);
+  }
+
   /** 本 App 双族前缀（recurrence:v1| 与 once:）下的现网 identifier 集合。 */
   private async listScheduledOurKeys(): Promise<Set<string>> {
     const identifiers = await this.listScheduledIdentifiers();
@@ -207,8 +225,8 @@ export class WatermelonReminderScheduler implements ReminderScheduler {
     await channel.deliver(entry.reminder, occurrenceKey, entry.fireAt);
   }
 
-  /** 网络渠道实例守卫取值（reminder.channel 已断言为网络 id 时使用）。 */
-  private networkChannelFor(reminder: Reminder): NetworkReminderChannel {
+  /** 网络渠道实例守卫取值（scoped reminder.channel 已断言为网络 id 时使用）。 */
+  private networkChannelFor(reminder: ScopedReminder): NetworkReminderChannel {
     const channel = this.channels[reminder.channel];
     if (!isNetworkReminderChannel(channel)) {
       throw new Error(`ReminderScheduler: channel "${reminder.channel}" is not a network channel`);
@@ -258,15 +276,17 @@ export class WatermelonReminderScheduler implements ReminderScheduler {
     }
 
     const now = this.now();
-    const occurrences = this.expandReminderOccurrences(reminder);
+    // 阶段 1 shim（提案 §6.7）：单有效渠道视角，行为与 v9 等同。
+    const scoped = this.shimScoped(reminder);
+    const occurrences = this.expandReminderOccurrences(scoped);
     const windowed = this.windowOccurrences(occurrences, now);
     const expectedKeys = new Set(windowed.map((o) => o.occurrenceKey));
-    const channel = this.channels[reminder.channel];
+    const channel = this.channels[scoped.channel];
 
     if (isNetworkReminderChannel(channel)) {
       // 网络渠道：不向 OS 注册，登记/刷新内存定时器（幂等 replace）。
       for (const occurrence of windowed) {
-        await channel.schedule(reminder, occurrence.occurrenceKey, occurrence.instant);
+        await channel.schedule(scoped, occurrence.occurrenceKey, occurrence.instant);
       }
       // 清掉该 reminder 名下不在期望集合内的残留定时器（如编辑后时间前移）。
       this.registry.retainReminderKeys(reminderId, expectedKeys);
@@ -299,7 +319,7 @@ export class WatermelonReminderScheduler implements ReminderScheduler {
         continue;
       }
       try {
-        await channel.schedule(reminder, identifier, occurrence.instant);
+        await channel.schedule(scoped, identifier, occurrence.instant);
         this.log(`scheduled ${identifier}`);
       } catch (error) {
         // 单条调度失败（如权限被拒）必须捕获记录，不得抛到 UI（§4.20）。
@@ -358,7 +378,8 @@ export class WatermelonReminderScheduler implements ReminderScheduler {
 
     // §4.16（与 scheduleForReminder 同语义）：Item 不存在 / 已完成 / 已归档 → 等价 cancel。
     // 在 reconcile 中：该 reminder 不展开、不计 missed，其现网通知因不在期望集合而被对账取消。
-    type ReconcileEntry = { reminder: Reminder; item: Item; occurrences: Occurrence[] };
+    // 切片 18（提案 §6.7）：entry 携带单有效渠道视角的 scoped reminder。
+    type ReconcileEntry = { reminder: ScopedReminder; item: Item; occurrences: Occurrence[] };
     const activeEntries: ReconcileEntry[] = [];
     for (const reminder of reminders) {
       const item = await this.repository.getItem(reminder.itemId);
@@ -368,10 +389,11 @@ export class WatermelonReminderScheduler implements ReminderScheduler {
         );
         continue;
       }
+      const scoped = this.shimScoped(reminder);
       activeEntries.push({
-        reminder,
+        reminder: scoped,
         item,
-        occurrences: this.expandReminderOccurrences(reminder),
+        occurrences: this.expandReminderOccurrences(scoped),
       });
     }
 
@@ -403,7 +425,7 @@ export class WatermelonReminderScheduler implements ReminderScheduler {
     const networkEntries = ordered.filter((entry) => isNetworkChannelId(entry.reminder.channel));
 
     // —— expo 桶：§4.20 预算 + 集合 diff（原 v0.11 逻辑，作用于 system/alarm 提醒） ——
-    const processable: { reminder: Reminder; item: Item; windowed: Occurrence[] }[] = [];
+    const processable: { reminder: ScopedReminder; item: Item; windowed: Occurrence[] }[] = [];
     const skippedReminderIds: string[] = [];
     let used = 0;
     for (const entry of expoEntries) {

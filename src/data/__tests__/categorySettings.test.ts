@@ -10,6 +10,7 @@ import TagModel from '../../db/models/TagModel';
 import { schema } from '../../db/schema';
 import { APP_SETTINGS_ROW_ID, type TagDisplayMode } from '../../domain/settings';
 import { WatermelonItemRepository } from '../WatermelonItemRepository';
+import type { AppSettings } from '../../domain/settings';
 
 /**
  * 切片 14 阶段 1（schema v6 分类/设置底座）data 层单测：
@@ -89,14 +90,14 @@ describe('全局设置兜底（getSettings/updateSettings）', () => {
   it('空库 getSettings() 兜底返回 text 并静默落唯一 global 行；两次调用幂等不重复插行', async () => {
     const { db, repository } = makeContext();
     // 未经 seedPresetData 的空库：首次 getSettings 经 ensureSeeded 兜底
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60] });
     const rows = await db.get<AppSettingsModel>('app_settings').query().fetch();
     expect(rows.length).toBe(1);
     expect(rows[0]?._raw.id).toBe(APP_SETTINGS_ROW_ID);
     expect(rows[0]?.tagDisplayMode).toBe('text');
 
     // 第二次调用：幂等，不新增行
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60] });
     const rowsAgain = await db.get<AppSettingsModel>('app_settings').query().fetch();
     expect(rowsAgain.length).toBe(1);
   });
@@ -104,7 +105,7 @@ describe('全局设置兜底（getSettings/updateSettings）', () => {
   it('updateSettings 合法值生效并可回读', async () => {
     const { repository } = makeContext();
     await repository.updateSettings({ tagDisplayMode: 'emoji' });
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'emoji', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'emoji', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60] });
   });
 
   it('updateSettings 非法值抛 updateSettings: invalid tagDisplayMode', async () => {
@@ -329,13 +330,13 @@ describe('阶段 3 补充：视觉更新与设置往返边角', () => {
 
   it('updateSettings 往返：text → emoji → both → text，每步 getSettings 随之变化', async () => {
     const { repository } = makeContext();
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60] });
     await repository.updateSettings({ tagDisplayMode: 'emoji' });
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'emoji', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'emoji', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60] });
     await repository.updateSettings({ tagDisplayMode: 'both' });
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'both', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'both', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60] });
     await repository.updateSettings({ tagDisplayMode: 'text' });
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60] });
   });
 
   it('updateCategoryVisuals 空 patch 是合法 no-op：不抛错且视觉值不变', async () => {
@@ -348,5 +349,49 @@ describe('阶段 3 补充：视觉更新与设置往返边角', () => {
     expect(updated).toEqual(before);
     const after = (await repository.getCategories()).find((category) => category.id === 'work');
     expect(after).toEqual(before);
+  });
+});
+
+describe('chipsIncrements 设置往返（切片 18，AGENTS.md §7.29）', () => {
+  it('默认值 [10, 60]；自定义值写读往返', async () => {
+    const { repository } = makeContext();
+    expect((await repository.getSettings()).chipsIncrements).toEqual([10, 60]);
+    await repository.updateSettings({ chipsIncrements: [5, 15, 30, 1440] });
+    expect((await repository.getSettings()).chipsIncrements).toEqual([5, 15, 30, 1440]);
+  });
+
+  it('写路径严格校验：空数组 / 超 4 项 / 越界 / 非整数 抛明确错误', async () => {
+    const { repository } = makeContext();
+    await expect(repository.updateSettings({ chipsIncrements: [] })).rejects.toThrow(/chipsIncrements/);
+    await expect(repository.updateSettings({ chipsIncrements: [1, 2, 3, 4, 5] })).rejects.toThrow(/1–4 项/);
+    await expect(repository.updateSettings({ chipsIncrements: [0] })).rejects.toThrow(/1–10080/);
+    await expect(repository.updateSettings({ chipsIncrements: [10081] })).rejects.toThrow(/1–10080/);
+    await expect(repository.updateSettings({ chipsIncrements: [1.5] })).rejects.toThrow(/整数分钟/);
+  });
+
+  it('读层防御归一：手工写坏值 → parseChipsIncrements 兜底（坏项丢弃 / 超限截断 / 全坏回默认）', async () => {
+    const { repository, db } = makeContext();
+    await repository.getSettings(); // 确保 app_settings 行存在
+    const row = await db.get<AppSettingsModel>('app_settings').find(APP_SETTINGS_ROW_ID);
+    await db.write(async () => {
+      await row.update((draft) => {
+        draft.chipsIncrementsJson = '[15, "x", 0, 99999, 30, 60, 120]'; // 坏项丢弃 + 超 4 项截断
+      });
+    });
+    expect((await repository.getSettings()).chipsIncrements).toEqual([15, 30, 60, 120]);
+
+    await db.write(async () => {
+      await row.update((draft) => {
+        draft.chipsIncrementsJson = 'not-json';
+      });
+    });
+    expect((await repository.getSettings()).chipsIncrements).toEqual([10, 60]);
+
+    await db.write(async () => {
+      await row.update((draft) => {
+        draft.chipsIncrementsJson = '{"a":1}';
+      });
+    });
+    expect((await repository.getSettings()).chipsIncrements).toEqual([10, 60]);
   });
 });

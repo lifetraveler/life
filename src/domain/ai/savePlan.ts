@@ -77,8 +77,9 @@ function buildOnceReminderPlan(
       localTimeHour: 0,
       localTimeMinute: 0,
       onceAt,
-      channel: 'system-notification',
-      channelConfig: null,
+      // 切片 18（提案 §5）：多渠道形状；闪电添加恒系统通知单渠道。
+      channels: ['system-notification'],
+      channelConfigs: {},
       tzid,
       // once 下 startAt 不参与触发计算（唯一来源 onceAt + tzid），取 fireInstant 展示信息量最大。
       startAt: fireInstant,

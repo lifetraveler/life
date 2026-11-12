@@ -53,8 +53,11 @@ function initialValues(initial?: Reminder): ReminderFormValues {
             minute: initial.onceAt.minute,
           }
         : { date: '', hour: null, minute: null };
-    const appriseFields = initial.channel === 'apprise'
-      ? parseAppriseFormFields(initial.channelConfig)
+    // 切片 18（提案 §8 阶段 1 机械适配）：表单仍单选，取首个渠道回填；
+    // 阶段 3 多选 UI 落地时改为全量 channels 编辑。
+    const primaryChannel = initial.channels[0] ?? 'system-notification';
+    const appriseFields = initial.channels.includes('apprise')
+      ? parseAppriseFormFields(initial.channelConfigs['apprise'] ?? null)
       : { baseUrl: '', key: '' };
     return {
       frequency: initial.frequency,
@@ -66,8 +69,10 @@ function initialValues(initial?: Reminder): ReminderFormValues {
       tzid: initial.tzid,
       startAt: initial.startAt,
       enabled: initial.enabled,
-      channel: initial.channel,
-      channelConfigText: initial.channel === 'webhook' ? (initial.channelConfig ?? '') : '',
+      channel: primaryChannel,
+      channelConfigText: initial.channels.includes('webhook')
+        ? (initial.channelConfigs['webhook'] ?? '')
+        : '',
       appriseBaseUrl: appriseFields.baseUrl,
       appriseKey: appriseFields.key,
       channelPresetId: null,

@@ -34,9 +34,35 @@ export const REMINDER_CHANNELS: readonly ReminderChannel[] = [
 /** 缺省/存量渠道：v8 migration 将既有行回填为该值，行为与升级前一致（提案 §2.1）。 */
 export const DEFAULT_REMINDER_CHANNEL: ReminderChannel = 'system-notification';
 
+/**
+ * create 输入缺省渠道集合（切片 18）：未传 channels 时的归一结果，
+ * 与 DEFAULT_REMINDER_CHANNEL 语义一致（单元素数组，提案 §5）。
+ */
+export const DEFAULT_REMINDER_CHANNELS: readonly ReminderChannel[] = [DEFAULT_REMINDER_CHANNEL];
+
 /** 渠道枚举守卫：读取层防御性归一（非法值回退 DEFAULT_REMINDER_CHANNEL）与写路径校验共用。 */
 export function isReminderChannel(value: unknown): value is ReminderChannel {
   return REMINDER_CHANNELS.some((channel) => channel === value);
+}
+
+/**
+ * expo 通知家族渠道（切片 18，提案 §6.3）：走 expo-notifications 调度、
+ * identifier = occurrenceKey 的两个渠道。**至多选其一**（互斥）：
+ * 两者的 identifier 同为 occurrenceKey，双开必然同 identifier 互踩；
+ * 互斥由写路径强制（normalizeReminderChannelFields 抛错）+ UI 不提供该组合。
+ */
+export const EXPO_REMINDER_CHANNELS: readonly ReminderChannel[] = [
+  'system-notification',
+  'alarm',
+];
+
+export function isExpoReminderChannel(channel: ReminderChannel): boolean {
+  return EXPO_REMINDER_CHANNELS.some((expo) => expo === channel);
+}
+
+/** 网络渠道（前台直接 fetch，仅 App 进程存活时保证发送）：配置字典里唯一合法的键集合。 */
+export function isNetworkReminderChannel(channel: ReminderChannel): boolean {
+  return !isExpoReminderChannel(channel);
 }
 
 /**
@@ -58,7 +84,7 @@ export interface OnceCivilTime {
   minute: number;
 }
 
-/** 数据模型：Reminder（§4.17 冻结字段集合；v0.16 追加 onceAt / channel / channelConfig） */
+/** 数据模型：Reminder（§4.17 冻结字段集合；v0.16 追加 onceAt；v0.18 多渠道 channels/channelConfigs） */
 export interface Reminder {
   id: string;
   itemId: string;
@@ -81,13 +107,19 @@ export interface Reminder {
   /** 规则生效起点（绝对毫秒时间戳）；once 频率下不参与触发时刻计算（唯一来源 onceAt + tzid） */
   startAt: number;
   enabled: boolean;
-  /** 提醒渠道（切片 16，schema v8 起恒有值：存量行经 migration 回填默认渠道） */
-  channel: ReminderChannel;
   /**
-   * 渠道配置（webhook URL / apprise 配置 JSON，切片 16）。
-   * system-notification / alarm 渠道无关，恒为 null（写路径强制归一）。
+   * 提醒渠道集合（切片 18 多渠道，schema v10，AGENTS.md §7.29）：
+   * ≥1 个渠道；至多一个 expo 渠道（system-notification 与 alarm 互斥）；
+   * 去重 + REMINDER_CHANNELS canonical 序（写路径归一保证）。
+   * 存量行经 legacy bridge 归一为单元素数组（提案 §4）。
    */
-  channelConfig: string | null;
+  channels: ReminderChannel[];
+  /**
+   * 渠道配置字典（切片 18）：键为网络渠道 id（webhook / apprise），值为配置原文
+   * （webhook URL / apprise 配置 JSON）；expo 渠道不得有条目（写路径强制）。
+   * 仅网络渠道可能携带配置；config-free 条目在写路径被 prune。
+   */
+  channelConfigs: Partial<Record<ReminderChannel, string>>;
   /** 调度器内部状态：最后一个已计入触发/missed 的 occurrenceKey（AGENTS.md §4.19） */
   lastFiredOccurrenceKey: string | null;
   /** 调度器内部状态：上次对账完成时间 */
@@ -112,14 +144,19 @@ export interface CreateReminderInput {
    * frequency='once' 而缺省时抛明确错误；其他 frequency 传了也会被归一化为 null。
    */
   onceAt?: OnceCivilTime | null;
-  /** 提醒渠道（切片 16）；缺省 'system-notification' */
-  channel?: ReminderChannel;
   /**
-   * 渠道配置（webhook URL / apprise 配置 JSON，切片 16）。
-   * system-notification / alarm 渠道强制归一为 null；webhook / apprise 接受 null
-   * 或非空白字符串（trim 后落库，纯空白抛错）。
+   * 提醒渠道集合（切片 18 多渠道）；缺省 ['system-notification']。
+   * 归一规则（写路径强制）：每项过 isReminderChannel（非法抛错）、去重、
+   * REMINDER_CHANNELS canonical 序；归一后为空抛错；
+   * expo 渠道（system-notification / alarm）至多一个，双开抛错（提案 §5）。
    */
-  channelConfig?: string | null;
+  channels?: ReminderChannel[];
+  /**
+   * 渠道配置字典（切片 18）：键为渠道 id，值为配置原文。
+   * 写路径归一：expo 渠道条目静默丢弃；网络渠道值 trim 后必须非空（纯空白抛错）；
+   * 不在 channels 内的条目被 prune。create 无「清除」语义（null 值仅 update 支持）。
+   */
+  channelConfigs?: Partial<Record<ReminderChannel, string>>;
   tzid: string;
   startAt: number;
   enabled: boolean;
@@ -144,10 +181,17 @@ export interface UpdateReminderInput {
   dayOfMonth?: number;
   /** 仅 frequency='once' 可为非空；其他 frequency 由 Repository 归一为 null */
   onceAt?: OnceCivilTime | null;
-  /** 提醒渠道（切片 16）；未传保持现状 */
-  channel?: ReminderChannel;
-  /** 渠道配置（切片 16）；未传保持现状，渠道切换为 system-notification/alarm 时强制 null */
-  channelConfig?: string | null;
+  /**
+   * 提醒渠道集合（切片 18 多渠道）；未传保持现状。
+   * 归一规则同 CreateReminderInput.channels（校验/去重/canonical 序/空抛错/expo 互斥）。
+   */
+  channels?: ReminderChannel[];
+  /**
+   * 渠道配置字典 patch（切片 18）：**per-key merge**——逐键合并进现有字典后
+   * prune 到本次生效的 channels；传 null 表示清除该渠道条目（提案 §5，已确认）。
+   * 网络渠道值 trim 后必须非空（纯空白抛错）；expo 渠道条目静默丢弃。
+   */
+  channelConfigs?: Partial<Record<ReminderChannel, string | null>>;
   startAt?: number;
   enabled?: boolean;
   /** 仅接受时区白名单值（§4.25）；Repository 对白名单外值抛错 */

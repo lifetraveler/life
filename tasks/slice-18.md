@@ -7,14 +7,14 @@
 
 ## 强制实施阶段
 
-### 阶段 1：变更提案与 Schema v10（底层与契约）
-- **必须先撰写变更提案** `docs/proposals/slice-18-multi-channel.md`，说明 Reminder 模型的字段变更（单值->多值字典）及兼容方案。等用户确认后再改代码。
-- 修改 schema 升到 v10。
-- `app_settings` 加 `chips_increments` (JSON，默认 `[10, 60]`)。
-- `channel_presets` 加 `is_default` (boolean)。
-- `reminders` 表 `channel` 迁移为 `channels_json`（数组），`channel_config` 迁移为 `channel_configs_json`（字典）。旧数据自动回填适配。
-- 更新 Domain、Repository、Scheduler 类型定义。
-- 补充单测。
+### 阶段 1：变更提案与 Schema v10（底层与契约）✅ 已完成（2026-11-13）
+- **必须先撰写变更提案** `docs/proposals/slice-18-multi-channel.md`，说明 Reminder 模型的字段变更（单值->多值字典）及兼容方案。等用户确认后再改代码。（已确认：5 决策点均按推荐）
+- 修改 schema 升到 v10。✅
+- `app_settings` 加 `chips_increments` (JSON，默认 `[10, 60]`)。✅
+- `channel_presets` 加 `is_default` (boolean)。✅
+- `reminders` 表 `channel` 迁移为 `channels_json`（数组），`channel_config` 迁移为 `channel_configs_json`（字典）。旧数据自动回填适配。✅（读层 legacy bridge，旧列保留不写）
+- 更新 Domain、Repository、Scheduler 类型定义。✅（Scheduler 为阶段 1 shim：取 expo 渠道优先的单渠道投影，阶段 2 移除）
+- 补充单测。✅（830 全过；tsc 0 错）
 
 ### 阶段 2：调度器多渠道并行分发
 - 修改 `ReminderScheduler`。

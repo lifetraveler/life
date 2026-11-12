@@ -1,6 +1,8 @@
 # 变更提案：切片 18 提醒多渠道并行 + 偏好设置（Schema v10）
 
-状态：**待用户确认**（2026-11-13 立项）。确认前禁止修改
+状态：**已确认**（2026-11-13 立项，用户确认 5 个决策点均按推荐：①expo 渠道互斥
+②channels ≥1 强制③读层 legacy bridge④channelConfigs per-key merge（null=清除）
+⑤chips 1–4 项、每项 1–10080 分钟）。确认后允许修改
 data-model.md / notifications.md / repository.md / src/notifications/ 实现文件 /
 reminders·app_settings·channel_presets schema。依据：AGENTS.md §7.17、§7.29。
 

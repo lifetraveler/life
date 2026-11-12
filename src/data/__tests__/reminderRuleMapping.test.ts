@@ -5,12 +5,17 @@ import {
   normalizeReminderRuleFields,
   normalizeStartAt,
   parseOnceCivilJson,
+  parseReminderChannelsJson,
   parseWeekdaysJson,
   resolveOnceAt,
+  resolveReminderChannelRow,
   serializeOnceCivilJson,
+  serializeReminderChannelConfigs,
+  serializeReminderChannels,
   serializeWeekdays,
   toRecurrenceRule,
 } from '../reminderRuleMapping';
+import type { ReminderChannelFields, ReminderChannelRowInput } from '../reminderRuleMapping';
 
 describe('serializeWeekdays', () => {
   it('空数组序列化为空字符串（§4.17：非 weekly 恒为空字符串）', () => {
@@ -406,60 +411,234 @@ describe('resolveOnceAt（切片 16，写路径 once 必填运行时强制）', 
   });
 });
 
-describe('normalizeReminderChannelFields（切片 16，写路径渠道归一化）', () => {
-  it('channel 缺省 → system-notification + channelConfig null', () => {
+describe('normalizeReminderChannelFields（切片 18 多渠道，写路径渠道归一化）', () => {
+  it('channels 缺省 → DEFAULT_REMINDER_CHANNELS + 空 configs', () => {
     expect(normalizeReminderChannelFields({})).toEqual({
-      channel: 'system-notification',
-      channelConfig: null,
+      channels: ['system-notification'],
+      channelConfigs: {},
     });
-    expect(normalizeReminderChannelFields({ channel: 'system-notification' })).toEqual({
-      channel: 'system-notification',
-      channelConfig: null,
-    });
-  });
-
-  it('system-notification / alarm 渠道无关：channelConfig 强制 null（传入值被丢弃）', () => {
-    expect(
-      normalizeReminderChannelFields({ channel: 'alarm', channelConfig: 'should-drop' }),
-    ).toEqual({ channel: 'alarm', channelConfig: null });
-    expect(
-      normalizeReminderChannelFields({ channel: 'system-notification', channelConfig: null }),
-    ).toEqual({ channel: 'system-notification', channelConfig: null });
-  });
-
-  it('webhook / apprise：非空白字符串 trim 后落库', () => {
-    expect(
-      normalizeReminderChannelFields({ channel: 'webhook', channelConfig: '  https://example.com/hook  ' }),
-    ).toEqual({ channel: 'webhook', channelConfig: 'https://example.com/hook' });
-    expect(
-      normalizeReminderChannelFields({ channel: 'apprise', channelConfig: 'apprise://srv/home' }),
-    ).toEqual({ channel: 'apprise', channelConfig: 'apprise://srv/home' });
-  });
-
-  it('webhook / apprise：channelConfig 缺省/null 接受（落 null，阶段 3 UI 强制补齐前的宽松态）', () => {
-    expect(normalizeReminderChannelFields({ channel: 'webhook' })).toEqual({
-      channel: 'webhook',
-      channelConfig: null,
-    });
-    expect(normalizeReminderChannelFields({ channel: 'apprise', channelConfig: null })).toEqual({
-      channel: 'apprise',
-      channelConfig: null,
+    expect(normalizeReminderChannelFields({ channels: ['system-notification'] })).toEqual({
+      channels: ['system-notification'],
+      channelConfigs: {},
     });
   });
 
-  it('webhook / apprise：纯空白 channelConfig 抛明确错误', () => {
+  it('expo 渠道（system-notification / alarm）：configs 条目静默丢弃（expo 无配置）', () => {
+    expect(
+      normalizeReminderChannelFields({ channels: ['alarm'], channelConfigs: { alarm: 'should-drop' } }),
+    ).toEqual({ channels: ['alarm'], channelConfigs: {} });
+    expect(
+      normalizeReminderChannelFields({ channels: ['system-notification'], channelConfigs: undefined }),
+    ).toEqual({ channels: ['system-notification'], channelConfigs: {} });
+  });
+
+  it('webhook / apprise：config trim 后收敛；多渠道 canonical 序', () => {
+    expect(
+      normalizeReminderChannelFields({
+        channels: ['webhook'],
+        channelConfigs: { webhook: '  https://example.com/hook  ' },
+      }),
+    ).toEqual({ channels: ['webhook'], channelConfigs: { webhook: 'https://example.com/hook' } });
+    expect(
+      normalizeReminderChannelFields({
+        channels: ['apprise', 'system-notification'],
+        channelConfigs: { apprise: 'apprise://srv/home' },
+      }),
+    ).toEqual({
+      channels: ['system-notification', 'apprise'],
+      channelConfigs: { apprise: 'apprise://srv/home' },
+    });
+  });
+
+  it('webhook / apprise：缺 config 条目接受（宽松态，阶段 3 UI 强制补齐前的宽松态）', () => {
+    expect(normalizeReminderChannelFields({ channels: ['webhook'] })).toEqual({
+      channels: ['webhook'],
+      channelConfigs: {},
+    });
+    expect(
+      normalizeReminderChannelFields({ channels: ['apprise'], channelConfigs: { apprise: null } }),
+    ).toEqual({ channels: ['apprise'], channelConfigs: {} });
+  });
+
+  it('webhook / apprise：纯空白 config 抛明确错误（v9 同文案，键名替换）', () => {
     expect(() =>
-      normalizeReminderChannelFields({ channel: 'webhook', channelConfig: '   ' }),
-    ).toThrow(/must be a non-empty string, got whitespace-only/);
+      normalizeReminderChannelFields({
+        channels: ['webhook'],
+        channelConfigs: { webhook: '   ' },
+      }),
+    ).toThrow(/reminder channelConfig for "webhook" must be a non-empty string, got whitespace-only/);
     expect(() =>
-      normalizeReminderChannelFields({ channel: 'apprise', channelConfig: '\t\n' }),
+      normalizeReminderChannelFields({
+        channels: ['apprise'],
+        channelConfigs: { apprise: '\t\n' },
+      }),
     ).toThrow(/whitespace-only/);
   });
 
   it('枚举外渠道抛明确错误（契约外运行时值经 JSON 反序列化构造，不用 as 断言）', () => {
     const bogusChannel: ReminderChannel = JSON.parse('"bogus-channel"');
-    expect(() => normalizeReminderChannelFields({ channel: bogusChannel })).toThrow(
+    expect(() => normalizeReminderChannelFields({ channels: [bogusChannel] })).toThrow(
       /reminder channel must be one of system-notification, alarm, webhook, apprise, got: bogus-channel/,
     );
+  });
+
+  it('channels 空数组抛明确错误；超过一个 expo 渠道抛互斥错误', () => {
+    expect(() => normalizeReminderChannelFields({ channels: [] })).toThrow(
+      /reminder requires at least one channel \(channels must not be empty\)/,
+    );
+    expect(() =>
+      normalizeReminderChannelFields({ channels: ['system-notification', 'alarm'] }),
+    ).toThrow(/reminder supports at most one expo channel \(system-notification \/ alarm are mutually exclusive\)/);
+  });
+
+  it('枚举外 configs 键抛明确错误', () => {
+    // 契约外运行时键经 JSON 反序列化构造，不用 as 断言。
+    const bogusConfigs: Record<string, string> = JSON.parse('{"bogus-key":"x"}');
+    expect(() =>
+      normalizeReminderChannelFields({
+        channels: ['webhook'],
+        channelConfigs: bogusConfigs,
+      }),
+    ).toThrow(/reminder channelConfigs key must be one of system-notification, alarm, webhook, apprise, got: bogus-key/);
+  });
+
+  it('per-key merge（已确认决策点 ④）：current 保留、null 清除、patch 未提及键不动', () => {
+    const current: ReminderChannelFields = {
+      channels: ['webhook', 'system-notification'],
+      channelConfigs: { webhook: 'https://old.example/hook' },
+    };
+    // patch 只改 apprise：webhook 条目保留（merge 而非整体替换）；channels 整体替换（不带 current 的渠道）。
+    expect(
+      normalizeReminderChannelFields(
+        { channels: ['webhook', 'apprise'], channelConfigs: { apprise: 'apprise://srv/home' } },
+        current,
+      ),
+    ).toEqual({
+      channels: ['webhook', 'apprise'],
+      channelConfigs: { webhook: 'https://old.example/hook', apprise: 'apprise://srv/home' },
+    });
+    // patch null：清除 webhook 条目；channels 由 patch 整体替换（仅 ['webhook']）。
+    expect(
+      normalizeReminderChannelFields({ channels: ['webhook'], channelConfigs: { webhook: null } }, current),
+    ).toEqual({ channels: ['webhook'], channelConfigs: {} });
+  });
+
+  it('返回值按生效 channels prune：未启用渠道的 config 不落库', () => {
+    const current: ReminderChannelFields = {
+      channels: ['webhook'],
+      channelConfigs: { webhook: 'https://old.example/hook' },
+    };
+    expect(
+      normalizeReminderChannelFields({ channels: ['system-notification'] }, current),
+    ).toEqual({ channels: ['system-notification'], channelConfigs: {} });
+  });
+});
+
+describe('serializeReminderChannels / serializeReminderChannelConfigs（切片 18）', () => {
+  it('channels 恒写非 null JSON 数组；configs 空字典存 null、非空存 JSON', () => {
+    expect(serializeReminderChannels(['system-notification'])).toBe('["system-notification"]');
+    expect(serializeReminderChannels(['system-notification', 'webhook'])).toBe(
+      '["system-notification","webhook"]',
+    );
+    expect(serializeReminderChannelConfigs({})).toBeNull();
+    expect(serializeReminderChannelConfigs({ webhook: 'https://example.com/hook' })).toBe(
+      '{"webhook":"https://example.com/hook"}',
+    );
+  });
+});
+
+describe('parseReminderChannelsJson（切片 18 读层防御）', () => {
+  it('null / \'\' / 坏 JSON / 非数组 → null（信号：未迁移行或坏值，走 legacy bridge）', () => {
+    expect(parseReminderChannelsJson(null)).toBeNull();
+    expect(parseReminderChannelsJson('')).toBeNull();
+    expect(parseReminderChannelsJson('not-json')).toBeNull();
+    expect(parseReminderChannelsJson('"system-notification"')).toBeNull(); // 非数组的合法 JSON
+  });
+
+  it('合法数组：非法元素丢弃、去重、canonical 序', () => {
+    expect(parseReminderChannelsJson('["webhook"]')).toEqual(['webhook']);
+    expect(parseReminderChannelsJson('["apprise","system-notification"]')).toEqual([
+      'system-notification',
+      'apprise',
+    ]);
+    expect(parseReminderChannelsJson('["webhook","webhook","bogus"]')).toEqual(['webhook']);
+    expect(parseReminderChannelsJson('["bogus","bogus2"]')).toEqual([]); // 有效结果空 → 调用方回退默认
+  });
+});
+
+describe('resolveReminderChannelRow（切片 18 读层 legacy bridge，提案 §4 all-or-nothing）', () => {
+  function row(overrides: Partial<ReminderChannelRowInput> = {}): ReminderChannelRowInput {
+    return {
+      channelsJson: null,
+      channelConfigsJson: null,
+      legacyChannel: null,
+      legacyChannelConfig: null,
+      ...overrides,
+    };
+  }
+
+  it('已迁移行：只认新列，configs 坏值 → {}（绝不回头读旧列）', () => {
+    expect(
+      resolveReminderChannelRow(
+        row({
+          channelsJson: '["webhook"]',
+          channelConfigsJson: '{"webhook":"https://example.com/hook"}',
+          legacyChannel: 'alarm', // 干扰项：已迁移行必须忽略
+          legacyChannelConfig: 'https://legacy.example/ignored',
+        }),
+      ),
+    ).toEqual({ channels: ['webhook'], channelConfigs: { webhook: 'https://example.com/hook' } });
+    // channel_configs_json 坏 JSON → {}，legacy 配置不回魂。
+    expect(
+      resolveReminderChannelRow(
+        row({ channelsJson: '["webhook"]', channelConfigsJson: 'not-json', legacyChannel: 'webhook', legacyChannelConfig: 'x' }),
+      ),
+    ).toEqual({ channels: ['webhook'], channelConfigs: {} });
+    // expo 渠道条目 / 不在生效渠道内的键 → 丢弃。
+    expect(
+      resolveReminderChannelRow(
+        row({
+          channelsJson: '["system-notification"]',
+          channelConfigsJson: '{"alarm":"x","webhook":"https://dropped.example/hook"}',
+        }),
+      ),
+    ).toEqual({ channels: ['system-notification'], channelConfigs: {} });
+  });
+
+  it('已迁移行空数组/全非法 → 回退默认渠道', () => {
+    expect(resolveReminderChannelRow(row({ channelsJson: '[]' }))).toEqual({
+      channels: ['system-notification'],
+      channelConfigs: {},
+    });
+    expect(resolveReminderChannelRow(row({ channelsJson: '["bogus"]' }))).toEqual({
+      channels: ['system-notification'],
+      channelConfigs: {},
+    });
+  });
+
+  it('未迁移旧行：legacy channel/config 推导单渠道形状', () => {
+    // 网络渠道带配置 → 单元素数组 + 配置字典。
+    expect(
+      resolveReminderChannelRow(
+        row({ legacyChannel: 'webhook', legacyChannelConfig: 'https://example.com/hook' }),
+      ),
+    ).toEqual({ channels: ['webhook'], channelConfigs: { webhook: 'https://example.com/hook' } });
+    // 网络渠道 config 空白 → 宽松态无配置。
+    expect(
+      resolveReminderChannelRow(row({ legacyChannel: 'webhook', legacyChannelConfig: '   ' })),
+    ).toEqual({ channels: ['webhook'], channelConfigs: {} });
+    // expo 渠道恒无配置。
+    expect(
+      resolveReminderChannelRow(row({ legacyChannel: 'alarm', legacyChannelConfig: 'x' })),
+    ).toEqual({ channels: ['alarm'], channelConfigs: {} });
+    // channel 非法/'' → 默认渠道（v8 先例）。
+    expect(resolveReminderChannelRow(row({ legacyChannel: 'bogus' }))).toEqual({
+      channels: ['system-notification'],
+      channelConfigs: {},
+    });
+    expect(resolveReminderChannelRow(row({ legacyChannel: '' }))).toEqual({
+      channels: ['system-notification'],
+      channelConfigs: {},
+    });
   });
 });
