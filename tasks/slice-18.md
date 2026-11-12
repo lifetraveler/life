@@ -16,10 +16,10 @@
 - 更新 Domain、Repository、Scheduler 类型定义。✅（Scheduler 为阶段 1 shim：取 expo 渠道优先的单渠道投影，阶段 2 移除）
 - 补充单测。✅（830 全过；tsc 0 错）
 
-### 阶段 2：调度器多渠道并行分发
-- 修改 `ReminderScheduler`。
-- 遍历 `channels` 数组，为每个开启的渠道生成对应的调度任务。
-- 对账（reconcile）时：确保某一个渠道如果被手动取消，不会影响其他渠道；`forceRebuild` 时全量重建所有渠道。
+### 阶段 2：调度器多渠道并行分发 ✅（2026-11-13）
+- 修改 `ReminderScheduler`。✅（scheduleForReminder/reconcile 按 channels fan-out：expo 渠道至多一个走家族感知 diff（identifier 不变，trigger.channelId 区分 system/alarm，异家族残留一并取消）；网络渠道循环独立登记复合键 `channelId|occurrenceKey` 定时器，retainReminderKeys/pruneExcept 收口）
+- 遍历 `channels` 数组，为每个开启的渠道生成对应的调度任务。✅（网络 registry 升级复合键——多渠道并行后同 reminder 两个网络渠道各自持有同 occurrenceKey 定时器，slice-16 单键覆盖缺陷根治；missed 补发按（渠道×occurrence）独立判 attemptStatus，lastFiredOccurrenceKey 游标仍按 reminder 共享一次推进；shim 已移除）
+- 对账（reconcile）时：确保某一个渠道如果被手动取消，不会影响其他渠道；`forceRebuild` 时全量重建所有渠道。✅（forceRebuild 清 expo 全部+registry.clearTimers 后全量重建；网络定时器每轮 reconcile 幂等重建即进程重启自愈；新增 6 个多渠道/家族切换/reconcile attempt 独立用例，838 全过、tsc 0 错）
 
 ### 阶段 3：UI 重构（表单与设置）
 - **设置页**：在“我的”中增加“Chips 增量设置”（两个输入框）与“渠道预设”中的“设为默认”。

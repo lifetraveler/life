@@ -12,6 +12,11 @@
  *   webhook / apprise 为网络渠道：不向 OS 注册，内存定时器到点 fetch，
  *   不占 §4.20 的 500 条预算，missed occurrence 在对账时立即补发一次
  *   （notifications.md v0.16 增补）。
+ * - 切片 18 阶段 2（提案 docs/proposals/slice-18-multi-channel.md §6）：
+ *   多渠道并行分发——遍历 reminder.channels，expo 渠道（至多一个，写路径互斥）
+ *   走集合 diff 路径（identifier 仍为 occurrenceKey，§4.20 一字不改），网络渠道
+ *   每渠道独立登记复合键定时器；expo diff 升级为家族感知（sys↔alarm 切换后
+ *   异族残留清理，§6.6）；网络 attempts/missed 补发按（渠道 × occurrence）独立判定。
  */
 
 import * as Notifications from 'expo-notifications';
@@ -20,21 +25,22 @@ import type { NotificationBehavior } from 'expo-notifications';
 import type { ItemRepository } from '../data/ItemRepository';
 import { toRecurrenceRule } from '../data/reminderRuleMapping';
 import type { ReconcileResult, Reminder, ReminderChannel as ReminderChannelId } from '../domain/reminder';
-import { DEFAULT_REMINDER_CHANNEL, isExpoReminderChannel } from '../domain/reminder';
+import { isExpoReminderChannel } from '../domain/reminder';
 import type { Item } from '../domain/item';
 import type { Occurrence } from '../domain/recurrence';
 import { buildOnceOccurrence, expandOccurrences } from '../domain/recurrence';
 import {
   computeMissed,
-  diffNotifications,
   isOurOccurrenceIdentifier,
   reminderIdentifierPrefix,
   reminderOccurrencePrefixes,
 } from './reconcileDiff';
 import {
+  ALARM_NOTIFICATION_CHANNEL_ID,
   NetworkTimerRegistry,
   createReminderChannel,
-  isNetworkReminderChannel,
+  networkTimerKey,
+  scopeReminderToChannel,
 } from './channels';
 import type {
   NetworkTimerEntry,
@@ -43,10 +49,9 @@ import type {
   ReminderChannel,
   ScopedReminder,
 } from './channels';
-import { scopeReminderToChannel } from './channels';
 import { describeError } from './channels/shared';
 
-/** 单条 reminder 最多调度的通知数（§4.16/§4.20 冻结）。 */
+/** 单条 reminder 最多调度的通知数（§4.16/§4.20 冻结；切片 18 起按「每提醒每渠道」计）。 */
 const MAX_SCHEDULED_PER_REMINDER = 30;
 
 /** 调度窗口：instant > now 且 instant <= now + 30 天（§4.16）。 */
@@ -56,6 +61,13 @@ const SCHEDULE_WINDOW_DAYS = 30;
 const RECONCILE_SCHEDULE_BUDGET = 500;
 
 const DAY_MS = 86_400_000;
+
+/** expo 家族（切片 18 提案 §6.6）：按 trigger.channelId 判定；iOS 无 channelId 退化为 'system'。 */
+type ExpoFamily = 'system' | 'alarm';
+
+function expoFamilyOf(channelId: ReminderChannelId): ExpoFamily {
+  return channelId === 'alarm' ? 'alarm' : 'system';
+}
 
 /** 前台收到通知时的展示行为（App 在前台时锁屏/横幅仍提示；后台与杀进程由系统接管）。 */
 export function configureNotificationHandler(): void {
@@ -111,7 +123,8 @@ export class WatermelonReminderScheduler implements ReminderScheduler {
       deps.registry ??
       new NetworkTimerRegistry({
         now: this.now,
-        onFire: (occurrenceKey, entry) => this.dispatchNetworkFire(occurrenceKey, entry),
+        onFire: (channelId, occurrenceKey, entry) =>
+          this.dispatchNetworkFire(channelId, occurrenceKey, entry),
       });
     const factoryDeps = {
       repository: this.repository,
@@ -132,7 +145,7 @@ export class WatermelonReminderScheduler implements ReminderScheduler {
     return [...this.logs];
   }
 
-  /** 网络渠道当前挂起的内存定时器 occurrenceKey 列表（调试/测试用，非冻结接口）。 */
+  /** 网络渠道当前挂起的内存定时器复合键列表（`channelId|occurrenceKey`；调试/测试用，非冻结接口）。 */
   getNetworkArmedKeys(): string[] {
     return this.registry.armedKeys();
   }
@@ -153,24 +166,36 @@ export class WatermelonReminderScheduler implements ReminderScheduler {
   }
 
   /**
-   * 阶段 1 编译兼容 shim（切片 18 提案 §6.7，阶段 2 fan-out 时移除）：
-   * 多渠道 Reminder → 单有效渠道视角。有效渠道 = 首个 expo 渠道 ?? 首个渠道
-   * （读层保证 ≥1，防御再兜底 DEFAULT）。阶段 1 存量数据均为单渠道，行为与 v9
-   * 逐字节等同；多渠道行（阶段 3 UI 开放前仅可能经 Repository API 产生）在本阶段
-   * 只按有效渠道调度，其余渠道阶段 2 fan-out 接管。
+   * 阶段 1 编译兼容 shim 已移除（切片 18 阶段 2）：调度路径直接消费多渠道
+   * Reminder，对每个渠道做 scopeReminderToChannel 投影（提案 §6.2/§6.4）。
    */
-  private shimScoped(reminder: Reminder): ScopedReminder {
-    const effective =
-      reminder.channels.find(isExpoReminderChannel) ??
-      reminder.channels[0] ??
-      DEFAULT_REMINDER_CHANNEL;
-    return scopeReminderToChannel(reminder, effective);
-  }
 
   /** 本 App 双族前缀（recurrence:v1| 与 once:）下的现网 identifier 集合。 */
   private async listScheduledOurKeys(): Promise<Set<string>> {
     const identifiers = await this.listScheduledIdentifiers();
     return new Set(identifiers.filter((identifier) => isOurOccurrenceIdentifier(identifier)));
+  }
+
+  /**
+   * 现网本 App identifier → expo 家族映射（切片 18 提案 §6.6）。
+   * Android 按 trigger.channelId === ALARM_NOTIFICATION_CHANNEL_ID 判 'alarm'，
+   * 否则 'system'；iOS 通知无 channelId，一律 'system'（家族判定退化，已披露）。
+   */
+  private async listScheduledOurFamilies(): Promise<Map<string, ExpoFamily>> {
+    const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+    const families = new Map<string, ExpoFamily>();
+    for (const notification of scheduled) {
+      const identifier = notification.identifier;
+      if (!isOurOccurrenceIdentifier(identifier)) {
+        continue;
+      }
+      const trigger = notification.trigger as { channelId?: string } | null;
+      families.set(
+        identifier,
+        trigger?.channelId === ALARM_NOTIFICATION_CHANNEL_ID ? 'alarm' : 'system',
+      );
+    }
+    return families;
   }
 
   /** §4.16 窗口过滤：instant > now 且 instant <= now + 30 天。 */
@@ -213,25 +238,29 @@ export class WatermelonReminderScheduler implements ReminderScheduler {
   }
 
   /** 内存定时器到点 → 对应网络渠道 deliver（NetworkTimerRegistry.onFire 入口）。 */
-  private async dispatchNetworkFire(occurrenceKey: string, entry: NetworkTimerEntry): Promise<void> {
-    const channel = this.channels[entry.reminder.channel];
-    if (!isNetworkReminderChannel(channel)) {
+  private async dispatchNetworkFire(
+    channelId: ReminderChannelId,
+    occurrenceKey: string,
+    entry: NetworkTimerEntry,
+  ): Promise<void> {
+    const channel = this.channels[channelId];
+    if (!isNetworkChannelId(channelId)) {
       // 理论不可达：只有网络渠道会往注册表挂 timer。
       console.warn(
-        `[ReminderScheduler] network timer fired for non-network channel "${entry.reminder.channel}" (${occurrenceKey})`,
+        `[ReminderScheduler] network timer fired for non-network channel "${channelId}" (${occurrenceKey})`,
       );
       return;
     }
-    await channel.deliver(entry.reminder, occurrenceKey, entry.fireAt);
+    await (channel as NetworkReminderChannel).deliver(entry.reminder, occurrenceKey, entry.fireAt);
   }
 
   /** 网络渠道实例守卫取值（scoped reminder.channel 已断言为网络 id 时使用）。 */
   private networkChannelFor(reminder: ScopedReminder): NetworkReminderChannel {
     const channel = this.channels[reminder.channel];
-    if (!isNetworkReminderChannel(channel)) {
+    if (!channel || !('deliver' in channel)) {
       throw new Error(`ReminderScheduler: channel "${reminder.channel}" is not a network channel`);
     }
-    return channel;
+    return channel as NetworkReminderChannel;
   }
 
   /** 单条取消：失败捕获记录，不中断对账其余部分。 */
@@ -276,59 +305,71 @@ export class WatermelonReminderScheduler implements ReminderScheduler {
     }
 
     const now = this.now();
-    // 阶段 1 shim（提案 §6.7）：单有效渠道视角，行为与 v9 等同。
-    const scoped = this.shimScoped(reminder);
-    const occurrences = this.expandReminderOccurrences(scoped);
+    // 多渠道 fan-out（切片 18 提案 §6.4）：occurrence 展开与渠道无关，只做一次；
+    // 每个渠道用自己的 scoped 视角调度。
+    const occurrences = this.expandReminderOccurrences(reminder);
     const windowed = this.windowOccurrences(occurrences, now);
-    const expectedKeys = new Set(windowed.map((o) => o.occurrenceKey));
-    const channel = this.channels[scoped.channel];
-
-    if (isNetworkReminderChannel(channel)) {
-      // 网络渠道：不向 OS 注册，登记/刷新内存定时器（幂等 replace）。
-      for (const occurrence of windowed) {
-        await channel.schedule(scoped, occurrence.occurrenceKey, occurrence.instant);
-      }
-      // 清掉该 reminder 名下不在期望集合内的残留定时器（如编辑后时间前移）。
-      this.registry.retainReminderKeys(reminderId, expectedKeys);
-      // 渠道切换卫生：原为 expo 渠道的残留通知一并清掉。
-      await this.cancelExpoForPrefixes(reminderOccurrencePrefixes(reminderId));
-      return;
-    }
-
-    // system / alarm：expo 集合 diff（原 v0.5 逻辑，identifier 前缀双族并认）。
     const prefixes = reminderOccurrencePrefixes(reminderId);
-    const actualKeys = await this.listScheduledOurKeys();
-    const actualForReminder = new Set(
-      [...actualKeys].filter((identifier) => prefixes.some((prefix) => identifier.startsWith(prefix))),
+    const actualFamiliesAll = await this.listScheduledOurFamilies();
+    const actualForReminder = new Map(
+      [...actualFamiliesAll].filter(([identifier]) =>
+        prefixes.some((prefix) => identifier.startsWith(prefix)),
+      ),
     );
 
-    const { toSchedule, toCancel } = diffNotifications(expectedKeys, actualForReminder);
-
-    for (const identifier of toCancel) {
-      if (await this.safeCancel(identifier)) {
-        this.log(`cancelled ${identifier}`);
+    // —— expo 渠道（至多一个，写路径互斥）：家族感知集合 diff（提案 §6.6） ——
+    const expoChannel = reminder.channels.find(isExpoReminderChannel);
+    if (expoChannel) {
+      const family = expoFamilyOf(expoChannel);
+      const expectedFamilies = new Map(windowed.map((o) => [o.occurrenceKey, family] as const));
+      // 异族残留 / 过期 key 一并取消：expected 家族与 actual 家族不一致（含 actual
+      // 有而 expected 无）即取消；同族缺缺则补排。identifier 保持纯 occurrenceKey。
+      for (const [identifier, actualFamily] of actualForReminder) {
+        if (expectedFamilies.get(identifier) !== actualFamily) {
+          if (await this.safeCancel(identifier)) {
+            this.log(`cancelled ${identifier}`);
+          }
+        }
+      }
+      const scoped = scopeReminderToChannel(reminder, expoChannel);
+      const channel = this.channels[expoChannel];
+      for (const occurrence of windowed) {
+        if (actualForReminder.get(occurrence.occurrenceKey) === family) {
+          continue;
+        }
+        try {
+          await channel.schedule(scoped, occurrence.occurrenceKey, occurrence.instant);
+          this.log(`scheduled ${occurrence.occurrenceKey}`);
+        } catch (error) {
+          // 单条调度失败（如权限被拒）必须捕获记录，不得抛到 UI（§4.20）。
+          this.log(`schedule failed for ${occurrence.occurrenceKey}: ${describeError(error)}`);
+        }
+      }
+    } else {
+      // 无 expo 渠道：该 reminder 名下全部 expo 残留通知清掉（渠道切走卫生）。
+      for (const identifier of actualForReminder.keys()) {
+        if (await this.safeCancel(identifier)) {
+          this.log(`cancelled ${identifier}`);
+        }
       }
     }
 
-    const occurrenceByKey = new Map(windowed.map((o) => [o.occurrenceKey, o] as const));
-    for (const identifier of toSchedule) {
-      const occurrence = occurrenceByKey.get(identifier);
-      if (!occurrence) {
-        // 理论不可达：expectedKeys 由 windowed 生成；保守跳过而非抛错。
-        this.log(`scheduleForReminder(${reminderId}): missing occurrence for ${identifier}`);
+    // —— 网络渠道（可多个并行）：每渠道独立登记复合键定时器（提案 §6.5） ——
+    const expectedNetworkKeys = new Set<string>();
+    for (const channelId of reminder.channels) {
+      if (!isNetworkChannelId(channelId)) {
         continue;
       }
-      try {
-        await channel.schedule(scoped, identifier, occurrence.instant);
-        this.log(`scheduled ${identifier}`);
-      } catch (error) {
-        // 单条调度失败（如权限被拒）必须捕获记录，不得抛到 UI（§4.20）。
-        this.log(`schedule failed for ${identifier}: ${describeError(error)}`);
+      const scoped = scopeReminderToChannel(reminder, channelId);
+      const channel = this.networkChannelFor(scoped);
+      for (const occurrence of windowed) {
+        expectedNetworkKeys.add(networkTimerKey(channelId, occurrence.occurrenceKey));
+        await channel.schedule(scoped, occurrence.occurrenceKey, occurrence.instant);
       }
     }
-
-    // 渠道切换卫生：expo 渠道不持有内存定时器，清掉原网络渠道的残留 timer。
-    this.registry.cancelByReminder(reminderId);
+    // 清掉该 reminder 名下不在期望复合键集合内的残留定时器（编辑后时间前移 /
+    // 渠道移除），不影响其他渠道已登记的定时器。
+    this.registry.retainReminderKeys(reminderId, expectedNetworkKeys);
   }
 
   async cancelForReminder(reminderId: string): Promise<void> {
@@ -364,6 +405,10 @@ export class WatermelonReminderScheduler implements ReminderScheduler {
    * - 切片 16：期望/现网集合 diff 只作用于 expo 渠道（system/alarm）桶——
    *   网络渠道桶不占 500 预算，靠 registry 幂等 replace + pruneExcept 收口；
    *   missed 循环对网络渠道 occurrence 立即补发一次（attempt 'ok' 抑制双发）。
+   * - 切片 18（提案 §6.4）：expo diff 升级为家族感知（expected/actual 均带
+   *   system|alarm 家族，异族残留一并取消）；网络桶按渠道 fan-out（复合键）；
+   *   missed 补发对每个（网络渠道 × occurrence）独立判 attemptStatus；
+   *   lastFiredOccurrenceKey 游标仍按 reminder 共享（一次推进）。
    */
   async reconcile(options?: { forceRebuild?: boolean }): Promise<ReconcileResult> {
     const now = this.now();
@@ -374,12 +419,14 @@ export class WatermelonReminderScheduler implements ReminderScheduler {
       this.log('reconcile: forceRebuild — cancelled ALL app notifications and network timers, rebuilding');
     }
     const reminders = await this.repository.listEnabledReminders();
-    const actualKeys = forceRebuild ? new Set<string>() : await this.listScheduledOurKeys();
+    const actualFamilies = forceRebuild
+      ? new Map<string, ExpoFamily>()
+      : await this.listScheduledOurFamilies();
 
     // §4.16（与 scheduleForReminder 同语义）：Item 不存在 / 已完成 / 已归档 → 等价 cancel。
     // 在 reconcile 中：该 reminder 不展开、不计 missed，其现网通知因不在期望集合而被对账取消。
-    // 切片 18（提案 §6.7）：entry 携带单有效渠道视角的 scoped reminder。
-    type ReconcileEntry = { reminder: ScopedReminder; item: Item; occurrences: Occurrence[] };
+    // 切片 18（提案 §6.4）：entry 携带多渠道 Reminder，渠道投影推迟到各桶内做。
+    type ReconcileEntry = { reminder: Reminder; item: Item; occurrences: Occurrence[] };
     const activeEntries: ReconcileEntry[] = [];
     for (const reminder of reminders) {
       const item = await this.repository.getItem(reminder.itemId);
@@ -389,11 +436,10 @@ export class WatermelonReminderScheduler implements ReminderScheduler {
         );
         continue;
       }
-      const scoped = this.shimScoped(reminder);
       activeEntries.push({
-        reminder: scoped,
+        reminder,
         item,
-        occurrences: this.expandReminderOccurrences(scoped),
+        occurrences: this.expandReminderOccurrences(reminder),
       });
     }
 
@@ -420,22 +466,32 @@ export class WatermelonReminderScheduler implements ReminderScheduler {
       );
 
     // 渠道分桶：expo 桶（system/alarm，受 §4.20 500 预算约束）与网络桶（webhook/apprise，
-    // 内存定时器无 OS 上限，不占预算——notifications.md v0.16 增补）。
-    const expoEntries = ordered.filter((entry) => !isNetworkChannelId(entry.reminder.channel));
-    const networkEntries = ordered.filter((entry) => isNetworkChannelId(entry.reminder.channel));
-
-    // —— expo 桶：§4.20 预算 + 集合 diff（原 v0.11 逻辑，作用于 system/alarm 提醒） ——
-    const processable: { reminder: ScopedReminder; item: Item; windowed: Occurrence[] }[] = [];
+    // 内存定时器无 OS 上限，不占预算——notifications.md v0.16 增补）。同一 reminder
+    // 可同时进两桶（多渠道并行）；expo 渠道至多一个（写路径互斥）。
+    type ExpoProcessable = {
+      scoped: ScopedReminder;
+      family: ExpoFamily;
+      windowed: Occurrence[];
+    };
+    const expoProcessable: ExpoProcessable[] = [];
     const skippedReminderIds: string[] = [];
     let used = 0;
-    for (const entry of expoEntries) {
+    for (const entry of ordered) {
+      const expoChannel = entry.reminder.channels.find(isExpoReminderChannel);
+      if (!expoChannel) {
+        continue;
+      }
       const windowed = this.windowOccurrences(entry.occurrences, now);
       if (used + windowed.length > RECONCILE_SCHEDULE_BUDGET) {
         skippedReminderIds.push(entry.reminder.id);
         continue;
       }
       used += windowed.length;
-      processable.push({ reminder: entry.reminder, item: entry.item, windowed });
+      expoProcessable.push({
+        scoped: scopeReminderToChannel(entry.reminder, expoChannel),
+        family: expoFamilyOf(expoChannel),
+        windowed,
+      });
     }
     if (skippedReminderIds.length > 0) {
       this.log(
@@ -443,16 +499,16 @@ export class WatermelonReminderScheduler implements ReminderScheduler {
       );
     }
 
-    const expectedKeys = new Set<string>();
-    for (const entry of processable) {
+    // 期望集合带家族：identifier（occurrenceKey）→ 该 reminder expo 渠道的家族。
+    const expectedFamilies = new Map<string, ExpoFamily>();
+    for (const entry of expoProcessable) {
       for (const occurrence of entry.windowed) {
-        expectedKeys.add(occurrence.occurrenceKey);
+        expectedFamilies.set(occurrence.occurrenceKey, entry.family);
       }
     }
 
-    const { toSchedule, toCancel } = diffNotifications(expectedKeys, actualKeys);
-
-    // 被预算跳过的 reminder：本轮不动其现有通知（避免取消-重排抖动），只跳过不清理。
+    // 家族感知 diff（提案 §6.6）：actual 有而 expected 家族不符（含 stale）→ 取消；
+    // expected 有而 actual 家族不符（含缺失）→ 补排。
     const skippedPrefixes = skippedReminderIds.map(reminderIdentifierPrefix);
     const isSkipped = (identifier: string): boolean =>
       skippedPrefixes.some((prefix) => identifier.startsWith(prefix));
@@ -460,8 +516,12 @@ export class WatermelonReminderScheduler implements ReminderScheduler {
     const newlyScheduled: string[] = [];
     const cancelled: string[] = [];
 
-    for (const identifier of toCancel) {
+    for (const [identifier, actualFamily] of actualFamilies) {
+      if (expectedFamilies.get(identifier) === actualFamily) {
+        continue;
+      }
       if (isSkipped(identifier)) {
+        // 被预算跳过的 reminder：本轮不动其现有通知（避免取消-重排抖动），只跳过不清理。
         continue;
       }
       if (await this.safeCancel(identifier)) {
@@ -470,15 +530,14 @@ export class WatermelonReminderScheduler implements ReminderScheduler {
       }
     }
 
-    const toScheduleSet = new Set(toSchedule);
-    for (const entry of processable) {
-      const channel = this.channels[entry.reminder.channel];
+    for (const entry of expoProcessable) {
+      const channel = this.channels[entry.scoped.channel];
       for (const occurrence of entry.windowed) {
-        if (!toScheduleSet.has(occurrence.occurrenceKey)) {
+        if (actualFamilies.get(occurrence.occurrenceKey) === entry.family) {
           continue;
         }
         try {
-          await channel.schedule(entry.reminder, occurrence.occurrenceKey, occurrence.instant);
+          await channel.schedule(entry.scoped, occurrence.occurrenceKey, occurrence.instant);
           newlyScheduled.push(occurrence.occurrenceKey);
           this.log(`scheduled ${occurrence.occurrenceKey}`);
         } catch (error) {
@@ -488,26 +547,32 @@ export class WatermelonReminderScheduler implements ReminderScheduler {
       }
     }
 
-    // —— 网络桶：内存定时器重建（进程重启自愈）+ 陈旧清理 ——
+    // —— 网络桶：每渠道 fan-out，内存定时器重建（进程重启自愈）+ 陈旧清理 ——
     // channel.schedule 即 registry.replace（幂等）；编辑/切渠道后 URL 等配置随
     // reminder 快照刷新。不占 §4.20 预算。
     const networkExpectedKeys = new Set<string>();
-    for (const entry of networkEntries) {
+    for (const entry of ordered) {
       const windowed = this.windowOccurrences(entry.occurrences, now);
-      const channel = this.networkChannelFor(entry.reminder);
-      for (const occurrence of windowed) {
-        networkExpectedKeys.add(occurrence.occurrenceKey);
-        await channel.schedule(entry.reminder, occurrence.occurrenceKey, occurrence.instant);
+      for (const channelId of entry.reminder.channels) {
+        if (!isNetworkChannelId(channelId)) {
+          continue;
+        }
+        const scoped = scopeReminderToChannel(entry.reminder, channelId);
+        const channel = this.networkChannelFor(scoped);
+        for (const occurrence of windowed) {
+          networkExpectedKeys.add(networkTimerKey(channelId, occurrence.occurrenceKey));
+          await channel.schedule(scoped, occurrence.occurrenceKey, occurrence.instant);
+        }
       }
     }
     // 覆盖：渠道切走 / disabled / item 失活 / 删除 的网络提醒残留定时器。
     this.registry.pruneExcept(networkExpectedKeys);
 
     // —— missed 判定：对全部 enabled reminder 生效（含被预算跳过者）；
-    // 去重靠 markReminderFired 推进游标（§4.19）。网络渠道的 missed occurrence
-    // 立即补发一次：本进程内已确认投递（attempt 'ok'）则跳过防双发；否则先撤掉
-    // 可能仍在挂起的定时器再 deliver——补发与定时器到点互斥（at-least-once 边界见
-    // notifications.md v0.16）。
+    // 去重靠 markReminderFired 推进游标（§4.19，游标按 reminder 共享一次推进）。
+    // 网络渠道的 missed occurrence 按渠道独立补发：本进程内该渠道已确认投递
+    // （attempt 'ok'）则跳过防双发；否则先撤掉该渠道可能仍在挂起的定时器再
+    // deliver——补发与定时器到点互斥（at-least-once 边界见 notifications.md v0.16）。
     const missed: Occurrence[] = [];
     for (const entry of ordered) {
       const reminderMissed = computeMissed(
@@ -516,14 +581,18 @@ export class WatermelonReminderScheduler implements ReminderScheduler {
         now,
       );
       if (reminderMissed.length > 0) {
-        if (isNetworkChannelId(entry.reminder.channel)) {
-          const channel = this.networkChannelFor(entry.reminder);
+        for (const channelId of entry.reminder.channels) {
+          if (!isNetworkChannelId(channelId)) {
+            continue;
+          }
+          const scoped = scopeReminderToChannel(entry.reminder, channelId);
+          const channel = this.networkChannelFor(scoped);
           for (const occurrence of reminderMissed) {
-            if (this.registry.attemptStatus(occurrence.occurrenceKey) === 'ok') {
+            if (this.registry.attemptStatus(channelId, occurrence.occurrenceKey) === 'ok') {
               continue;
             }
-            this.registry.cancel(occurrence.occurrenceKey);
-            await channel.deliver(entry.reminder, occurrence.occurrenceKey, occurrence.instant);
+            this.registry.cancel(channelId, occurrence.occurrenceKey);
+            await channel.deliver(scoped, occurrence.occurrenceKey, occurrence.instant);
           }
         }
         const lastMissedKey = reminderMissed[reminderMissed.length - 1].occurrenceKey;

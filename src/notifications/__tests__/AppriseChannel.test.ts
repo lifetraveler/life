@@ -1,5 +1,5 @@
 import { AppriseChannel } from '../channels/AppriseChannel';
-import { NetworkTimerRegistry } from '../channels/networkTimers';
+import { NetworkTimerRegistry, networkTimerKey } from '../channels/networkTimers';
 import type { NetworkChannelDeps } from '../channels/types';
 import { stubRepositoryWith, testItem, testReminder, TEST_NOW } from './channelTestSupport';
 
@@ -92,7 +92,7 @@ describe('AppriseChannel（切片 16 阶段 2）', () => {
 
     expect(status).toBe('failed');
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(registry.attemptStatus('once:rA:bad')).toBe('failed');
+    expect(registry.attemptStatus('apprise', 'once:rA:bad')).toBe('failed');
   });
 
   it('deliver：channelConfig 缺失返回 failed 且不发起 fetch', async () => {
@@ -113,7 +113,7 @@ describe('AppriseChannel（切片 16 阶段 2）', () => {
     const status = await channel.deliver(reminder, 'once:rA:502', TEST_NOW);
 
     expect(status).toBe('failed');
-    expect(registry.attemptStatus('once:rA:502')).toBe('failed');
+    expect(registry.attemptStatus('apprise', 'once:rA:502')).toBe('failed');
   });
 
   it('schedule/cancel 只操作内存定时器，不发起 fetch', async () => {
@@ -121,7 +121,7 @@ describe('AppriseChannel（切片 16 阶段 2）', () => {
     const reminder = reminderWithConfig(JSON.stringify({ baseUrl: 'http://apprise.local', key: 'k' }));
 
     await channel.schedule(reminder, 'once:rA:future', TEST_NOW + 1000);
-    expect(registry.armedKeys()).toEqual(['once:rA:future']);
+    expect(registry.armedKeys()).toEqual([networkTimerKey('apprise', 'once:rA:future')]);
 
     await channel.cancel('rA');
     expect(registry.armedKeys()).toEqual([]);

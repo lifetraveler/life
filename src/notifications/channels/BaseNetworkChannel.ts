@@ -28,17 +28,18 @@ export abstract class BaseNetworkChannel implements NetworkReminderChannel {
 
   /** 不向 OS 注册：登记内存定时器（幂等 replace，重建/刷新均安全）。 */
   async schedule(reminder: ScopedReminder, occurrenceKey: string, fireAt: number): Promise<void> {
-    this.deps.registry.replace(occurrenceKey, {
+    this.deps.registry.replace(this.channel, occurrenceKey, {
       reminderId: reminder.id,
       fireAt,
       reminder,
+      channelId: this.channel,
     });
   }
 
-  /** 取消内存定时器；occurrenceKey 缺省时清该 reminder 名下全部。 */
+  /** 取消内存定时器；occurrenceKey 缺省时清该 reminder 名下全部（跨渠道）。 */
   async cancel(reminderId: string, occurrenceKey?: string): Promise<void> {
     if (occurrenceKey !== undefined) {
-      this.deps.registry.cancel(occurrenceKey);
+      this.deps.registry.cancel(this.channel, occurrenceKey);
       return;
     }
     this.deps.registry.cancelByReminder(reminderId);
@@ -56,7 +57,7 @@ export abstract class BaseNetworkChannel implements NetworkReminderChannel {
         console.warn(
           `[ReminderChannel:${this.channel}] deliver skipped for ${occurrenceKey}: item missing or not active`,
         );
-        this.deps.registry.recordAttempt(occurrenceKey, 'failed');
+        this.deps.registry.recordAttempt(this.channel, occurrenceKey, 'failed');
         return 'failed';
       }
       const delivered = await this.send(reminder, occurrenceKey, fireAt, item);
@@ -64,13 +65,13 @@ export abstract class BaseNetworkChannel implements NetworkReminderChannel {
       if (!delivered) {
         console.warn(`[ReminderChannel:${this.channel}] deliver failed for ${occurrenceKey}: non-2xx response`);
       }
-      this.deps.registry.recordAttempt(occurrenceKey, status);
+      this.deps.registry.recordAttempt(this.channel, occurrenceKey, status);
       return status;
     } catch (error) {
       console.warn(
         `[ReminderChannel:${this.channel}] deliver failed for ${occurrenceKey}: ${describeError(error)}`,
       );
-      this.deps.registry.recordAttempt(occurrenceKey, 'failed');
+      this.deps.registry.recordAttempt(this.channel, occurrenceKey, 'failed');
       return 'failed';
     }
   }

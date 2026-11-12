@@ -1,8 +1,9 @@
 import * as Notifications from 'expo-notifications';
 import type { NotificationRequest, NotificationRequestInput } from 'expo-notifications';
+import { Platform } from 'react-native';
 
 import { WatermelonReminderScheduler } from '../ReminderScheduler';
-import { NetworkTimerRegistry } from '../channels';
+import { ALARM_NOTIFICATION_CHANNEL_ID, NetworkTimerRegistry, networkTimerKey } from '../channels';
 import { buildOccurrenceKey } from '../../domain/recurrence';
 import type { CreateItemInput, Item } from '../../domain/item';
 import type { Category } from '../../domain/category';
@@ -163,12 +164,15 @@ function storedRequest(identifier: string): NotificationRequest {
 
 jest.mock('expo-notifications', () => ({
   SchedulableTriggerInputTypes: { DATE: 'date' },
+  AndroidImportance: { MAX: 'max' },
   getAllScheduledNotificationsAsync: jest.fn(),
   scheduleNotificationAsync: jest.fn(),
   cancelScheduledNotificationAsync: jest.fn(),
   cancelAllScheduledNotificationsAsync: jest.fn(),
   setNotificationHandler: jest.fn(),
   getPermissionsAsync: jest.fn(),
+  // 切片 18 家族测试（alarm 渠道 android 分支需要）：通道创建 mock 为成功 no-op。
+  setNotificationChannelAsync: jest.fn(),
 }));
 
 const getAllScheduledNotificationsAsyncMock = jest.mocked(
@@ -769,6 +773,36 @@ describe('WatermelonReminderScheduler（mock expo-notifications）', () => {
       };
     }
 
+    // 多渠道 once 夹具（切片 18）：显式 channels + channelConfigs。
+    function multiOnceReminder(
+      id: string,
+      itemId: string,
+      onceAt: { year: number; month: number; day: number; hour: number; minute: number },
+      channels: Reminder['channels'],
+      channelConfigs: Reminder['channelConfigs'],
+      tzid: string = 'UTC',
+    ): Reminder {
+      return {
+        id,
+        itemId,
+        frequency: 'once',
+        localTimeHour: 0,
+        localTimeMinute: 0,
+        weekdays: [],
+        dayOfMonth: 0,
+        onceAt,
+        channels,
+        channelConfigs,
+        tzid,
+        startAt: FIXED_NOW,
+        enabled: true,
+        lastFiredOccurrenceKey: null,
+        lastReconciledAt: null,
+        createdAt: FIXED_NOW - 1,
+        updatedAt: FIXED_NOW - 1,
+      };
+    }
+
     // 排干 deliver/fetch 微任务链，使 timer 触发的异步投递断言稳定。
     async function flushAsync(): Promise<void> {
       for (let i = 0; i < 20; i += 1) {
@@ -822,7 +856,7 @@ describe('WatermelonReminderScheduler（mock expo-notifications）', () => {
       await scheduler.scheduleForReminder('rW');
 
       expect(scheduleNotificationAsyncMock).not.toHaveBeenCalled();
-      expect(scheduler.getNetworkArmedKeys()).toEqual([key]);
+      expect(scheduler.getNetworkArmedKeys()).toEqual([networkTimerKey('webhook', key)]);
       expect(fetchMock).not.toHaveBeenCalled();
 
       nowMs = fireAt;
@@ -866,7 +900,7 @@ describe('WatermelonReminderScheduler（mock expo-notifications）', () => {
       fetchMock.mockResolvedValue({ ok: true, status: 200 } as Response);
       // 注入 registry 并预记 ok：模拟本进程早前已成功投递该 occurrence。
       const registry = new NetworkTimerRegistry({ now: () => FIXED_NOW, onFire: () => undefined });
-      registry.recordAttempt(key, 'ok');
+      registry.recordAttempt('webhook', key, 'ok');
       const scheduler = new WatermelonReminderScheduler({
         repository,
         now: () => FIXED_NOW,
@@ -940,7 +974,7 @@ describe('WatermelonReminderScheduler（mock expo-notifications）', () => {
       await scheduler.scheduleForReminder('rX');
 
       expect(scheduledStore.size).toBe(0);
-      expect(scheduler.getNetworkArmedKeys()).toEqual([key]);
+      expect(scheduler.getNetworkArmedKeys()).toEqual([networkTimerKey('webhook', key)]);
     });
 
     it('渠道切换卫生：webhook→system 后内存定时器被清、expo 正常注册', async () => {
@@ -954,7 +988,7 @@ describe('WatermelonReminderScheduler（mock expo-notifications）', () => {
       );
       const scheduler = makeChannelScheduler(repository);
       await scheduler.scheduleForReminder('rX');
-      expect(scheduler.getNetworkArmedKeys()).toEqual([key]);
+      expect(scheduler.getNetworkArmedKeys()).toEqual([networkTimerKey('webhook', key)]);
 
       const reminder = repository.reminders.get('rX');
       if (!reminder) throw new Error('rX missing');
@@ -1008,6 +1042,205 @@ describe('WatermelonReminderScheduler（mock expo-notifications）', () => {
       expect(scheduleNotificationAsyncMock).not.toHaveBeenCalled();
       expect(scheduler.getNetworkArmedKeys()).toEqual([]);
       expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('多渠道并行 once（system-notification+webhook）：expo 注册与网络定时器并存', async () => {
+      jest.useFakeTimers();
+      const fireAt = Date.UTC(2025, 5, 15, 9, 0);
+      const key = `once:rM:${fireAt}`;
+      repository.items.set('iM', activeItem('iM', '标题己'));
+      repository.reminders.set(
+        'rM',
+        multiOnceReminder(
+          'rM',
+          'iM',
+          { year: 2025, month: 6, day: 15, hour: 9, minute: 0 },
+          ['system-notification', 'webhook'],
+          { webhook: 'https://hook.example/both' },
+        ),
+      );
+      const scheduler = makeChannelScheduler(repository);
+
+      await scheduler.scheduleForReminder('rM');
+
+      expect(scheduleNotificationAsyncMock).toHaveBeenCalledTimes(1);
+      expect(scheduleNotificationAsyncMock.mock.calls[0][0].identifier).toBe(key);
+      expect(scheduler.getNetworkArmedKeys()).toEqual([networkTimerKey('webhook', key)]);
+    });
+
+    it('多渠道并行 once（webhook+apprise）：两渠道各自持有同 occurrence 定时器，到点双投递', async () => {
+      jest.useFakeTimers();
+      const fireAt = Date.UTC(2025, 5, 15, 9, 0);
+      const key = `once:rN:${fireAt}`;
+      repository.items.set('iN', activeItem('iN', '标题庚'));
+      repository.reminders.set(
+        'rN',
+        multiOnceReminder(
+          'rN',
+          'iN',
+          { year: 2025, month: 6, day: 15, hour: 9, minute: 0 },
+          ['webhook', 'apprise'],
+          {
+            webhook: 'https://hook.example/n1',
+            apprise: JSON.stringify({ baseUrl: 'http://apprise.local', key: 'k' }),
+          },
+        ),
+      );
+      fetchMock.mockResolvedValue({ ok: true, status: 200 } as Response);
+      const scheduler = makeChannelScheduler(repository);
+
+      await scheduler.scheduleForReminder('rN');
+
+      expect(scheduler.getNetworkArmedKeys()).toEqual([
+        networkTimerKey('webhook', key),
+        networkTimerKey('apprise', key),
+      ]);
+
+      nowMs = fireAt;
+      jest.advanceTimersByTime(fireAt - FIXED_NOW);
+      await flushAsync();
+
+      const urls = fetchMock.mock.calls.map(([url]) => url);
+      expect(urls).toContain('https://hook.example/n1');
+      expect(urls.some((url) => String(url).startsWith('http://apprise.local'))).toBe(true);
+    });
+
+    it('渠道切换 system→alarm：家族感知 diff 取消旧通知并重排为 alarm 触发器', async () => {
+      const originalOS = Platform.OS;
+      Object.defineProperty(Platform, 'OS', { value: 'android', configurable: true });
+      try {
+        const fireAt = Date.UTC(2025, 5, 15, 9, 0);
+        const key = `once:rF:${fireAt}`;
+        repository.items.set('iF', activeItem('iF', '标题辛'));
+        repository.reminders.set(
+          'rF',
+          onceReminder('rF', 'iF', { year: 2025, month: 6, day: 15, hour: 9, minute: 0 }, 'system-notification', null),
+        );
+        const scheduler = makeChannelScheduler(repository);
+        await scheduler.scheduleForReminder('rF');
+        expect(scheduledStore.has(key)).toBe(true);
+
+        const reminder = repository.reminders.get('rF');
+        if (!reminder) throw new Error('rF missing');
+        reminder.channels = ['alarm'];
+
+        await scheduler.scheduleForReminder('rF');
+
+        // 同 identifier、异家族 → 取消旧 + 重排新（trigger 带 alarm channelId）。
+        expect(cancelScheduledNotificationAsyncMock).toHaveBeenCalledWith(key);
+        expect(scheduledStore.has(key)).toBe(true);
+        const alarmCall = scheduleNotificationAsyncMock.mock.calls.find(
+          ([request]) =>
+            request.identifier === key &&
+            (request.trigger as { channelId?: string }).channelId === ALARM_NOTIFICATION_CHANNEL_ID,
+        );
+        expect(alarmCall).toBeDefined();
+      } finally {
+        Object.defineProperty(Platform, 'OS', { value: originalOS, configurable: true });
+      }
+    });
+
+    it('reconcile 家族感知：存量 system 通知 + reminder 改 alarm → 取消并按 alarm 重排', async () => {
+      const originalOS = Platform.OS;
+      Object.defineProperty(Platform, 'OS', { value: 'android', configurable: true });
+      try {
+        const fireAt = Date.UTC(2025, 5, 15, 9, 0);
+        const key = `once:rY:${fireAt}`;
+        repository.items.set('iY', activeItem('iY', '标题壬'));
+        repository.reminders.set(
+          'rY',
+          onceReminder('rY', 'iY', { year: 2025, month: 6, day: 15, hour: 9, minute: 0 }, 'system-notification', null),
+        );
+        const scheduler = makeChannelScheduler(repository);
+        await scheduler.scheduleForReminder('rY');
+
+        const reminder = repository.reminders.get('rY');
+        if (!reminder) throw new Error('rY missing');
+        reminder.channels = ['alarm'];
+
+        const result = await scheduler.reconcile();
+
+        expect(result.cancelled).toEqual([key]);
+        expect(result.newlyScheduled).toEqual([key]);
+        const alarmCall = scheduleNotificationAsyncMock.mock.calls.find(
+          ([request]) =>
+            request.identifier === key &&
+            (request.trigger as { channelId?: string }).channelId === ALARM_NOTIFICATION_CHANNEL_ID,
+        );
+        expect(alarmCall).toBeDefined();
+      } finally {
+        Object.defineProperty(Platform, 'OS', { value: originalOS, configurable: true });
+      }
+    });
+
+    it('reconcile 双网络渠道 missed 补发：attempt 按渠道独立（webhook ok 不抑制 apprise）', async () => {
+      const fireAt = Date.UTC(2025, 5, 9, 9, 0);
+      const key = `once:rP:${fireAt}`;
+      repository.items.set('iP', activeItem('iP', '标题癸'));
+      repository.reminders.set(
+        'rP',
+        multiOnceReminder(
+          'rP',
+          'iP',
+          { year: 2025, month: 6, day: 9, hour: 9, minute: 0 },
+          ['webhook', 'apprise'],
+          {
+            webhook: 'https://hook.example/p1',
+            apprise: JSON.stringify({ baseUrl: 'http://apprise.local', key: 'k' }),
+          },
+        ),
+      );
+      fetchMock.mockResolvedValue({ ok: true, status: 200 } as Response);
+      // 预记 webhook 渠道 ok：模拟本进程早前 webhook 已成功投递该 occurrence。
+      const registry = new NetworkTimerRegistry({ now: () => FIXED_NOW, onFire: () => undefined });
+      registry.recordAttempt('webhook', key, 'ok');
+      const scheduler = new WatermelonReminderScheduler({
+        repository,
+        now: () => FIXED_NOW,
+        fetchImpl: fetchMock,
+        registry,
+      });
+
+      const result = await scheduler.reconcile();
+
+      // 游标按 reminder 共享推进一次；两渠道 occurrence 均计入 missed。
+      expect(result.missed.map((o) => o.occurrenceKey)).toEqual([key]);
+      expect(repository.firedMarks).toEqual([{ id: 'rP', occurrenceKey: key }]);
+      // webhook 被 attempt ok 抑制，apprise 照常补发。
+      const urls = fetchMock.mock.calls.map(([url]) => url);
+      expect(urls).not.toContain('https://hook.example/p1');
+      expect(urls.some((url) => String(url).startsWith('http://apprise.local'))).toBe(true);
+      expect(scheduler.getNetworkArmedKeys()).toEqual([]);
+    });
+
+    it('reconcile 双网络渠道同时补发：两渠道各投递一次，游标仍只推进一次', async () => {
+      const fireAt = Date.UTC(2025, 5, 9, 9, 0);
+      const key = `once:rQ:${fireAt}`;
+      repository.items.set('iQ', activeItem('iQ', '标题甲'));
+      repository.reminders.set(
+        'rQ',
+        multiOnceReminder(
+          'rQ',
+          'iQ',
+          { year: 2025, month: 6, day: 9, hour: 9, minute: 0 },
+          ['webhook', 'apprise'],
+          {
+            webhook: 'https://hook.example/q1',
+            apprise: JSON.stringify({ baseUrl: 'http://apprise.local', key: 'k' }),
+          },
+        ),
+      );
+      fetchMock.mockResolvedValue({ ok: true, status: 200 } as Response);
+      const scheduler = makeChannelScheduler(repository);
+
+      const result = await scheduler.reconcile();
+
+      expect(result.missed.map((o) => o.occurrenceKey)).toEqual([key]);
+      expect(repository.firedMarks).toEqual([{ id: 'rQ', occurrenceKey: key }]);
+      const urls = fetchMock.mock.calls.map(([url]) => url);
+      expect(urls).toContain('https://hook.example/q1');
+      expect(urls.some((url) => String(url).startsWith('http://apprise.local'))).toBe(true);
+      expect(scheduleNotificationAsyncMock).not.toHaveBeenCalled();
     });
   });
 });
