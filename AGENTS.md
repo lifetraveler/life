@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.16
+版本：v0.17
 
 ## 1. 项目概览
 
@@ -226,10 +226,18 @@ schema 版本 5→6，新增/修改如下：
   2. Webhook/Apprise 渠道：前台直接 fetch，不引入后台常驻任务。UI 必须注明“仅 App 存活时保证推送”。
   3. 若开启多渠道，本地系统通知和网络推送可同时触发（互不干扰）。
 
+### 7.27 提醒渠道配置中心（v0.17）
+- 允许将 Webhook/Apprise 的常用配置抽取到全局（`app_settings` 或新表 `channel_presets`），在详情页只做选择，不强迫用户每次输入长 URL。
+- Webhook 载荷适配：支持模板配置，允许适配如 Zulip、企业微信、钉钉等特定格式（在 JSON 外包装特定的 key，或支持纯文本 POST）。
+
+### 7.28 交互打磨与导入预览（v0.17）
+- **once 时间录入**：废弃手输格式，必须使用日期/时间 Picker，且提供“+10分钟/+1小时”等快捷 Chips，确保生成的 `{year,month,day,hour,minute}` 必定合法（拦截 02-30）。
+- **导入预览**：ICS 和系统日历导入时必须先进入预览页，展示解析结果，默认勾选新增项，确认后才落库。
 
 ## 8. 当前切片
-tasks/slice-16.md（已完成：一次性提醒 + 四渠道推送，closeout 见 tasks/slice-16-closeout.md；
-后续切片候选（Webhook 内容适配 / 渠道配置迁设置页 / once 触发时刻录入增强）见 closeout「后续切片候选」节）
+tasks/slice-17.md（已完成：渠道配置中心 + Webhook 载荷适配 + once 录入增强 + 导入预览，
+closeout 见 tasks/slice-17-closeout.md；后续切片候选（Chips 增量值可改 / 渠道预设默认填充 /
+多渠道同开——需变更提案）见 closeout「后续切片候选」节）
 
 
 

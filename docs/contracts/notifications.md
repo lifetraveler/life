@@ -114,3 +114,38 @@
   lastFiredOccurrenceKey，不引入 AsyncStorage / WorkManager（§4.19 精神延续）。
 - 渠道互不干扰：多渠道提醒各自独立调度（§7.26 渠道实现约束 3）；reminder 更换渠道时，
   调度器负责清理旧渠道残留（expo 通知或内存定时器）。
+## Webhook 载荷模板（v0.17，切片 17 阶段 1 落地）
+
+> 依据：AGENTS.md §7.27「Webhook 载荷适配」。本节是 v0.16 渠道抽象中
+> WebhookChannel 的增补；兼容策略保证切片 16 存量提醒零行为变化。
+
+### channel_config 存储形态
+
+reminders.channel_config（channel='webhook'）自 v0.17 起支持两种形态：
+
+- 旧形态：纯 URL 字符串（切片 16 全部存量数据）。等价新形态
+  `{url, mode:'json'}`，行为逐字段一致（兼容读，不做数据迁移）。
+- 新形态（JSON 对象）：
+  - `url`：必填，http(s)；
+  - `mode`：`'json' | 'form' | 'text'`，缺省 `'json'`；
+  - `headers`：可选 `Record<string,string>`，键值 trim 后必须非空；合并顺序为
+    mode 默认头在前、config.headers 覆盖（json→`application/json`，
+    form→`application/x-www-form-urlencoded`，text→`text/plain; charset=utf-8`）；
+  - `payloadTemplate`：形态由 mode 决定——json 可缺省（缺省 = 切片 16 固定 payload，
+    零行为变化）、存在时任意 JSON 树；form 必填且为扁平 `Record<string,string>`；
+    text 必填且为字符串。
+
+配置解析经手写类型守卫（`parseWebhookChannelConfig`，§7.24 同款纪律，错误前缀
+`WebhookChannel: `）；解析失败由 deliver 捕获记 failed，不抛出到调度层。
+
+### 模板变量与替换规则
+
+- 变量集（v1）：`{{title}} {{body}} {{content}} {{occurrenceKey}} {{reminderId}} {{itemId}} {{fireAt}} {{sentAt}}`
+  （fireAt / sentAt 为毫秒时间戳的字符串形态；body = notificationBody 归一文本）。
+- 命中变量 → 替换；**未知占位符保留原文**（不静默清空——配置写错时在消息里可见，便于排障）；
+- 不支持转义语法：字面 `{{` 原样输出；
+- json 模式递归渲染：仅 string 叶子替换，对象/数组结构保留，number/boolean/null 原样，
+  产出后整体 JSON.stringify（引号/换行等特殊字符由 stringify 统一转义）；
+- form 模式：逐值渲染后经 URLSearchParams 编码（键不渲染：键是收件端协议参数名），
+  典型场景 Zulip `external/zulip`（type=stream，to/topic/content）；
+- text 模式：渲染后作为原始 body（纯文本 POST）。

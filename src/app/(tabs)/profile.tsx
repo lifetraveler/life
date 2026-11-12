@@ -17,9 +17,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { itemRepository } from '../../data';
 import { serializeExportData } from '../../domain/export';
 import { buildIcs } from '../../domain/ics/buildIcs';
-import { parseIcs } from '../../domain/ics/parseIcs';
 import type { AppSettings, TagDisplayMode } from '../../domain/settings';
-import { reminderScheduler } from '../../notifications';
 import TagChip from '../../ui/TagChip';
 import { getDeviceTzid } from '../../ui/timeFormat';
 import { refreshWidgetDataNow } from '../../widget';
@@ -27,12 +25,14 @@ import {
   setLastExportResult,
   setLastImportResult,
 } from '../../ui/transferResultStore';
+import { setLastImportPreview } from '../../ui/importPreviewStore';
 
 /**
  * 「我的」Tab（切片 14 阶段 5：原 src/app/settings.tsx 移入 (tabs)/profile.tsx，
  * 去导航头、顶部加大标题「我的」，toki_1.webp 底部第 4 入口）。
  * 设置页正文（切片 8/9，tasks/slice-08.md 实现要求 4/5、tasks/slice-09.md 实现要求 3）：
- * - 导入 ICS：DocumentPicker 选文件 → parseIcs → importItemsInBatches → 结果页；
+ * - 导入 ICS：DocumentPicker 选文件 → generateIcsPreview → /import-preview 预览页
+ *   （切片 17 阶段 2，§7.28：先预览勾选，确认后才 importItemsInBatches 落库 → 结果页）；
  *   导入完成后 fire-and-forget 触发一次 reconcile()（失败不阻断结果页）；
  * - 导出 ICS：listItemsForExport → buildIcs → 写入 cache 目录 → Sharing 分享 → 成功页；
  * - 导出 JSON（切片 12，tasks/slice-12.md 实现要求 3）：默认列表 ∪ 归档列表 + 全库
@@ -223,30 +223,27 @@ export default function SettingsPage() {
         return;
       }
       const text = await FileSystem.readAsStringAsync(asset.uri);
-      const parsed = parseIcs(text, getDeviceTzid());
-      const batch = await itemRepository.importItemsInBatches(
-        parsed.events.map((event) => event.input),
-      );
-      setLastImportResult({
-        createdCount: batch.createdCount,
-        skippedDuplicateCount: batch.skippedDuplicateCount,
-        floatingCount: parsed.events.filter((event) => event.floating).length,
-        failures: [
-          ...parsed.failures,
-          ...batch.failures.map((failure) => ({
-            summary: failure.title,
-            reason: failure.reason,
-          })),
-        ],
+      // 切片 17 阶段 2（AGENTS.md §7.28）：导入先预览——解析 + 本地去重标记，
+      // 纯读不落库；勾选确认后由 /import-preview 页调用 importItemsInBatches 落库。
+      const result = await itemRepository.generateIcsPreview(text, getDeviceTzid());
+      setLastImportPreview({
+        source: 'ics',
         fileName: asset.name ?? null,
+        entries: result.entries.map((entry) => ({
+          input: entry.input,
+          floating: entry.floating,
+          isDuplicate: entry.isDuplicate,
+          existingItemId: entry.existingItemId,
+        })),
+        failures: result.failures.map((failure) => ({
+          summary: failure.summary,
+          reason: failure.reason,
+        })),
+        sameFileDuplicates: result.sameFileDuplicates,
+        duplicateCount: result.duplicateCount,
+        meta: null,
       });
-      // 任务卡实现要求 4：导入完成后触发一次 reconcile()；fire-and-forget，失败不阻断结果页。
-      void reminderScheduler
-        .reconcile()
-        .catch((error: unknown) => {
-          console.warn('[slice-08] 导入后 reconcile 失败', error);
-        });
-      router.push('/import-result');
+      router.push('/import-preview');
     } catch (error) {
       console.warn('[slice-08] 导入失败', error);
       Alert.alert('导入失败', error instanceof Error ? error.message : String(error));
@@ -415,10 +412,20 @@ export default function SettingsPage() {
         {widgetError !== null ? <Text style={styles.errorHint}>{widgetError}</Text> : null}
       </View>
 
+      {/* 切片 17 阶段 2：提醒渠道预设管理（AGENTS.md §7.27） */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>提醒渠道</Text>
+        <Text style={styles.hint}>管理 Webhook / Apprise 渠道预设，在提醒详情页直接选择。</Text>
+        <Pressable style={styles.navRow} onPress={() => router.push('/settings/channels')}>
+          <Text style={styles.navLabel}>渠道预设管理</Text>
+          <Text style={styles.navChevron}>›</Text>
+        </Pressable>
+      </View>
+
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>导入</Text>
         <Text style={styles.hint}>
-          选择一个 .ics 文件（如 Google Calendar 导出）。重复 UID 自动去重；只读项可在详情页删除本地副本。
+          选择一个 .ics 文件（如 Google Calendar 导出）。先预览勾选，确认后才写入；重复项置灰默认不选。
         </Text>
         <Pressable
           style={[styles.primaryButton, busy !== null && styles.disabled]}

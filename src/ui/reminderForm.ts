@@ -18,6 +18,8 @@ import type {
 } from '../domain/reminder';
 import { REMINDER_CHANNELS } from '../domain/reminder';
 import { REMINDER_TZ_WHITELIST, isWhitelistedReminderTz } from '../data/reminderTzWhitelist';
+import { parseWebhookChannelConfig } from '../notifications/channels/webhookConfig';
+import type { ChannelPreset } from '../domain/channelPreset';
 
 /** 表单可编辑值：数值字段允许 null（未填），提交前必须通过 validateReminderForm */
 export interface ReminderFormValues {
@@ -39,6 +41,12 @@ export interface ReminderFormValues {
   /** apprise 渠道的 BaseURL / Key 两个独立输入（stateful 简写；urls/stateless 不在 UI 暴露） */
   appriseBaseUrl: string;
   appriseKey: string;
+  /**
+   * 切片 17 阶段 2：当前选中渠道预设的 id（纯 UI 状态，不进入 Repository 输入）。
+   * 选中预设 = 整串值复制进 channelConfigText / apprise 字段，此后与预设无关联
+   * （删除预设不影响已保存提醒，§7.27）；null 表示未选或为「当前配置（未关联预设）」。
+   */
+  channelPresetId: string | null;
 }
 
 export interface ReminderFormErrors {
@@ -91,6 +99,31 @@ export const NETWORK_CHANNEL_BOUNDARY_NOTICE = '网络推送仅在 App 进程存
  */
 export function isValidHttpUrl(raw: string): boolean {
   return /^https?:\/\/\S+$/i.test(raw);
+}
+
+/**
+ * Webhook 配置 JSON 形态守卫（切片 17 阶段 2）：渠道预设的 configJson 是
+ * 含 url + mode + payloadTemplate 的完整配置 JSON（§7.27），选预设=整串复制进
+ * channelConfigText 后不能按纯 URL 校验。守卫入口 parseWebhookChannelConfig
+ * 只收 string|null（内部 JSON.parse，非 JSON 串会被当 URL 放行），故此处先验
+ * 「JSON 对象形态」再复用守卫的对象分支校验（url 必填 http(s)、payloadTemplate
+ * 与 mode 配套）。纯 TS 无 expo 依赖，UI 层引用合规（ChannelPresetEditor 同先例）。
+ */
+export function isWebhookConfigJson(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith('{')) {
+    return false;
+  }
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return false;
+    }
+    parseWebhookChannelConfig(JSON.stringify(parsed));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** 'YYYY-MM-DD' → { year, month, day }；格式或范围不符返回 null（月内日历有效性按契约留给调度侧换算判定） */
@@ -216,8 +249,11 @@ export function validateReminderForm(values: ReminderFormValues): ReminderFormEr
     const url = values.channelConfigText.trim();
     if (url.length === 0) {
       errors.channelConfig = 'Webhook URL 不能为空';
-    } else if (!isValidHttpUrl(url)) {
-      errors.channelConfig = 'URL 格式无效（需以 http:// 或 https:// 开头）';
+    } else if (!isValidHttpUrl(url) && !isWebhookConfigJson(url)) {
+      // 切片 17 阶段 2：选预设=整串复制后 channelConfigText 可能是含
+      // url + payloadTemplate 的完整配置 JSON（§7.27 模板适配），非纯 URL 也合法。
+      errors.channelConfig =
+        'URL 或配置 JSON 无效（需以 http:// 或 https:// 开头，或为含 url 的 Webhook 配置 JSON）';
     }
   }
 
@@ -233,6 +269,45 @@ export function validateReminderForm(values: ReminderFormValues): ReminderFormEr
   }
 
   return errors;
+}
+
+/**
+ * 切片 17 阶段 2：渠道预设的展示与匹配纯函数（预设下拉与设置页共用）。
+ */
+
+/** 预设摘要：webhook 显示目标 URL（整串 URL 形态原样展示），apprise 显示 BaseURL */
+export function channelPresetSummary(preset: ChannelPreset): string {
+  if (preset.type === 'webhook') {
+    try {
+      const parsed: unknown = JSON.parse(preset.configJson);
+      if (
+        typeof parsed === 'object'
+        && parsed !== null
+        && !Array.isArray(parsed)
+        && 'url' in parsed
+        && typeof parsed['url'] === 'string'
+      ) {
+        return parsed['url'];
+      }
+    } catch {
+      // 非 JSON → 整串视为 URL 形态，原样展示
+    }
+    return preset.configJson;
+  }
+  return parseAppriseFormFields(preset.configJson).baseUrl;
+}
+
+/** 当前表单值是否与某预设的 configJson 一致（webhook 整串比对；apprise 比对回填字段） */
+export function matchesChannelPreset(
+  channel: 'webhook' | 'apprise',
+  values: ReminderFormValues,
+  preset: ChannelPreset,
+): boolean {
+  if (channel === 'webhook') {
+    return preset.configJson === values.channelConfigText.trim();
+  }
+  const fields = parseAppriseFormFields(preset.configJson);
+  return fields.baseUrl === values.appriseBaseUrl.trim() && fields.key === values.appriseKey.trim();
 }
 
 /** 校验通过后构造 Repository 输入；weekdays/dayOfMonth 与切片 5 语义一致（非本 frequency 归零）。 */

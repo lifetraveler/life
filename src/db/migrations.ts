@@ -23,6 +23,7 @@ import { APP_SETTINGS_ROW_ID, DEFAULT_APP_SETTINGS } from '../domain/settings';
  * - v8：reminders 新增 once_civil_json / channel / channel_config 列，
  *        channel 全表回填 'system-notification'（切片 16 阶段 1，AGENTS.md §7.26，
  *        docs/proposals/slice-16-reminder-channels.md）
+ * - v9：新增 channel_presets 表（切片 17 阶段 1，AGENTS.md §7.27 渠道配置中心）
  *
  * 规则（AGENTS.md §4.6）：已发布的 migration step 不得修改，只能在末尾追加；
  * 新增表必须在 migration 中显式创建，不得依赖“删库重装”。
@@ -223,6 +224,25 @@ export default schemaMigrations({
           ],
         }),
         unsafeExecuteSql('UPDATE "reminders" SET "channel" = \'system-notification\';'),
+      ],
+    },
+    {
+      // 切片 17 阶段 1（AGENTS.md §7.27 渠道配置中心）：v9 新增 channel_presets 表；
+      // v2–v8 step 保持原样，不得修改。
+      // - 仅 createTable，无回填、无 unsafeExecuteSql：预设无存量数据概念，全部由用户创建；
+      // - 列定义与 schema.ts 的 channel_presets tableSchema 严格一致（两处漂移会被
+      //   模式不匹配检测发现，WatermelonDB 在表不匹配时直接抛错）。
+      toVersion: 9,
+      steps: [
+        createTable({
+          name: 'channel_presets',
+          columns: [
+            { name: 'name', type: 'string' },
+            { name: 'type', type: 'string', isIndexed: true },
+            { name: 'config_json', type: 'string' },
+            { name: 'created_at', type: 'number' },
+          ],
+        }),
       ],
     },
   ],

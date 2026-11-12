@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-nati
 
 import type { Reminder, ReminderFrequency } from '../domain/reminder';
 import DateTimeField from './DateTimeField';
+import OnceAtField from './OnceAtField';
 import ReminderChannelFields from './ReminderChannelFields';
 import {
   parseAppriseFormFields,
@@ -17,8 +18,9 @@ import TzPicker from './TzPicker';
  * - 编辑模式传 initial（Reminder），提交回传完整表单值，由父级决定 create/update；
  * - 校验为纯函数 validateReminderForm（与 Repository 归一化规则一致）；
  * - tz 选择器只含白名单两项（§4.25）；
- * - 切片 16 阶段 3：新增 once 频率（触发时刻 = onceAt 民用文本输入，不走设备时区
- *   的 DateTimeField）与渠道选择（ReminderChannelFields 子组件）。
+ * - 切片 16 阶段 3：新增 once 频率与渠道选择（ReminderChannelFields 子组件）；
+ * - 切片 17 阶段 2（§7.28）：once 触发时刻废弃手输，改 OnceAtField（Picker + 快捷
+ *   Chips，civil 值直出按 reminder.tzid 解释）；渠道新增预设下拉（ReminderChannelFields）。
  */
 interface ReminderFormProps {
   initial?: Reminder;
@@ -68,6 +70,7 @@ function initialValues(initial?: Reminder): ReminderFormValues {
       channelConfigText: initial.channel === 'webhook' ? (initial.channelConfig ?? '') : '',
       appriseBaseUrl: appriseFields.baseUrl,
       appriseKey: appriseFields.key,
+      channelPresetId: null,
     };
   }
   return {
@@ -84,6 +87,7 @@ function initialValues(initial?: Reminder): ReminderFormValues {
     channelConfigText: '',
     appriseBaseUrl: '',
     appriseKey: '',
+    channelPresetId: null,
   };
 }
 
@@ -105,22 +109,6 @@ export default function ReminderForm({ initial, submitLabel, onSubmit, onCancel 
         : [...current.weekdays, day];
       return { ...current, weekdays: selected };
     });
-  };
-
-  const patchOnceHour = (text: string): void => {
-    const hour = Number.parseInt(text, 10);
-    setValues((current) => ({
-      ...current,
-      onceAt: { ...current.onceAt, hour: Number.isNaN(hour) ? null : hour },
-    }));
-  };
-
-  const patchOnceMinute = (text: string): void => {
-    const minute = Number.parseInt(text, 10);
-    setValues((current) => ({
-      ...current,
-      onceAt: { ...current.onceAt, minute: Number.isNaN(minute) ? null : minute },
-    }));
   };
 
   const handleSubmit = async (): Promise<void> => {
@@ -230,38 +218,13 @@ export default function ReminderForm({ initial, submitLabel, onSubmit, onCancel 
       ) : null}
 
       {values.frequency === 'once' ? (
-        <>
-          <View style={styles.fieldRow}>
-            <Text style={styles.label}>触发时刻</Text>
-            <TextInput
-              style={[styles.dateInput, errors.onceAt && styles.inputError]}
-              value={values.onceAt.date}
-              onChangeText={(text) => patch({ onceAt: { ...values.onceAt, date: text } })}
-              placeholder="YYYY-MM-DD"
-              autoCapitalize="none"
-              autoCorrect={false}
-              maxLength={10}
-            />
-            <TextInput
-              style={[styles.timeInput, errors.onceAt && styles.inputError]}
-              value={values.onceAt.hour === null ? '' : String(values.onceAt.hour)}
-              onChangeText={patchOnceHour}
-              placeholder="时"
-              keyboardType="number-pad"
-              maxLength={2}
-            />
-            <Text style={styles.colon}>:</Text>
-            <TextInput
-              style={[styles.timeInput, errors.onceAt && styles.inputError]}
-              value={values.onceAt.minute === null ? '' : String(values.onceAt.minute)}
-              onChangeText={patchOnceMinute}
-              placeholder="分"
-              keyboardType="number-pad"
-              maxLength={2}
-            />
-          </View>
-          {errors.onceAt ? <Text style={styles.errorText}>{errors.onceAt}</Text> : null}
-        </>
+        <OnceAtField
+          label="触发时刻"
+          value={values.onceAt}
+          tzid={values.tzid}
+          onChange={(onceAt) => patch({ onceAt })}
+          error={errors.onceAt}
+        />
       ) : null}
 
       <ReminderChannelFields values={values} errors={errors} onPatch={patch} />
@@ -347,16 +310,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     width: 64,
-    fontSize: 15,
-    backgroundColor: '#fff',
-  },
-  dateInput: {
-    borderWidth: 1,
-    borderColor: '#d0d0d0',
-    borderRadius: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    width: 132,
     fontSize: 15,
     backgroundColor: '#fff',
   },

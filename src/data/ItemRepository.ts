@@ -1,4 +1,5 @@
 import type { Category } from '../domain/category';
+import type { ChannelPreset, CreateChannelPresetInput, UpdateChannelPresetInput } from '../domain/channelPreset';
 import type {
   CreateItemInput,
   ImportedItemInput,
@@ -6,6 +7,7 @@ import type {
   ItemSourceType,
   UpdateItemInput,
 } from '../domain/item';
+import type { IcsParseFailure } from '../domain/ics/parseIcs';
 import type { AppSettings } from '../domain/settings';
 import type {
   CreateReminderInput,
@@ -81,6 +83,72 @@ export interface ImportBatchResult {
   createdCount: number;
   skippedDuplicateCount: number;
   failures: ImportBatchFailure[];
+}
+
+/**
+ * 切片 17 阶段 1：ICS 导入预览单条（repository.md v0.17「导入预览」节）。
+ * 确认导入时 entries 里被勾选的 input 可直接喂 importItemsInBatches——
+ * isDuplicate 判定与 importItemsInBatches 的 skippedDuplicate 同键
+ * （(sourceType='ics', sourceUid)），保证「预览标记 = 实际落库行为」。
+ */
+export interface IcsPreviewEntry {
+  /** parseIcs 原样透传；确认导入时直接使用 */
+  input: ImportedItemInput;
+  /** floating date-time 标记（parseIcs 原样透传，预览页信息性提示用） */
+  floating: boolean;
+  /** (sourceType='ics', sourceUid) 已存在本地库；sourceUid=null（无 UID）恒 false */
+  isDuplicate: boolean;
+  /** 命中的本地项 id（预览页跳转/查看已导入项用）；isDuplicate=false 时为 null */
+  existingItemId: string | null;
+}
+
+/**
+ * 切片 17 阶段 1：ICS 导入预览结果（纯读不写——生成预览不落库，
+ * 确认导入走既有 importItemsInBatches）。
+ */
+export interface IcsPreviewResult {
+  entries: IcsPreviewEntry[];
+  /** parseIcs 原样透传：单事件解析失败清单（SUMMARY + 原因） */
+  failures: IcsParseFailure[];
+  /** parseIcs 原样透传：同文件重复 UID（保留第一条，其余计入此处） */
+  sameFileDuplicates: Array<{ uid: string; summary: string }>;
+  /** entries 中 isDuplicate=true 的条数（预览页信息性计数） */
+  duplicateCount: number;
+}
+
+/**
+ * 切片 17 阶段 2：系统日历导入预览单条（契约外显式扩展，repository.md v0.17 补记）。
+ * 与 IcsPreviewEntry 同构思路；确认导入时勾选的 input 直接喂
+ * importSystemCalendarEntries——isDuplicate 判定键与该方法的落库去重键一致
+ * （(sourceType='system-calendar', source_uid)），保证「预览标记 = 实际落库行为」。
+ */
+export interface SystemCalendarPreviewEntry {
+  /** mapSystemEventToImportedItem 的映射结果原样透传（确认导入时直接使用）。 */
+  input: ImportedItemInput;
+  /**
+   * (sourceType='system-calendar', source_uid) 已存在本地库（sourceReadOnly=true
+   * 计重复；非只读命中同键，见 importSystemCalendarEvents 的冲突语义）。
+   */
+  isDuplicate: boolean;
+  /** 命中的本地项 id；isDuplicate=false 时为 null。 */
+  existingItemId: string | null;
+  /** 系统事件 id（expo-calendar event.id；与 failed 清单的 externalId 同源）。 */
+  externalId: string | null;
+}
+
+/**
+ * 切片 17 阶段 2：系统日历导入预览结果（纯读不写——生成预览不落库，
+ * 确认导入走本切片新增的 importSystemCalendarEntries）。
+ * sourceUid 策略计数不在预览期重复透出（preview 页不展示；确认导入的结果页语义不变）。
+ */
+export interface SystemCalendarPreviewResult {
+  entries: SystemCalendarPreviewEntry[];
+  /** startDate 不可解析等无法进入映射的事件（与 importSystemCalendarEvents 同分流语义）。 */
+  failures: SystemImportFailure[];
+  /** 读取到的事件总数（reader 返回的全部事件，含范围外与解析失败）。 */
+  totalRead: number;
+  /** 被所选时间范围排除的事件数（startDate 不可解析的不计入，已入 failures）。 */
+  outOfRangeCount: number;
 }
 
 /**
@@ -246,4 +314,49 @@ export interface ItemRepository {
    * docs/proposals/slice-14-widget-phase7.md）。改小组件开关后由调用方触发快照刷新。
    */
   updateSettings(patch: Partial<AppSettings>): Promise<void>;
+
+  // —— 切片 17 阶段 1：渠道预设（repository.md v0.17「渠道预设接口」，契约外显式扩展，
+  //    先例依据同 deleteItem / observe*：AGENTS.md §7.27 渠道配置中心要求预设存
+  //    channel_presets 表（schema v9），写路径校验收敛在 Repository）——
+  /** 全部预设，created_at 降序（新建的在前）。 */
+  listChannelPresets(): Promise<ChannelPreset[]>;
+  /**
+   * 创建预设：name trim 后非空、type ∈ {webhook, apprise}、configJson 经对应渠道守卫
+   * 校验（webhook → parseWebhookChannelConfig，apprise → parseAppriseChannelConfig），
+   * 违规抛明确错误。type 创建后不可变（改类型等于换配置语义，应删除重建）。
+   */
+  createChannelPreset(input: CreateChannelPresetInput): Promise<ChannelPreset>;
+  /** 更新预设（patch 合并语义，与 UpdateReminderInput 同纪律）；type 不可更新；预设不存在时抛明确错误。 */
+  updateChannelPreset(id: string, patch: UpdateChannelPresetInput): Promise<ChannelPreset>;
+  /** 删除预设；不存在时抛明确错误。删除预设不影响已引用其 configJson 的既有提醒。 */
+  deleteChannelPreset(id: string): Promise<void>;
+
+  // —— 切片 17 阶段 1：导入预览（repository.md v0.17「导入预览接口」）——
+  /**
+   * 解析 ICS 文本并标记本地去重状态，纯读不写（确认导入走 importItemsInBatches）。
+   * deviceTzid 显式传参（与 parseIcs 一致，§4.9 视图函数同纪律：不读设备默认时区）。
+   */
+  generateIcsPreview(icsText: string, deviceTzid: string): Promise<IcsPreviewResult>;
+
+  // —— 切片 17 阶段 2：系统日历导入预览（repository.md v0.17 补记，契约外显式扩展，
+  //    先例依据同 deleteItem / observe*：AGENTS.md §7.28 导入预览要求系统日历导入
+  //    与 ICS 一致先预览再确认，原 importSystemCalendarEvents 一体化读取+落库
+  //    无法支撑「取消勾选不落库」）——
+  /**
+   * 读取系统日历事件并映射 + 标记本地去重状态，纯读不写。校验与分流语义与
+   * importSystemCalendarEvents 一致（range 有限且 start<end 否则抛错；startDate
+   * 不可解析入 failures；范围外计入 outOfRangeCount）。
+   */
+  generateSystemCalendarPreview(
+    input: SystemCalendarImportInput,
+  ): Promise<SystemCalendarPreviewResult>;
+  /**
+   * 按预览勾选结果落库系统日历条目：inputs 必须来自 generateSystemCalendarPreview
+   * 产出的 entry.input（本方法不做读取/映射）。落库固定 type='event'/
+   * sourceType='system-calendar'/sourceReadOnly=true（§7.15），allDay 归一化与
+   * importSystemCalendarEvents 共用预处理。落库时在事务内按同键重查去重（防预览后
+   * 并发写入的竞态窗口）：预览期标记的重复不应被再次传入；确认时新出现的重复与
+   * 非只读冲突均计入 skippedDuplicateCount（结果页统一呈现为「跳过（重复）」）。
+   */
+  importSystemCalendarEntries(inputs: ImportedItemInput[]): Promise<ImportBatchResult>;
 }

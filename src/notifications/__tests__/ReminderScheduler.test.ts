@@ -11,12 +11,20 @@ import type { CreateReminderInput, Reminder, UpdateReminderInput } from '../../d
 import type { ItemWithTags, Tag } from '../../domain/tag';
 import type { ItemWithRelations } from '../../domain/relations/itemWithRelations';
 import type {
+  IcsPreviewResult,
   ImportBatchResult,
   ItemRepository,
   SystemCalendarImportInput,
+  SystemCalendarPreviewResult,
   SystemImportResult,
   VisualPatch,
 } from '../../data/ItemRepository';
+import type { ImportedItemInput } from '../../domain/item';
+import type {
+  ChannelPreset,
+  CreateChannelPresetInput,
+  UpdateChannelPresetInput,
+} from '../../domain/channelPreset';
 
 // —— 固定时钟锚点：2025-06-10T08:00:00Z ——
 const FIXED_NOW = 1749542400000;
@@ -354,6 +362,17 @@ class FakeRepository implements ItemRepository {
     throw new Error('FakeRepository: importSystemCalendarEvents 未实现');
   }
 
+  // 切片 17 阶段 2：接口新增方法，调度器单测不触及（§7.13 夹具编译必需）。
+  async generateSystemCalendarPreview(
+    _input: SystemCalendarImportInput,
+  ): Promise<SystemCalendarPreviewResult> {
+    throw new Error('FakeRepository: generateSystemCalendarPreview 未实现');
+  }
+
+  async importSystemCalendarEntries(_inputs: ImportedItemInput[]): Promise<ImportBatchResult> {
+    throw new Error('FakeRepository: importSystemCalendarEntries 未实现');
+  }
+
   // 切片 14：分类与全局设置接口方法，调度器单测不触及，为满足接口而存在
   // （§7.13 夹具编译必需；stub 返回空数组/简单值，调度器路径不会触达）。
   async getCategories(): Promise<Category[]> {
@@ -390,6 +409,28 @@ class FakeRepository implements ItemRepository {
 
   observeUnscheduledItems(_onNext: (items: ItemWithRelations[]) => void): () => void {
     return () => undefined;
+  }
+
+  // —— 切片 17 阶段 1 接口扩展的测试夹具 stub（§7.13：编译必需，调度器不触达） ——
+
+  async listChannelPresets(): Promise<ChannelPreset[]> {
+    return [];
+  }
+
+  async createChannelPreset(_input: CreateChannelPresetInput): Promise<ChannelPreset> {
+    throw new Error('FakeRepository: createChannelPreset 未实现');
+  }
+
+  async updateChannelPreset(_id: string, _patch: UpdateChannelPresetInput): Promise<ChannelPreset> {
+    throw new Error('FakeRepository: updateChannelPreset 未实现');
+  }
+
+  async deleteChannelPreset(_id: string): Promise<void> {
+    return undefined;
+  }
+
+  async generateIcsPreview(_icsText: string, _deviceTzid: string): Promise<IcsPreviewResult> {
+    return { entries: [], failures: [], sameFileDuplicates: [], duplicateCount: 0 };
   }
 }
 
