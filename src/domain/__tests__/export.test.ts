@@ -46,6 +46,11 @@ function makeReminder(itemId: string, overrides: Partial<Reminder> = {}): Remind
     localTimeMinute: 5,
     weekdays: [],
     dayOfMonth: 0,
+    // 切片 16 编译必需夹具补字段（§7.13）：onceAt/channel/channelConfig；
+    // 导出摘要是白名单式（toReminderSummary），不新增导出字段。
+    onceAt: null,
+    channel: 'system-notification',
+    channelConfig: null,
     tzid: 'Asia/Shanghai',
     startAt: 1767225600000,
     enabled: true,

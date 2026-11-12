@@ -15,13 +15,14 @@ import CategoryChip from '../../ui/CategoryChip';
 import EmptyState from '../../ui/EmptyState';
 import ReminderFormEditor from '../../ui/ReminderFormEditor';
 import type { ReminderFormValues } from '../../ui/reminderForm';
-import { buildCreateReminderInput } from '../../ui/reminderForm';
+import { buildCreateReminderInput, buildUpdateReminderInput } from '../../ui/reminderForm';
 import TagChip from '../../ui/TagChip';
 import { useTagDisplayMode } from '../../ui/useTagDisplayMode';
 import {
   formatItemEnd,
   formatItemStart,
   formatItemTime,
+  formatReminderChannelLabel,
   formatReminderRuleSummary,
   getDeviceTzid,
 } from '../../ui/timeFormat';
@@ -119,16 +120,8 @@ export default function ItemDetailPage() {
 
   const handleUpdateReminder = async (target: Reminder, values: ReminderFormValues): Promise<void> => {
     try {
-      const patch: UpdateReminderInput = {
-        frequency: values.frequency,
-        localTimeHour: values.localTimeHour ?? target.localTimeHour,
-        localTimeMinute: values.localTimeMinute ?? target.localTimeMinute,
-        weekdays: values.weekdays,
-        dayOfMonth: values.dayOfMonth ?? target.dayOfMonth,
-        startAt: values.startAt ?? target.startAt,
-        enabled: values.enabled,
-        tzid: values.tzid,
-      };
+      // 切片 16 阶段 3：patch 组装收敛到纯函数（含 onceAt / channel / channelConfig）。
+      const patch: UpdateReminderInput = buildUpdateReminderInput(values, target);
       await itemRepository.updateReminder(target.id, patch);
       // 任务卡实现要求 5：tzid 切换（或任意编辑）后，旧 tzid/旧规则的通知必须被
       // cancelForReminder 清理再重排；cancelForReminder 幂等，先 update 成功再清理最安全。
@@ -374,7 +367,8 @@ export default function ItemDetailPage() {
               <View key={reminder.id} style={styles.reminderRow}>
                 <Text style={styles.line}>{formatReminderRuleSummary(reminder)}</Text>
                 <Text style={styles.meta}>
-                  {reminder.enabled ? '已启用' : '已停用'} · 生效起点{' '}
+                  {reminder.enabled ? '已启用' : '已停用'} · 渠道{' '}
+                  {formatReminderChannelLabel(reminder.channel)} · 生效起点{' '}
                   {formatItemTime(reminder.startAt, reminder.tzid)} · 上次对账{' '}
                   {reminder.lastReconciledAt === null
                     ? '从未'

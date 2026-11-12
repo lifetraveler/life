@@ -214,18 +214,22 @@ schema 版本 5→6，新增/修改如下：
 - 用户输入自然语言后，AI 返回一张“预览卡片”（展示标题、时间、分类、标签等）。
 - 用户可直接点击卡片修改字段，或在底部输入框继续对话纠正（如“改成明天”），AI 更新卡片。
 - 点击“确认保存”后，才调用 `Repository.createItem` 及 `createReminder` 落库。
-- 
-## 8. 当前切片
-tasks/slice-16.md（立项；开工闸门见 §7.26：变更提案确认前禁改提醒冻结区）
 
-### 7.26 提醒能力升级闸门（v0.16，切片 16）
-- 切片 16 涉及冻结区变更：reminders 表 schema（data-model.md §4.1 frequency 枚举、
-  notifications.md occurrenceKey/渠道抽象）与 src/notifications/ 实现。
-- 开工顺序固定：先完善变更提案 docs/proposals/slice-16-reminder-channels.md 并经用户
-  确认，再动实现；确认前禁止修改 reminders schema、Reminder 领域模型与
-  src/notifications/ 实现文件（可写提案文档与纯函数草案，不得合入）。
-- 数据模型与调度器必须分两次提交（先 schema/domain，后 notifications），便于独立回滚。
-- 渠道边界如实披露：webhook/apprise 不承诺后台常驻可靠送达（不引入 WorkManager，
-  沿切片 10 契约）；闹钟如需精确闹钟权限属 §5 构建配置保护项，须单独确认。
+
+### 7.26 提醒能力升级（一次性 + 多渠道）（v0.16）
+- 遵循变更提案 `docs/proposals/slice-16-reminder-channels.md`。
+- **模型扩展**：Reminder 新增 `once` 频率，时间存为 `once_civil_json`（单列 JSON，存 `{year,month,day,hour,minute}`）。
+- **渠道扩展**：Reminder 新增 `channel` (system-notification / alarm / webhook / apprise) 和 `channel_config` (JSON 字符串)。
+- **冻结区解禁**：本切片经用户授权，允许修改 `src/notifications/` 实现文件，以支持渠道抽象（ReminderChannel 接口）。
+- **渠道实现约束**：
+  1. 闹钟渠道：采用 expo-notifications 的高优先级全屏通知模拟，不引入原生 Schedule Exact Alarm 模块。
+  2. Webhook/Apprise 渠道：前台直接 fetch，不引入后台常驻任务。UI 必须注明“仅 App 存活时保证推送”。
+  3. 若开启多渠道，本地系统通知和网络推送可同时触发（互不干扰）。
+
+
+## 8. 当前切片
+tasks/slice-16.md（已完成：一次性提醒 + 四渠道推送，closeout 见 tasks/slice-16-closeout.md；
+后续切片候选（Webhook 内容适配 / 渠道配置迁设置页 / once 触发时刻录入增强）见 closeout「后续切片候选」节）
+
 
 

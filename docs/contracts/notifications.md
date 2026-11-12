@@ -71,3 +71,46 @@
 - 调用约定：App cold start 且距上次 reconcile > 60s 时传 true；
   前台恢复、数据变更、WIDGET_UPDATE 传 false。
 - 500 条预算逻辑不变；forceRebuild 后若超出预算，最远的 reminder 仍跳过并记 warning。
+
+
+## once occurrenceKey 与渠道抽象（v0.16，切片 16 阶段 2 落地）
+
+> 依据：变更提案 docs/proposals/slice-16-reminder-channels.md（用户已确认）与 AGENTS.md §7.26。
+> 本节为 §4.16–4.20 的增补，不改变上述条款对 expo 渠道（system-notification / alarm）的既有约束。
+
+### occurrenceKey 的 once 规则
+
+- once 提醒只有一个 occurrence；触发时刻 = `onceAt`（民用五元组，§7.26 模型扩展）在
+  reminder.tzid 下的确定性换算，DST 语义与 recurrence.md（§4.12–4.13）完全一致：
+  gap 无 occurrence（跳过不平移）、fold 取较早瞬间。
+- occurrenceKey 格式：`once:<reminderId>:<onceAt 换算后的 epoch 毫秒>`。
+  键内嵌的毫秒时间戳由 (onceAt, tzid) 经确定性换算得出，重复展开必然得到同一键，
+  仍满足 §4.20「identifier 必须为 occurrenceKey、确定性」的要求。
+- identifier 根前缀自此为双族：recurring 族 `recurrence:v1|…`（§4.16 原条款，语义不变）
+  与 once 族 `once:…`。现网集合 diff（§4.19）、cancelForReminder、cancelAll、
+  forceRebuild 清理范围均以双族并集为准；他 App 前缀照旧不得触碰。
+
+### 渠道抽象（ReminderChannel）
+
+- 接口：`schedule(reminder, occurrenceKey, fireAt)` / `cancel(reminderId, occurrenceKey?)`，
+  位于 `src/notifications/channels/`；ReminderScheduler 按 reminder.channel 经渠道工厂
+  分发。UI / domain / data 层仍不得触达 expo-notifications（§4.3 / §4.20 原样生效）。
+- SystemNotificationChannel / AlarmChannel：expo-notifications 路径，受 §4.16–4.20
+  全部既有约束（identifier = occurrenceKey、30 条/提醒、500 条全局预算）。alarm 为
+  高优先级全屏通知模拟（Android 通知渠道 importance MAX），不引入原生 Schedule
+  Exact Alarm 模块（§7.26 渠道实现约束 1）。
+- WebhookChannel / AppriseChannel：网络渠道，不向 OS 注册任何通知；App 进程存活期间
+  以内存定时器（setTimeout，溢出 2^31-1 ms 续链）到点直接 fetch（10s 超时，
+  2xx 视为成功），配置经手写类型守卫校验（§7.24 同款纪律）。
+- 网络渠道可靠性边界（§7.26 渠道实现约束 2，UI 阶段必须注明「仅 App 存活时保证推送」）：
+  - 定时器随进程消亡；重启后由 reconcile 重建；
+  - reconcile 发现 missed 的网络 occurrence（未被本进程确认投递）立即补发一次，
+    并按 §4.19 推进 lastFiredOccurrenceKey 游标（每轮 reconcile 至多一次补发机会）；
+  - 跨进程语义为 at-least-once：定时器已成功发送、但进程在对账推进游标前被杀，
+    重启后会补发一次——已知并接受的边界；
+  - 本进程内以内存 attempts 记录抑制双发（同一 occurrence 定时器与补发互斥）；
+    attempts 随进程生命周期存在，不持久化。
+- 网络渠道不占 §4.20 的 500 条通知预算（无 OS 注册上限）；missed 去重仅依赖
+  lastFiredOccurrenceKey，不引入 AsyncStorage / WorkManager（§4.19 精神延续）。
+- 渠道互不干扰：多渠道提醒各自独立调度（§7.26 渠道实现约束 3）；reminder 更换渠道时，
+  调度器负责清理旧渠道残留（expo 通知或内存定时器）。

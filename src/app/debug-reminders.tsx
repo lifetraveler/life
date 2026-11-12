@@ -3,7 +3,7 @@ import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-
 
 import { itemRepository } from '../data';
 import type { Item } from '../domain/item';
-import type { ReconcileResult, Reminder, ReminderFrequency } from '../domain/reminder';
+import type { OnceCivilTime, ReconcileResult, Reminder, ReminderFrequency } from '../domain/reminder';
 import { expandOccurrences } from '../domain/recurrence';
 import type { Occurrence } from '../domain/recurrence';
 import { TZDate } from '@date-fns/tz';
@@ -15,6 +15,7 @@ import {
   reminderScheduler,
 } from '../notifications';
 import type { NotificationPermissionState } from '../notifications';
+import { REMINDER_CHANNEL_LABELS } from '../ui/reminderForm';
 
 /**
  * 提醒调试页（AGENTS.md §4.22，仅 __DEV__ 可用）：
@@ -27,10 +28,13 @@ import type { NotificationPermissionState } from '../notifications';
 
 const FREQUENCIES: readonly ReminderFrequency[] = ['daily', 'weekly', 'monthly'];
 
+// 切片 16：frequency 扩展 'once' 后 Record 必须穷举；列表行可能展示存量 once 提醒，
+// 但创建表单不提供 once（onceAt 民用时刻输入属阶段 3 UI，本调试页不提前实现）。
 const FREQUENCY_LABELS: Record<ReminderFrequency, string> = {
   daily: '每天',
   weekly: '每周',
   monthly: '每月',
+  once: '单次',
 };
 
 const WEEKDAY_LABELS: Record<number, string> = {
@@ -48,6 +52,12 @@ function deviceTzid(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 }
 
+/** onceAt → 'YYYY-MM-DD HH:mm'（列表行内联展示，切片 16 阶段 3） */
+function formatOnceAtText(once: OnceCivilTime): string {
+  const pad = (value: number, width: number): string => String(value).padStart(width, '0');
+  return `${pad(once.year, 4)}-${pad(once.month, 2)}-${pad(once.day, 2)} ${pad(once.hour, 2)}:${pad(once.minute, 2)}`;
+}
+
 export default function DebugRemindersScreen() {
   const [items, setItems] = useState<Item[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
@@ -61,6 +71,7 @@ export default function DebugRemindersScreen() {
   const [startAtOffsetMinutesText, setStartAtOffsetMinutesText] = useState('0');
   const [startAtDateText, setStartAtDateText] = useState('');
   const [scheduledIds, setScheduledIds] = useState<string[]>([]);
+  const [networkArmedKeys, setNetworkArmedKeys] = useState<string[]>([]);
   const [lastResult, setLastResult] = useState<ReconcileResult | null>(null);
   const [permissionState, setPermissionState] = useState<NotificationPermissionState | null>(null);
   const [status, setStatus] = useState<string>('');
@@ -73,6 +84,8 @@ export default function DebugRemindersScreen() {
     setItems(nextItems);
     setReminders(nextReminders);
     setScheduledIds(await reminderScheduler.getScheduledNotificationIdentifiers());
+    // 切片 16 阶段 3：网络渠道（webhook/apprise）不向 OS 注册通知，挂起 Timer 只能在此观察。
+    setNetworkArmedKeys(reminderScheduler.getNetworkArmedKeys());
     setPermissionState(await getNotificationPermissionState());
     if (!nextItems.some((item) => item.id === selectedItemId)) {
       setSelectedItemId(nextItems[0]?.id ?? null);
@@ -236,6 +249,14 @@ export default function DebugRemindersScreen() {
         <Text style={styles.buttonText}>显式申请通知权限</Text>
       </Pressable>
 
+      <Text style={styles.section}>网络渠道挂起 Timer（webhook/apprise，getNetworkArmedKeys）</Text>
+      <Text>共 {networkArmedKeys.length} 个（网络渠道不向 OS 注册通知，仅 App 进程存活时保证发送）</Text>
+      {networkArmedKeys.map((key) => (
+        <Text key={key} style={styles.mono}>
+          {key}
+        </Text>
+      ))}
+
       <Text style={styles.section}>Item（提醒的宿主）</Text>
       {items.length === 0 ? <Text>暂无 Item，请先回首页创建。</Text> : null}
       {items.map((item) => (
@@ -348,8 +369,10 @@ export default function DebugRemindersScreen() {
         <View key={reminder.id} style={styles.row}>
           <Text>
             {reminder.id} → item {reminder.itemId}（{FREQUENCY_LABELS[reminder.frequency]}{' '}
-            {String(reminder.localTimeHour).padStart(2, '0')}:
-            {String(reminder.localTimeMinute).padStart(2, '0')} / {reminder.tzid} / startAt=
+            {reminder.frequency === 'once' && reminder.onceAt !== null
+              ? formatOnceAtText(reminder.onceAt)
+              : `${String(reminder.localTimeHour).padStart(2, '0')}:${String(reminder.localTimeMinute).padStart(2, '0')}`}
+            {' / 渠道 '}{REMINDER_CHANNEL_LABELS[reminder.channel]}{' / '}{reminder.tzid} / startAt=
             {new Date(reminder.startAt).toISOString()}）
           </Text>
           <View style={styles.rowWrap}>

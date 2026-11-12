@@ -10,14 +10,41 @@ import type { Occurrence } from '../domain/recurrence';
 
 /**
  * 本 App 调度通知的 identifier 根前缀（AGENTS.md §4.16 冻结）。
- * 所有 notification identifier（= occurrenceKey）以 `recurrence:v1|` 开头；
- * cancelAll 只取消带该前缀的通知，不误伤其他来源。
+ * recurring 提醒的 identifier（= occurrenceKey）以 `recurrence:v1|` 开头；
+ * cancelAll 只取消带本 App 双族前缀的通知，不误伤其他来源。
  */
 export const IDENTIFIER_ROOT_PREFIX = 'recurrence:v1|';
+
+/**
+ * once 提醒 occurrenceKey 的根前缀（切片 16，提案 docs/proposals/slice-16-reminder-channels.md
+ * 确认稿）：`once:<reminderId>:<onceAt 换算后的 epoch 毫秒>`。与 recurring 族并列构成
+ * 本 App 的 identifier 双根前缀族（notifications.md v0.16 增补）。
+ */
+export const ONCE_ROOT_PREFIX = 'once:';
 
 /** 单个 reminder 名下通知的 identifier 前缀（scheduleId 已 encodeURIComponent）。 */
 export function reminderIdentifierPrefix(reminderId: string): string {
   return `recurrence:v1|${encodeURIComponent(reminderId)}|`;
+}
+
+/** 单个 once reminder 名下通知的 identifier 前缀（scheduleId 未编码，id 为固定格式 UUID）。 */
+export function onceReminderPrefix(reminderId: string): string {
+  return `once:${reminderId}:`;
+}
+
+/**
+ * 本 App 的 occurrenceKey 判定：recurring 与 once 双族并认。
+ * listScheduledOurKeys / cancelAll / forceRebuild 清理范围均以此为准。
+ */
+export function isOurOccurrenceIdentifier(identifier: string): boolean {
+  return (
+    identifier.startsWith(IDENTIFIER_ROOT_PREFIX) || identifier.startsWith(ONCE_ROOT_PREFIX)
+  );
+}
+
+/** 单个 reminder 名下两个 identifier 族的前缀（recurring + once；按 frequency 只会命中其一）。 */
+export function reminderOccurrencePrefixes(reminderId: string): string[] {
+  return [reminderIdentifierPrefix(reminderId), onceReminderPrefix(reminderId)];
 }
 
 export type NotificationDiff = {

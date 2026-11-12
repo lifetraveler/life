@@ -20,6 +20,9 @@ import { APP_SETTINGS_ROW_ID, DEFAULT_APP_SETTINGS } from '../domain/settings';
  *        tags 新增 color / emoji（切片 14，AGENTS.md §7.22）
  * - v7：app_settings 新增小组件显示开关 4 列（切片 14 阶段 7a，
  *        docs/proposals/slice-14-widget-phase7.md）
+ * - v8：reminders 新增 once_civil_json / channel / channel_config 列，
+ *        channel 全表回填 'system-notification'（切片 16 阶段 1，AGENTS.md §7.26，
+ *        docs/proposals/slice-16-reminder-channels.md）
  *
  * 规则（AGENTS.md §4.6）：已发布的 migration step 不得修改，只能在末尾追加；
  * 新增表必须在 migration 中显式创建，不得依赖“删库重装”。
@@ -197,6 +200,29 @@ export default schemaMigrations({
           ],
         }),
         unsafeExecuteSql('UPDATE "app_settings" SET "widget_show_overdue" = 1;'),
+      ],
+    },
+    {
+      // 切片 16 阶段 1（AGENTS.md §7.26）：once 一次性提醒 + 多渠道数据底座；
+      // v2–v7 step 保持原样，不得修改。
+      // - once_civil_json / channel_config 可空列：addColumns 自动回填 null，无需 UPDATE；
+      // - channel 非可选：WatermelonDB addColumns 对既有行自动回填类型零值 ''（string），
+      //   同 step 内 unsafeExecuteSql 无条件 UPDATE 回填 'system-notification'
+      //   （v7 widget_show_overdue 同款先例；SQLite 下同一迁移事务内原子生效）。
+      //   存量行均为重复规则、无渠道语义，无条件回填正确且幂等。
+      // 注意：LokiJS 适配器（仅测试用）忽略 'sql' 步骤；channel 回填的行为级验收依赖
+      // 真机覆盖安装（任务卡阶段 1 验收 2）+ migrationsV8 结构断言测试。
+      toVersion: 8,
+      steps: [
+        addColumns({
+          table: 'reminders',
+          columns: [
+            { name: 'once_civil_json', type: 'string', isOptional: true },
+            { name: 'channel', type: 'string' },
+            { name: 'channel_config', type: 'string', isOptional: true },
+          ],
+        }),
+        unsafeExecuteSql('UPDATE "reminders" SET "channel" = \'system-notification\';'),
       ],
     },
   ],

@@ -55,12 +55,17 @@ import type {
 import { defaultSystemCalendarDeps } from './systemCalendarAdapters';
 import type { SystemCalendarDeps } from './systemCalendarAdapters';
 import {
+  normalizeReminderChannelFields,
   normalizeReminderRuleFields,
   normalizeStartAt,
+  parseOnceCivilJson,
   parseWeekdaysJson,
+  resolveOnceAt,
+  serializeOnceCivilJson,
   serializeWeekdays,
 } from './reminderRuleMapping';
 import { assertWhitelistedReminderTz } from './reminderTzWhitelist';
+import { DEFAULT_REMINDER_CHANNEL, isReminderChannel } from '../domain/reminder';
 
 const ITEMS_TABLE = 'items';
 const TAGS_TABLE = 'tags';
@@ -185,7 +190,15 @@ function toDomainSettings(model: AppSettingsModel): AppSettings {
   };
 }
 
-/** reminders 行 → 领域 Reminder；weekdays JSON 解析失败在此抛错（不得静默，§4.18/任务卡）。 */
+/**
+ * reminders 行 → 领域 Reminder；weekdays / once_civil_json JSON 解析失败在此抛错
+ * （不得静默，§4.18/任务卡）。
+ *
+ * channel 读取防御（切片 16）：读到非法值（含 LokiJS 测试适配器忽略 v8 'sql' 回填步骤
+ * 产生的 ''）时回退 DEFAULT_REMINDER_CHANNEL，不抛错——对齐 toDomainSettings 枚举读取
+ * 先例：读取行为即 migration 回填意图（'system-notification'，行为与升级前一致）；
+ * 写路径仍严格校验（normalizeReminderChannelFields）。
+ */
 function toDomainReminder(model: ReminderModel): Reminder {
   return {
     id: model.id,
@@ -195,9 +208,12 @@ function toDomainReminder(model: ReminderModel): Reminder {
     localTimeMinute: model.localTimeMinute,
     weekdays: parseWeekdaysJson(model.weekdaysJson),
     dayOfMonth: model.dayOfMonth,
+    onceAt: model.onceCivilJson === null ? null : parseOnceCivilJson(model.onceCivilJson),
     tzid: model.tzid,
     startAt: model.startAt,
     enabled: model.enabled,
+    channel: isReminderChannel(model.channel) ? model.channel : DEFAULT_REMINDER_CHANNEL,
+    channelConfig: model.channelConfig ?? null,
     lastFiredOccurrenceKey: model.lastFiredOccurrenceKey,
     lastReconciledAt: model.lastReconciledAt,
     createdAt: model.createdAt.getTime(),
@@ -1314,6 +1330,9 @@ export class WatermelonItemRepository implements ItemRepository {
    * - tzid 必须在时区白名单内（§4.25），白名单外抛明确错误；
    * - 规则字段经 normalizeReminderRuleFields 归一化校验；
    * - lastFiredOccurrenceKey / lastReconciledAt 初始化为 null（§4.18）。
+   * 切片 16（§7.26）：frequency='once' 时 onceAt 必填（resolveOnceAt 运行时强制，
+   * 输入为可选字段的编译期缺口）；channel / channelConfig 经 normalizeReminderChannelFields
+   * 归一化（缺省 'system-notification'，渠道无关时 channelConfig 强制 null）。
    */
   async createReminder(input: CreateReminderInput): Promise<Reminder> {
     const owner = await this.getItem(input.itemId);
@@ -1329,6 +1348,11 @@ export class WatermelonItemRepository implements ItemRepository {
       weekdays: input.weekdays,
       dayOfMonth: input.dayOfMonth,
     });
+    const onceAt = resolveOnceAt(fields.frequency, input.onceAt);
+    const channelFields = normalizeReminderChannelFields({
+      channel: input.channel,
+      channelConfig: input.channelConfig,
+    });
 
     const created = await this.db.write(async () =>
       this.db.get<ReminderModel>(REMINDERS_TABLE).create((record) => {
@@ -1338,9 +1362,12 @@ export class WatermelonItemRepository implements ItemRepository {
         record.localTimeMinute = fields.localTimeMinute;
         record.weekdaysJson = serializeWeekdays(fields.weekdays);
         record.dayOfMonth = fields.dayOfMonth;
+        record.onceCivilJson = onceAt === null ? null : serializeOnceCivilJson(onceAt);
         record.tzid = input.tzid;
         record.startAt = startAt;
         record.enabled = input.enabled;
+        record.channel = channelFields.channel;
+        record.channelConfig = channelFields.channelConfig;
         record.lastFiredOccurrenceKey = null;
         record.lastReconciledAt = null;
       }),
@@ -1354,6 +1381,10 @@ export class WatermelonItemRepository implements ItemRepository {
    * 不可更新。tzid 仅接受白名单值（§4.25；任务卡实现要求 5 允许在两个白名单值间切换），
    * §4.17 的“不随系统时区自动改写”仅禁自动改写。lastFiredOccurrenceKey /
    * lastReconciledAt 只经 markReminderFired / markReminderReconciled 写入。
+   * 切片 16（§7.26）：onceAt 以「patch 合并后的最终 frequency」判定——once 必须有时刻
+   * （patch 显式提供，或现状已是非空 onceAt），否则抛明确错误；切回重复频率由
+   * resolveOnceAt 强制置 null（落库清空 once_civil_json）。channel / channelConfig
+   * 按 patch 合并后归一化：切到渠道无关渠道时旧配置强制清空。
    */
   async updateReminder(id: string, patch: UpdateReminderInput): Promise<Reminder> {
     if (patch.tzid !== undefined) {
@@ -1372,6 +1403,15 @@ export class WatermelonItemRepository implements ItemRepository {
       });
       const startAt =
         patch.startAt !== undefined ? normalizeStartAt(patch.startAt) : current.startAt;
+      const onceAt = resolveOnceAt(
+        fields.frequency,
+        patch.onceAt !== undefined ? patch.onceAt : current.onceAt,
+      );
+      const channelFields = normalizeReminderChannelFields({
+        channel: patch.channel ?? current.channel,
+        channelConfig:
+          patch.channelConfig !== undefined ? patch.channelConfig : current.channelConfig,
+      });
 
       const updated = await record.update((draft) => {
         draft.frequency = fields.frequency;
@@ -1379,7 +1419,10 @@ export class WatermelonItemRepository implements ItemRepository {
         draft.localTimeMinute = fields.localTimeMinute;
         draft.weekdaysJson = serializeWeekdays(fields.weekdays);
         draft.dayOfMonth = fields.dayOfMonth;
+        draft.onceCivilJson = onceAt === null ? null : serializeOnceCivilJson(onceAt);
         draft.startAt = startAt;
+        draft.channel = channelFields.channel;
+        draft.channelConfig = channelFields.channelConfig;
         if (patch.enabled !== undefined) {
           draft.enabled = patch.enabled;
         }
