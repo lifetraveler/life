@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.17
+版本：v0.18
 
 ## 1. 项目概览
 
@@ -233,6 +233,12 @@ schema 版本 5→6，新增/修改如下：
 ### 7.28 交互打磨与导入预览（v0.17）
 - **once 时间录入**：废弃手输格式，必须使用日期/时间 Picker，且提供“+10分钟/+1小时”等快捷 Chips，确保生成的 `{year,month,day,hour,minute}` 必定合法（拦截 02-30）。
 - **导入预览**：ICS 和系统日历导入时必须先进入预览页，展示解析结果，默认勾选新增项，确认后才落库。
+
+### 7.29 多渠道并行与偏好设置（v0.18）
+- **多渠道同开**：一个 Reminder 可同时配置多个通知渠道（如既发系统通知，又发 Webhook）。Reminder 模型升级为 `channels: string[]` 和 `channel_configs: Record<string, string>`（或等价结构）。需经变更提案确认。
+- **Chips 增量持久化**：onceAt 的快捷增量（默认 +10m/+1h）允许用户在 App 设置中修改，存入 `app_settings`。
+- **渠道预设默认值**：`channel_presets` 表增加 `is_default` 字段，详情页表单默认选中默认预设。
+- **Schema v10 迁移**：完成上述模型变更，旧数据平滑升级（单渠道转多渠道路径兼容）。
 
 ## 8. 当前切片
 tasks/slice-17.md（已完成：渠道配置中心 + Webhook 载荷适配 + once 录入增强 + 导入预览，
