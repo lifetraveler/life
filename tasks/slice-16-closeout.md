@@ -39,6 +39,17 @@ schema 迁移 7/7 断言、渠道抽象 729 用例、at-least-once 边界用户�
 ### 命令验证
 `npx tsc --noEmit` 零错误；`npx jest --runInBand` 59/745 全过；`npx expo-doctor` 16/18（2 预存基线）。
 
+### 真机验收（2026-11-12，用户执行确认）
+- **验收6 通过**：闪电添加"明早9点开会，提前10分钟提醒"→ 确认保存 → 详情页见一次性提醒（用户回复"提醒ok"）。
+- **验收7 通过**：无时间"开会，提前10分钟提醒"→ 提示"需设定时间才能提前提醒"，不落库（用户回复"ok"）。
+- **验收5 触发+触达通过，接收端渲染暴露适配缺口**：用户以 Zulip 机器人 webhook URL 为目标，到点**收到**推送（网络链路准点触发 ✓），但 Zulip 消息正文显示 `None None None`。根因：WebhookChannel 按契约 POST 固定 JSON（type/occurrenceKey/title/body/…），而 Zulip `external/zulip` 入站端点只读它自己的 query/form 参数（`content`/`topic`/`to` 等），对未知 JSON 体逐字段渲染成 None——属**接收端 payload 适配问题**，非触发缺陷。临时可用路径：webhook.site 验证链路；或改用 Apprise 渠道（自建 apprise-api，Zulip URL 配在服务端持久存储，当前 `{baseUrl,key}` 表单即可用）。payload 模板/适配已列入后续切片候选。
+
+## 后续切片候选（用户提出，本切片经裁量不改）
+以下三项由用户真机验收后提出（2026-11-12），裁量结论：均为 UX 增强/适配层，不属 slice-16 验收缺口，归入下一切片候选，避免已验收 UI 在合并前重开。
+1. **Webhook 内容适配**：channel_config 扩 payload 模板/接收端预设（如 Zulip `content/topic`、企业微信、钉钉），或输出通用 form/query 形态；涉及 channel_config 契约扩展（mapping/UI/测试），需独立变更评估。
+2. **渠道配置迁入设置页**：webhook/apprise 常用配置挪到"我的→提醒"区块二级菜单（对标"分类与标签→AI 配置"的交互），详情页表单引用已存配置——涉及全局 channel 预设存储（app_settings 或新表），独立设计。
+3. **once 触发时刻录入增强**：时间选择器组件替代/补充手输（难点：onceAt 按 reminder.tzid 民用输入，通用 picker 按设备时区工作，需 civil↔instant 转换层）；叠加快速预设（+10/+30 分钟、+1/+3/+6 小时、+1 天等 chips，经 getZonedParts(now+delta, tzid) 计算）。预设 chips 改动小，可与组件一起在下一切片做。
+
 ## 踩坑教训
 1. dev client 拉起必须 UI 点击，deep link 对启动器无效；会话卡加载点 Reload。
 2. life.db 在 app 根目录而非 databases/；WAL 三件套拉库。

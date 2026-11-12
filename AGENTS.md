@@ -228,7 +228,8 @@ schema 版本 5→6，新增/修改如下：
 
 
 ## 8. 当前切片
-tasks/slice-16.md（立项；开工闸门见 §7.26：变更提案确认前禁改提醒冻结区）
+tasks/slice-16.md（已完成：一次性提醒 + 四渠道推送，closeout 见 tasks/slice-16-closeout.md；
+后续切片候选（Webhook 内容适配 / 渠道配置迁设置页 / once 触发时刻录入增强）见 closeout「后续切片候选」节）
 
 
 
