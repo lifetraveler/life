@@ -18,6 +18,7 @@ import type {
 } from '../domain/reminder';
 import { REMINDER_CHANNELS } from '../domain/reminder';
 import { REMINDER_TZ_WHITELIST, isWhitelistedReminderTz } from '../data/reminderTzWhitelist';
+import { parseWebhookChannelConfig } from '../notifications/channels/webhookConfig';
 import type { ChannelPreset } from '../domain/channelPreset';
 
 /** 表单可编辑值：数值字段允许 null（未填），提交前必须通过 validateReminderForm */
@@ -98,6 +99,31 @@ export const NETWORK_CHANNEL_BOUNDARY_NOTICE = '网络推送仅在 App 进程存
  */
 export function isValidHttpUrl(raw: string): boolean {
   return /^https?:\/\/\S+$/i.test(raw);
+}
+
+/**
+ * Webhook 配置 JSON 形态守卫（切片 17 阶段 2）：渠道预设的 configJson 是
+ * 含 url + mode + payloadTemplate 的完整配置 JSON（§7.27），选预设=整串复制进
+ * channelConfigText 后不能按纯 URL 校验。守卫入口 parseWebhookChannelConfig
+ * 只收 string|null（内部 JSON.parse，非 JSON 串会被当 URL 放行），故此处先验
+ * 「JSON 对象形态」再复用守卫的对象分支校验（url 必填 http(s)、payloadTemplate
+ * 与 mode 配套）。纯 TS 无 expo 依赖，UI 层引用合规（ChannelPresetEditor 同先例）。
+ */
+export function isWebhookConfigJson(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith('{')) {
+    return false;
+  }
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return false;
+    }
+    parseWebhookChannelConfig(JSON.stringify(parsed));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** 'YYYY-MM-DD' → { year, month, day }；格式或范围不符返回 null（月内日历有效性按契约留给调度侧换算判定） */
@@ -223,8 +249,11 @@ export function validateReminderForm(values: ReminderFormValues): ReminderFormEr
     const url = values.channelConfigText.trim();
     if (url.length === 0) {
       errors.channelConfig = 'Webhook URL 不能为空';
-    } else if (!isValidHttpUrl(url)) {
-      errors.channelConfig = 'URL 格式无效（需以 http:// 或 https:// 开头）';
+    } else if (!isValidHttpUrl(url) && !isWebhookConfigJson(url)) {
+      // 切片 17 阶段 2：选预设=整串复制后 channelConfigText 可能是含
+      // url + payloadTemplate 的完整配置 JSON（§7.27 模板适配），非纯 URL 也合法。
+      errors.channelConfig =
+        'URL 或配置 JSON 无效（需以 http:// 或 https:// 开头，或为含 url 的 Webhook 配置 JSON）';
     }
   }
 

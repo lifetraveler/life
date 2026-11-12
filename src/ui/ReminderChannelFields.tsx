@@ -78,7 +78,7 @@ export default function ReminderChannelFields({
             style={[styles.urlInput, errors.channelConfig && styles.inputError]}
             value={values.channelConfigText}
             onChangeText={(text) => onPatch({ channelConfigText: text, channelPresetId: null })}
-            placeholder="Webhook URL（http/https）"
+            placeholder="Webhook URL（http/https）或配置 JSON（选预设自动填入）"
             autoCapitalize="none"
             autoCorrect={false}
           />

@@ -1,6 +1,7 @@
 import {
   buildCreateReminderInput,
   buildUpdateReminderInput,
+  isWebhookConfigJson,
   validateReminderForm,
 } from '../reminderForm';
 import type { ReminderFormValues } from '../reminderForm';
@@ -267,5 +268,46 @@ describe('buildUpdateReminderInput（切片 16 阶段 3）', () => {
     expect(patch.channelConfig).toBe('https://example.com/hook');
     expect(patch.localTimeHour).toBe(0);
     expect(patch.localTimeMinute).toBe(0);
+  });
+});
+
+describe('isWebhookConfigJson（切片 17 阶段 2：预设整串复制的配置 JSON 形态）', () => {
+  it('含 url 的完整配置 JSON（form 模板）→ true', () => {
+    expect(
+      isWebhookConfigJson(
+        JSON.stringify({
+          url: 'https://hooks.example.com/zulip',
+          mode: 'form',
+          payloadTemplate: { type: 'stream', to: 'general', topic: '生活提醒', content: '{{title}}' },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it('含 url 的 json 模式配置 JSON → true；url 缺失/非法 → false', () => {
+    expect(isWebhookConfigJson(JSON.stringify({ url: 'https://example.com/hook' }))).toBe(true);
+    expect(isWebhookConfigJson(JSON.stringify({ url: 'https://a.com', mode: 'text', payloadTemplate: 'hi' }))).toBe(true);
+    expect(isWebhookConfigJson(JSON.stringify({ foo: 1 }))).toBe(false);
+    expect(isWebhookConfigJson(JSON.stringify({ url: 'ftp://x' }))).toBe(false);
+  });
+
+  it('纯 URL / 任意非 JSON 串 / 非对象 JSON → false（走 URL 校验分支）', () => {
+    expect(isWebhookConfigJson('https://example.com/hook')).toBe(false);
+    expect(isWebhookConfigJson('{bad json')).toBe(false);
+    expect(isWebhookConfigJson('123')).toBe(false);
+    expect(isWebhookConfigJson('[1,2]')).toBe(false);
+    expect(isWebhookConfigJson('')).toBe(false);
+  });
+
+  it('validate：webhook 选预设后 channelConfigText=配置 JSON 不再报 URL 错误', () => {
+    const values = validValues({ channel: 'webhook' });
+    values.channelConfigText = JSON.stringify({
+      url: 'https://hooks.example.com/zulip',
+      mode: 'form',
+      payloadTemplate: { type: 'stream', to: 'general', content: '{{title}}' },
+    });
+    expect(validateReminderForm(values).channelConfig).toBeUndefined();
+    values.channelConfigText = 'not a url at all';
+    expect(validateReminderForm(values).channelConfig).toContain('URL 或配置 JSON 无效');
   });
 });
