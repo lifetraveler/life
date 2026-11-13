@@ -429,6 +429,11 @@ export default function SettingsPage() {
           <Text style={styles.navLabel}>默认提醒方式</Text>
           <Text style={styles.navChevron}>›</Text>
         </Pressable>
+        {/* 切片 20 阶段 2：后台运行保障（AGENTS.md §7.31 第三条，电池优化白名单状态展示 + 弹窗/设置页引导） */}
+        <Pressable style={styles.navRow} onPress={() => router.push('/settings/background-reliability')}>
+          <Text style={styles.navLabel}>后台运行保障</Text>
+          <Text style={styles.navChevron}>›</Text>
+        </Pressable>
       </View>
 
       <View style={styles.section}>

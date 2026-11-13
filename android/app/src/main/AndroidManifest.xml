@@ -10,6 +10,13 @@
        本应用无任何系统日历写回调用路径。 -->
   <uses-permission android:name="android.permission.READ_CALENDAR"/>
   <uses-permission android:name="android.permission.WRITE_CALENDAR"/>
+  <!-- 切片 20：电池优化白名单（变更 A）所需的 normal 级运行权限——唤起系统授权弹窗
+       ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS 的 manifest 前提（提案
+       docs/proposals/slice-20-network-channel-reliability.md）。本工程 android/ 已 checked in，
+       plugin 只在 prebuild 时写 manifest，故手工同步（与切片 9 惯例一致）。
+       提案原写 app.json android.permissions 声明，经复核改为仅此处声明：app.json 一旦声明
+       permissions 列表，未来 prebuild 会整体替换默认权限集，有丢失现有权限的风险（§5）。 -->
+  <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
   <queries>
     <intent>
       <action android:name="android.intent.action.VIEW"/>

@@ -1,0 +1,7 @@
+{
+  "name": "battery-optimization",
+  "version": "0.1.0",
+  "description": "Slice 20 local Expo module: battery-optimization whitelist check/request bridge (PowerManager), for network channel background delivery reliability.",
+  "main": "index.ts",
+  "private": true
+}
