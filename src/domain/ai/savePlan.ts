@@ -10,12 +10,22 @@
  * 无重复规则且有提前量时自动创建 once 提醒，触发时刻 = startAt - offset；
  * 民用分解只用 civilTime.getZonedParts（不自行实现时区/DST 换算）。
  * 无时间 / 白名单外 / 触发时刻已过去时不落库，保留卡片意图并以 reminderNotice 说明。
+ * 切片 19 阶段 2（AGENTS.md §7.30）：reminderDelayMinutes 落库——无重复规则时
+ * 以 now + delay*60000 创建 once 提醒（无需 startAt）；白名单外不落库并披露。
+ * 切片 19 真机验收修正：
+ * - 验收 3 反馈：延迟落库时条目 startAt 锚定触发时刻（now + delay），否则条目
+ *   没有任何时间、落入无时间「待办」组，用户预期是出现在日程/时刻上；
+ * - 验收 4 反馈：AI 落库提醒的渠道跟随全局默认渠道（defaultChannels 入参，
+ *   app_settings.defaultChannels），不再恒为系统通知单渠道；网络渠道参数自动取
+ *   渠道预设（默认预设 → 第一条，用户既定需求），完全无预设时才披露投递会失败。
  */
 
 import type { CreateItemInput } from '../item';
 import { isWhitelistedReminderTz } from '../../data/reminderTzWhitelist';
 import { resolveOnceAt } from '../../data/reminderRuleMapping';
+import { resolveChannelPreset, type ChannelPreset } from '../channelPreset';
 import { getZonedParts } from '../recurrence/civilTime';
+import { isNetworkReminderChannel, type ReminderChannel } from '../reminder';
 import { mapDraftToCreateInputs } from './mapper';
 import type { ReminderPlan } from './mapper';
 import type { ParsedItemDraft } from './types';
@@ -40,21 +50,12 @@ export interface FlashSavePlan {
  * allDay 条目不做特殊分支：机械按「当天 00:00 - offset」计算，可能落在前一日晚间；
  * 披露为已知边界（AI 仅对明确带时刻的输入产出 offset）。
  */
-function buildOnceReminderPlan(
-  offsetMinutes: number,
-  startAt: number | null,
+function toOncePlan(
+  fireInstant: number,
   tzid: string,
-  now: number,
 ): { plan: ReminderPlan | null; notice: string | null } {
-  if (startAt === null) {
-    return { plan: null, notice: '需设定时间才能提前提醒' };
-  }
   if (!isWhitelistedReminderTz(tzid)) {
     return { plan: null, notice: `提醒未创建：设备时区 ${tzid} 暂不支持（仅支持上海/纽约）` };
-  }
-  const fireInstant = startAt - offsetMinutes * 60000;
-  if (fireInstant <= now) {
-    return { plan: null, notice: '提醒时刻已过去，未创建一次性提醒' };
   }
   // 民用换算唯一入口（任务约束）：不自行实现时区/DST 逻辑。
   const parts = getZonedParts(fireInstant, tzid);
@@ -89,10 +90,43 @@ function buildOnceReminderPlan(
   };
 }
 
+function buildOnceReminderPlan(
+  offsetMinutes: number,
+  startAt: number | null,
+  tzid: string,
+  now: number,
+): { plan: ReminderPlan | null; notice: string | null } {
+  if (startAt === null) {
+    return { plan: null, notice: '需设定时间才能提前提醒' };
+  }
+  const fireInstant = startAt - offsetMinutes * 60000;
+  if (fireInstant <= now) {
+    return { plan: null, notice: '提醒时刻已过去，未创建一次性提醒' };
+  }
+  return toOncePlan(fireInstant, tzid);
+}
+
+/**
+ * 延迟提醒计划构造（切片 19 阶段 2，AGENTS.md §7.30 第一条）：
+ * 触发时刻 = now + delay*60000，相对当前时刻、无需 startAt（startAt 为 null 也正常落库）。
+ * delay ≥ 1（guard 纪律）保证 fireInstant 恒晚于 now，无需「已过去」降级；
+ * tzid 白名单校验与民用换算复用 once 通道（toOncePlan）。
+ */
+function buildDelayReminderPlan(
+  delayMinutes: number,
+  tzid: string,
+  now: number,
+): { plan: ReminderPlan | null; notice: string | null; fireInstant: number } {
+  const fireInstant = now + delayMinutes * 60000;
+  return { ...toOncePlan(fireInstant, tzid), fireInstant };
+}
+
 export function buildFlashSavePlan(
   draft: ParsedItemDraft,
   tzid: string,
   now: number,
+  defaultChannels?: ReminderChannel[],
+  presets?: readonly ChannelPreset[],
 ): FlashSavePlan {
   const mapped = mapDraftToCreateInputs(draft, tzid, now);
   const { startAt, endAt, allDay, ...itemInput } = mapped.item;
@@ -103,19 +137,96 @@ export function buildFlashSavePlan(
     reminderPlan = null;
     reminderNotice = `重复提醒未创建：设备时区 ${tzid} 暂不支持（仅支持上海/纽约）`;
   }
+  // 延迟意图锚定条目 startAt（验收 3 反馈）：仅当原 draft 没有给出 startAt 且按
+  // 延迟落库时，条目开始时刻取触发时刻，避免落入无时间「待办」组。提醒即使因
+  // 白名单等原因未创建（plan null），该时刻锚定仍成立（条目时间与提醒互相独立）。
+  let delayAnchoredStartAt: number | null = null;
 
   // 切片 16 阶段 3：无重复规则 + 有提前量 → 自动创建 once 提醒。
-  // recurrence 命中时重复计划优先（mapper 产出），offset 仍只保留在卡片意图，行为不变。
-  if (draft.recurrence === null && draft.reminderOffsetMinutes !== null) {
-    const once = buildOnceReminderPlan(draft.reminderOffsetMinutes, startAt ?? null, tzid, now);
-    reminderPlan = once.plan;
-    reminderNotice = once.notice;
+  // recurrence 命中时重复计划优先（mapper 产出），offset/delay 仍只保留在卡片意图，行为不变。
+  // 切片 19 阶段 2（AGENTS.md §7.30 第一条）：无重复规则 + 延迟提醒 → once 提醒
+  // （触发时刻 = now + delay*60000，无需 startAt）。提前量与延迟量同现时二者是两条
+  // 独立意图（ai.md v0.17），但闪电落库一次只产一条计划（任务卡「生成一条」）：
+  // 提前量可锚定（startAt 非空）时提前提醒优先（「再提醒一次」语义中锚定事件开始的
+  // 是主提醒），延迟意图披露在 notice 并保留卡片；提前量无法锚定时按延迟落库并披露。
+  if (draft.recurrence === null) {
+    const offset = draft.reminderOffsetMinutes;
+    const delay = draft.reminderDelayMinutes;
+    if (offset !== null && delay !== null) {
+      if (startAt !== null) {
+        const once = buildOnceReminderPlan(offset, startAt ?? null, tzid, now);
+        reminderPlan = once.plan;
+        reminderNotice =
+          once.plan !== null
+            ? `已按「提前 ${offset} 分钟」创建提醒；「${delay} 分钟后提醒」意图已保留在卡片（暂不支持一次创建两条提醒）`
+            : once.notice;
+      } else {
+        const delayed = buildDelayReminderPlan(delay, tzid, now);
+        reminderPlan = delayed.plan;
+        delayAnchoredStartAt = startAt === null ? delayed.fireInstant : null;
+        reminderNotice =
+          delayed.plan !== null
+            ? `已按「${delay} 分钟后」创建提醒；「提前 ${offset} 分钟」需设定时间，已保留在卡片`
+            : delayed.notice;
+      }
+    } else if (offset !== null) {
+      const once = buildOnceReminderPlan(offset, startAt ?? null, tzid, now);
+      reminderPlan = once.plan;
+      reminderNotice = once.notice;
+    } else if (delay !== null) {
+      const delayed = buildDelayReminderPlan(delay, tzid, now);
+      reminderPlan = delayed.plan;
+      // 仅当 draft 本身没有 startAt 才锚定（startAt 有值时条目时间照常保留，验收 3
+      // 场景是「10分钟后提醒我起床」这类无具体时间输入）。
+      delayAnchoredStartAt = startAt === null ? delayed.fireInstant : null;
+      reminderNotice = delayed.notice;
+    }
+  }
+
+  // 切片 19 验收 4 反馈：AI 落库提醒渠道跟随全局默认渠道（app_settings.defaultChannels，
+  // §7.30 默认渠道偏好），覆盖 once/重复计划的默认单系统通知。入参来自设置读层
+  // （已 canonical/去重/expo 互斥归一），Repository 写路径仍会再校验。
+  if (reminderPlan !== null && defaultChannels !== undefined && defaultChannels.length > 0) {
+    reminderPlan = { ...reminderPlan, channels: [...defaultChannels] };
+  }
+  // 切片 19 验收 4 反馈（用户既定需求）：网络渠道参数自动取渠道预设——默认预设优先，
+  // 无默认取第一条（resolveChannelPreset 与手动表单共用）。完全无预设时才披露
+  // （AI 提醒不该催用户补渠道参数；静默创建注定失败的投递也不诚实，故留一句事实陈述）。
+  if (reminderPlan !== null) {
+    const baseConfigs = reminderPlan.channelConfigs ?? {};
+    const filledConfigs: Record<string, string> = { ...baseConfigs };
+    const missingConfig: string[] = [];
+    for (const channel of reminderPlan.channels ?? []) {
+      // 手写窄化（isNetworkReminderChannel 不携带类型谓词）：仅在 channel 为
+      // webhook/apprise 时做预设解析。
+      if (channel !== 'webhook' && channel !== 'apprise') {
+        continue;
+      }
+      if (filledConfigs[channel] !== undefined && filledConfigs[channel] !== '') {
+        continue;
+      }
+      const preset = resolveChannelPreset(channel, presets ?? []);
+      if (preset !== null) {
+        filledConfigs[channel] = preset.configJson;
+      } else {
+        missingConfig.push(channel);
+      }
+    }
+    // 仅在真正解析出配置时重建计划对象：mapper 的重复计划不含 channelConfigs 键，
+    // 无谓重建会在全量断言测试里多出一个空对象键（表现层无差，但不诚实）。
+    if (Object.keys(filledConfigs).length > Object.keys(baseConfigs).length) {
+      reminderPlan = { ...reminderPlan, channelConfigs: filledConfigs };
+    }
+    if (missingConfig.length > 0) {
+      const hint = `网络渠道（${missingConfig.join('/')}）尚未配置任何渠道预设，到点投递会失败`;
+      reminderNotice = reminderNotice === null ? hint : `${reminderNotice}；${hint}`;
+    }
   }
 
   return {
     itemInput,
     timePatch: {
-      startAt: startAt ?? null,
+      startAt: delayAnchoredStartAt ?? startAt ?? null,
       endAt: endAt ?? null,
       allDay: allDay ?? false,
     },

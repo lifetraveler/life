@@ -6,7 +6,8 @@
  * 避免同一片段被多个槽位重复消费（例如“每周三”被重复槽认领后，日期槽不再把
  * “周三”当作单次日期）。标题 = 输入去掉已认领区间后的剩余文本。
  *
- * 槽位扫描顺序：标签 → 提醒 → 重复 → 日期 → 区间 → 单点时刻 → 分类/优先级/类型。
+ * 槽位扫描顺序：标签 → 延迟提醒 → 提醒 → 重复 → 日期 → 区间 → 单点时刻 → 分类/优先级/类型。
+ * （切片 19 §7.30 新增延迟提醒槽：先于提前提醒槽，命中即整段认领含提醒尾词。）
  *
  * 防误判纪律：
  * - 白名单词表驱动，不做开放语义理解；不认识的词留在标题里，绝不猜；
@@ -38,11 +39,20 @@
  *   契约性默认值而非猜测）；重复 + 区间 → 取区间起点作 localTime，endAt 丢弃；
  * - 提醒槽必须同时出现“提前/…前”与“提醒/叫我/闹钟/响铃”，避免把
  *   “提前10分钟出发”误判为提醒；
+ * - 延迟提醒槽（切片 19 §7.30）：“X分钟/小时后(再/就)?提醒/叫我/闹钟/响铃” →
+ *   reminderDelayMinutes。换算：小时/钟头 → n*60（+半=30，一个半小时=90）；
+ *   分钟/分 → n 原样；“半”只修饰小时（半小时=30，“半分钟后”不支持）；
+ *   数字支持 \d{1,4} 与汉字（一~九十九，含“两”）；“以后/之后”同“后”；
+ *   数量缺一不可（n 与 半 至少一者），结果 <1 分钟无效；
+ *   前置字符“前”封锁（“提前30分钟以后提醒”不是延迟——两个槽都不匹配，留标题）；
  * - 分类与优先级关键词只判定槽位，不裁剪标题（“讨论项目”不会被剪成“讨论”）。
  *
  * 已知局限（如实披露，不做静默猜测）：农历、“每隔一天”、周一+N号 这类过指定
  * 输入（周几槽先命中，N号 留在标题）等不在白名单内；LocalFallback 只承诺任务卡
  * 示例级别（明天/明早8点/下午3点/下周三/每月15号/区间/重复/提醒）的可靠解析。
+ * 延迟提醒槽的已知边界（切片 19，如实披露）：“过/等10分钟提醒我”（无“后”）、
+ * “X天后提醒我”（天单位不在支持单位内；“3天后提醒我”被日期槽认领为 start）
+ * 均不产 reminderDelayMinutes——对应短语留在标题或按日期语义解析，不静默造提醒。
  */
 
 import {
@@ -473,6 +483,37 @@ const REMINDER_AGO_RE = new RegExp(
   'u',
 );
 
+// 切片 19（§7.30）：延迟提醒槽——“X分钟/小时后提醒我”（相对当前时刻的延迟）。
+// 与用户给定的 /(\d+)(分钟|小时).*?后.*?(提醒|叫我|闹钟)/ 相比刻意收紧：
+// - 数字限 \d{1,4}（≤9999 < 10080=CHIPS_MAX_MINUTES；汉字沿用 parseChineseNumeral ≤99），
+//   避免 NUM_SRC 的 \d{1,2} 漏掉“100分钟后提醒我”这类输入（防静默丢失）；
+// - 去掉松散的 .*? 段，改为紧邻结构 + 提醒尾词必选（提醒/叫我/闹钟/响铃），
+//   防止跨词误配；“过/等10分钟提醒我”（无“后”）不产 delay（已知边界，见文件头）。
+// - n 与 half 至少一者存在；“半分钟”（=30 秒）不支持；分钟单位下 half 必须缺席。
+const DELAY_NUM_SRC = '(?:\\d{1,4}|[零一二两三四五六七八九十]+)';
+const REMINDER_DELAY_RE = new RegExp(
+  `(?:(?<n>${DELAY_NUM_SRC})\\s*个?\\s*)?(?<half>半)?\\s*(?<u>小时|钟头|分钟|分)\\s*(?:以|之)?\\s*后\\s*(?:再|就)?\\s*(?:提醒|叫我|闹钟|响铃)`,
+  'u',
+);
+
+function reminderDelayMinutesFromMatch(m: RegExpExecArray): number | null {
+  const u = m.groups?.u;
+  const nRaw = m.groups?.n;
+  const half = m.groups?.half;
+  if (u === undefined) return null;
+  const isHour = u === '小时' || u === '钟头';
+  const isMinute = u === '分钟' || u === '分';
+  if (!isHour && !isMinute) return null;
+  // “半”只修饰小时（半小时=30 分钟）；“半分钟后”=30 秒，不在支持范围。
+  if (half !== undefined && !isHour) return null;
+  if (nRaw === undefined && half === undefined) return null;
+  const n = nRaw === undefined ? 0 : parseNumToken(nRaw);
+  if (n === null || n < 0) return null;
+  const minutes = (isHour ? n * 60 : n) + (half !== undefined ? 30 : 0);
+  if (minutes < 1) return null;
+  return minutes;
+}
+
 function reminderMinutes(m: RegExpExecArray): number | null {
   const u = m.groups?.u;
   const nRaw = m.groups?.n;
@@ -677,6 +718,21 @@ export class LocalFallbackProvider implements AiParser {
           true,
         );
       }
+    }
+
+    // --- 延迟提醒（切片 19 §7.30：“X分钟/小时后提醒我”）---
+    // 先于提前提醒槽扫描：延迟命中即整段认领（含提醒尾词），提前槽不会重复消费；
+    // prevCharBlocked('前') 排除“提前30分钟以后提醒”——“提前X”是 offset 语义，
+    // 且带“以后”后缀时两个槽都不匹配，短语留在标题（既有行为的自然延伸，非回归）。
+    let reminderDelayMinutes: number | null = null;
+    const delayScan = scan(REMINDER_DELAY_RE, trimmed, claimed, (m, full) => {
+      if (prevCharBlocked(full, m.index, '前')) return null;
+      return reminderDelayMinutesFromMatch(m);
+    });
+    if (delayScan !== null) {
+      reminderDelayMinutes = delayScan.value;
+      claim(claimed, titleSpans, { start: delayScan.index, end: delayScan.end }, true);
+      expressed.add('reminderDelayMinutes');
     }
 
     // --- 提醒 ---
@@ -934,7 +990,8 @@ export class LocalFallbackProvider implements AiParser {
 
     let type: ParsedItemType = 'note';
     const isEvent = EVENT_WORDS_RE.test(trimmed) || startCt !== null;
-    const isTask = TASK_WORDS_RE.test(trimmed) || reminderOffsetMinutes !== null;
+    const isTask =
+      TASK_WORDS_RE.test(trimmed) || reminderOffsetMinutes !== null || reminderDelayMinutes !== null;
     if (isEvent) {
       type = 'event';
     } else if (isTask) {
@@ -960,6 +1017,7 @@ export class LocalFallbackProvider implements AiParser {
         priority,
         recurrence,
         reminderOffsetMinutes,
+        reminderDelayMinutes,
       },
       expressed,
     };

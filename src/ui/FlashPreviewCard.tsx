@@ -82,6 +82,11 @@ export default function FlashPreviewCard({
           提醒：提前{draft.reminderOffsetMinutes}分钟
         </Text>
       ) : null}
+      {draft.reminderDelayMinutes !== null ? (
+        <Text style={styles.rowText}>
+          提醒：{draft.reminderDelayMinutes}分钟后
+        </Text>
+      ) : null}
       <Text style={styles.editHint}>点击卡片可修改字段</Text>
     </Pressable>
   );

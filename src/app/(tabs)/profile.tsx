@@ -424,6 +424,11 @@ export default function SettingsPage() {
           <Text style={styles.navLabel}>快捷 Chips 增量设置</Text>
           <Text style={styles.navChevron}>›</Text>
         </Pressable>
+        {/* 切片 19 阶段 3：默认提醒方式（AGENTS.md §7.30 第二条，app_settings.defaultChannels） */}
+        <Pressable style={styles.navRow} onPress={() => router.push('/settings/default-channels')}>
+          <Text style={styles.navLabel}>默认提醒方式</Text>
+          <Text style={styles.navChevron}>›</Text>
+        </Pressable>
       </View>
 
       <View style={styles.section}>

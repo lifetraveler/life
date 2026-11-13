@@ -20,6 +20,8 @@ import type { AiConfig } from '../domain/ai/configStore';
 import { buildFlashSavePlan } from '../domain/ai/savePlan';
 import type { ChatMessage, ParsedItemDraft } from '../domain/ai/types';
 import type { Category } from '../domain/category';
+import type { ChannelPreset } from '../domain/channelPreset';
+import type { ReminderChannel } from '../domain/reminder';
 import { reminderScheduler } from '../notifications';
 import { getDeviceTzid } from './timeFormat';
 
@@ -131,7 +133,22 @@ export function useFlashChat() {
     setBusy(true);
     const tzid = getDeviceTzid();
     try {
-      const plan = buildFlashSavePlan(current, tzid, Date.now());
+      // 切片 19 验收 4 反馈：AI 落库提醒渠道跟随全局默认渠道（app_settings.defaultChannels），
+      // 网络渠道参数自动取渠道预设（默认预设 → 第一条）。读取失败不阻断保存
+      //（回退 savePlan 默认单系统通知 + 无预设披露）。
+      let defaultChannels: ReminderChannel[] | undefined;
+      let presets: ChannelPreset[] = [];
+      try {
+        const [settings, presetList] = await Promise.all([
+          itemRepository.getSettings(),
+          itemRepository.listChannelPresets(),
+        ]);
+        defaultChannels = settings.defaultChannels;
+        presets = presetList;
+      } catch (error) {
+        console.warn('[slice-19] 默认渠道/渠道预设读取失败，使用回退值', error);
+      }
+      const plan = buildFlashSavePlan(current, tzid, Date.now(), defaultChannels, presets);
       const created = await itemRepository.createItem(plan.itemInput);
       await itemRepository.updateItemTime(created.id, plan.timePatch);
       for (const name of plan.tagNames) {

@@ -31,6 +31,7 @@ const validWireJson = JSON.stringify({
   priority: null,
   recurrence: null,
   reminderOffsetMinutes: null,
+  reminderDelayMinutes: null,
 });
 
 type FetchCall = { url: string; init: RequestInit | undefined };
@@ -151,6 +152,7 @@ describe('OpenAICompatibleProvider', () => {
       priority: null,
       recurrence: { frequency: 'daily', localTime: { hour: 9, minute: 0 } },
       reminderOffsetMinutes: null,
+      reminderDelayMinutes: null,
     });
     const { fetchImpl } = makeFetch(() => okEnvelope(draftWithRecurrence));
     const provider = makeProvider(fetchImpl);
@@ -180,6 +182,7 @@ describe('OpenAICompatibleProvider', () => {
         localTime: { hour: 8, minute: 0 },
       },
       reminderOffsetMinutes: null,
+      reminderDelayMinutes: null,
     });
     const { fetchImpl } = makeFetch(() => okEnvelope(draftNullStart));
     const provider = makeProvider(fetchImpl);
@@ -345,6 +348,7 @@ describe('isRemoteDraftWire / wireToParsedItemDraft（v0.16 民用 wire）', () 
     priority: 2,
     recurrence: null,
     reminderOffsetMinutes: 10,
+    reminderDelayMinutes: null,
   };
   const patchWire = (patch: Record<string, unknown>): unknown => ({ ...validWire, ...patch });
 
@@ -407,5 +411,21 @@ describe('isRemoteDraftWire / wireToParsedItemDraft（v0.16 民用 wire）', () 
     const draft = wireToParsedItemDraft(wire, CONTEXT);
     draft.tags.push('改动');
     expect(wire.tags).toEqual(['工作']);
+  });
+
+  it('reminderDelayMinutes 透传：与 offset 语义独立，可同现分别填写（切片 19 §7.30）', () => {
+    const wire = isRemoteDraftWire(patchWire({ reminderDelayMinutes: 30 }));
+    expect(wire).not.toBeNull();
+    const draft = wireToParsedItemDraft(wire as NonNullable<typeof wire>, CONTEXT);
+    expect(draft.reminderDelayMinutes).toBe(30);
+    expect(draft.reminderOffsetMinutes).toBe(10); // offset 原样保留，互不覆盖
+  });
+
+  it('reminderDelayMinutes 非法值整体拒绝：0 / 2.5 / 非数字；键缺失拒绝', () => {
+    expect(isRemoteDraftWire(patchWire({ reminderDelayMinutes: 0 }))).toBeNull();
+    expect(isRemoteDraftWire(patchWire({ reminderDelayMinutes: 2.5 }))).toBeNull();
+    expect(isRemoteDraftWire(patchWire({ reminderDelayMinutes: '30' }))).toBeNull();
+    const { reminderDelayMinutes: _d, ...noDelay } = validWire;
+    expect(isRemoteDraftWire(noDelay)).toBeNull();
   });
 });

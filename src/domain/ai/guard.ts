@@ -5,6 +5,8 @@
  * 严禁直接 `as` 强转。本守卫刻意从紧：
  * - 字符串数字（"15"、"2.5"）、缺字段、多余无关字段不拦（多余字段忽略）；
  *   但 startAt/endAt 必须是有限数或 null，priority 必须是 0..3 整数或 null；
+ *   reminderOffsetMinutes / reminderDelayMinutes（切片 19，§7.30）必须是 ≥1 整数
+ *   或 null——键缺失（undefined）与非法值同样整体拒绝（draft 形状纪律）。
  * - tags 数组元素必须是 string；
  * - recurrence 必须完整匹配 daily/weekly/monthly 三种形状之一（weekdays 1..7、
  *   dayOfMonth 1..31、localTime.hour 0..23、localTime.minute 0..59，均为整数）；
@@ -118,6 +120,16 @@ export function isParsedItemDraft(value: unknown): ParsedItemDraft | null {
     return null;
   }
 
+  // 切片 19（§7.30）：reminderDelayMinutes 同 reminderOffsetMinutes 纪律——
+  // 键必填（缺失时 undefined !== null → 整体拒绝），值须为 ≥1 的安全整数或 null。
+  const reminderDelayMinutes = value.reminderDelayMinutes;
+  if (
+    reminderDelayMinutes !== null &&
+    (!isIntegerIn(reminderDelayMinutes, 1, Number.MAX_SAFE_INTEGER))
+  ) {
+    return null;
+  }
+
   return {
     title,
     content,
@@ -130,6 +142,7 @@ export function isParsedItemDraft(value: unknown): ParsedItemDraft | null {
     priority,
     recurrence: recurrenceRaw === null ? null : (recurrenceRaw as RecurrenceRule),
     reminderOffsetMinutes,
+    reminderDelayMinutes,
   };
 }
 

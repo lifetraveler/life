@@ -24,6 +24,9 @@ import { APP_SETTINGS_ROW_ID, DEFAULT_APP_SETTINGS } from '../domain/settings';
  *        channel 全表回填 'system-notification'（切片 16 阶段 1，AGENTS.md §7.26，
  *        docs/proposals/slice-16-reminder-channels.md）
  * - v9：新增 channel_presets 表（切片 17 阶段 1，AGENTS.md §7.27 渠道配置中心）
+ * - v10：reminders 新增 channels_json / channel_configs_json，app_settings 新增
+ *        chips_increments，channel_presets 新增 is_default（切片 18 阶段 1，AGENTS.md §7.29）
+ * - v11：app_settings 新增 default_channels_json（切片 19 阶段 1，AGENTS.md §7.30）
  *
  * 规则（AGENTS.md §4.6）：已发布的 migration step 不得修改，只能在末尾追加；
  * 新增表必须在 migration 中显式创建，不得依赖“删库重装”。
@@ -274,6 +277,23 @@ export default schemaMigrations({
         addColumns({
           table: 'channel_presets',
           columns: [{ name: 'is_default', type: 'boolean' }],
+        }),
+      ],
+    },
+    {
+      // 切片 19 阶段 1（AGENTS.md §7.30 延迟提醒意图与默认渠道）：v11 app_settings 加列；
+      // v2–v10 step 保持原样，不得修改。
+      // - 单条 addColumns，零 unsafeExecuteSql、零 UPDATE：default_channels_json 可空列
+      //   回填 null，读取层防御归一（domain/settings.ts parseDefaultChannels：坏值/空/
+      //   expo 双开 → 回退默认 ["system-notification"] 或丢弃非法项），与 v10
+      //   chips_increments 先例一致——不做 SQL 回填，避免字符串拼接转义风险，
+      //   且 LokiJS 适配器（仅测试用）忽略 'sql' 步骤无法单测；
+      // - 列定义与 schema.ts 的 tableSchema 严格一致（漂移会被模式不匹配检测抛错）。
+      toVersion: 11,
+      steps: [
+        addColumns({
+          table: 'app_settings',
+          columns: [{ name: 'default_channels_json', type: 'string', isOptional: true }],
         }),
       ],
     },

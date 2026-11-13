@@ -278,3 +278,14 @@ SystemImportResult：
 - `updateSettings` patch 增加 `chipsIncrements?`：写前经严格校验（1–4 项、每项 1–10080
   整数分钟，越界/非整数/空/超限抛明确错误），通过后序列化落库；读层防御归一规则见
   data-model.md v0.18 节（读宽松、写严格）。
+
+### 全局设置扩展（defaultChannels，v0.19，切片 19 阶段 1 落地）
+- `AppSettings` 领域对象增加 `defaultChannels: ReminderChannel[]`（新建提醒表单
+  默认勾选的渠道集合；AGENTS.md §7.30 第二条）。
+- `getSettings` 兜底建行时写入默认 `["system-notification"]`（serializeDefaultChannels
+  落库，seed 与 ensure 路径一致）；存量行 default_channels_json 为 null（v10 旧行升级
+  或省列）时读层经 parseDefaultChannels 回退同款默认，不抛错。
+- `updateSettings` patch 增加 `defaultChannels?`：写前经 validateDefaultChannels 严格
+  校验（非空数组、元素全部为合法渠道 id、expo 家族 system-notification/alarm 至多一个，
+  违反抛明确错误），通过后去重 + REMINDER_CHANNELS canonical 序排列序列化落库；
+  行不存在时以 patch 值（缺省用默认值）建行。读层防御归一规则见 data-model.md v0.19 节。

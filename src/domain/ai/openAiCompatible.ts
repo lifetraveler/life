@@ -88,7 +88,7 @@ export interface RemoteDateTimeField {
   time: string | null;
 }
 
-/** 模型实际输出的 JSON 形状（v0.16：不含任何毫秒时间戳）。 */
+/** 模型实际输出的 JSON 形状（v0.16：不含任何毫秒时间戳；v0.17：+reminderDelayMinutes）。 */
 export interface RemoteDraftWire {
   title: string;
   content: string;
@@ -101,6 +101,11 @@ export interface RemoteDraftWire {
   priority: 0 | 1 | 2 | 3 | null;
   recurrence: RecurrenceRule | null;
   reminderOffsetMinutes: number | null;
+  /**
+   * “X分钟/小时后提醒我”（切片 19 / ai.md v0.17）：相对当前时刻的延迟分钟数；
+   * null=未表达。与 reminderOffsetMinutes（“提前X分钟”）语义独立、可同时出现。
+   */
+  reminderDelayMinutes: number | null;
 }
 
 const WIRE_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -162,6 +167,18 @@ export function isRemoteDraftWire(value: unknown): RemoteDraftWire | null {
   ) {
     return null;
   }
+  // 切片 19（§7.30 / ai.md v0.17）：reminderDelayMinutes 同 offset 纪律——
+  // 键必填（缺失时 undefined 走非法分支 → 整体拒绝，旧版响应按既有降级路径回退 fallback），
+  // 值须为 ≥1 的整数或 null。上限 Number.MAX_SAFE_INTEGER 同 guard.ts。
+  if (
+    v.reminderDelayMinutes !== null &&
+    (typeof v.reminderDelayMinutes !== 'number' ||
+      Number.isInteger(v.reminderDelayMinutes) === false ||
+      v.reminderDelayMinutes < 1 ||
+      v.reminderDelayMinutes > Number.MAX_SAFE_INTEGER)
+  ) {
+    return null;
+  }
   return {
     title: v.title,
     content: v.content,
@@ -174,6 +191,7 @@ export function isRemoteDraftWire(value: unknown): RemoteDraftWire | null {
     priority: v.priority as RemoteDraftWire['priority'],
     recurrence: recurrence,
     reminderOffsetMinutes: v.reminderOffsetMinutes as RemoteDraftWire['reminderOffsetMinutes'],
+    reminderDelayMinutes: v.reminderDelayMinutes as RemoteDraftWire['reminderDelayMinutes'],
   };
 }
 
@@ -228,6 +246,7 @@ export function wireToParsedItemDraft(
     priority: wire.priority,
     recurrence: recurrenceCopy,
     reminderOffsetMinutes: wire.reminderOffsetMinutes,
+    reminderDelayMinutes: wire.reminderDelayMinutes,
   };
 }
 

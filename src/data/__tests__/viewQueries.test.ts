@@ -626,6 +626,7 @@ describe('getSettings / updateSettings · 小组件显示开关（阶段 7a）',
       widgetShowCategoryEmoji: false,
       widgetShowTags: false,
       chipsIncrements: [10, 60],
+      defaultChannels: ['system-notification'],
     });
   });
 

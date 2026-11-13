@@ -56,3 +56,21 @@ export interface UpdateChannelPresetInput {
   /** 切片 18：patch 合并；设 true 时同 type 其余预设自动取消默认（提案 §3.3） */
   isDefault?: boolean;
 }
+
+/**
+ * 渠道预设解析（切片 19 真机验收 4 反馈，用户既定需求）：
+ * 同 type 预设中取默认（isDefault）预设；未设默认但存在预设时取第一条；
+ * 一个都没有返回 null（调用方据此决定降级行为——闪电添加路径披露投递会失败）。
+ *
+ * 「第一条」按入参数组顺序（listChannelPresets 为 created_at 降序 → 最新创建优先）。
+ * AI 落库链（savePlan）与手动表单（ReminderChannelFields 自动填充）共用本规则，
+ * 两处行为保持一致。
+ */
+export function resolveChannelPreset(
+  type: ChannelPresetType,
+  presets: readonly ChannelPreset[],
+): ChannelPreset | null {
+  const sameType = presets.filter((preset) => preset.type === type);
+  const preferred = sameType.find((preset) => preset.isDefault) ?? sameType[0];
+  return preferred ?? null;
+}

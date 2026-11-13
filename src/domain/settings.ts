@@ -4,6 +4,14 @@
  * AGENTS.md §7.22（v0.14，schema v6）：app_settings 为单行表（id 固定 'global'）。
  */
 
+import {
+  DEFAULT_REMINDER_CHANNELS,
+  REMINDER_CHANNELS,
+  isExpoReminderChannel,
+  isReminderChannel,
+  type ReminderChannel,
+} from './reminder';
+
 /** 标签展示模式（§7.22）：text=纯文字、emoji=仅图标、both=文字+图标 */
 export type TagDisplayMode = 'text' | 'emoji' | 'both';
 
@@ -39,6 +47,13 @@ export interface AppSettings {
    * 写路径校验（validateChipsIncrements）：1–4 项、每项 1–10080 整数（提案 §7，已确认）。
    */
   chipsIncrements: number[];
+  /**
+   * 新建提醒表单的默认渠道集合（切片 19，AGENTS.md §7.30）：JSON 存 default_channels_json。
+   * 默认 ["system-notification"]（复用 DEFAULT_REMINDER_CHANNELS）；读取层防御归一
+   * （parseDefaultChannels），写路径校验（validateDefaultChannels）——必须遵守 expo 家族
+   * 互斥（system-notification 与 alarm 至多一个，与提醒写路径同一纪律）。
+   */
+  defaultChannels: ReminderChannel[];
 }
 
 /** chips_increments 约束（提案 §7，已确认）：最少 1 项、最多 4 项、每项 1–10080 分钟（7 天） */
@@ -59,6 +74,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   widgetShowCategoryEmoji: false,
   widgetShowTags: false,
   chipsIncrements: [10, 60],
+  defaultChannels: [...DEFAULT_REMINDER_CHANNELS],
 };
 
 /** app_settings 单行主键（§7.22） */
@@ -124,4 +140,79 @@ export function validateChipsIncrements(values: number[]): number[] {
 /** chips_increments → 存储字符串（切片 18）：写路径恒 JSON 数组；读层见 parseChipsIncrements。 */
 export function serializeChipsIncrements(values: number[]): string {
   return JSON.stringify(validateChipsIncrements(values));
+}
+
+/**
+ * default_channels_json 读层防御归一（切片 19，AGENTS.md §7.30）：
+ * - null/''/坏 JSON/非数组 → 整体回退默认 ["system-notification"]；
+ * - 元素非合法渠道 id → 丢弃该项（读层防御回退纪律，坏值不用）；
+ * - 去重；按 REMINDER_CHANNELS canonical 序排列；
+ * - expo 家族双开（system-notification + alarm 同时出现，只可能来自手工改库/旧 bug）：
+ *   保留 canonical 序靠前的 expo 渠道、丢弃靠后的（读层不抛错，与提醒写路径抛错纪律不同）；
+ * - 结果为空 → 回退默认。
+ * 不抛错：读层永远返回可用数组。
+ */
+export function parseDefaultChannels(raw: string | null | undefined): ReminderChannel[] {
+  const fallback = [...DEFAULT_APP_SETTINGS.defaultChannels];
+  if (raw === null || raw === undefined || raw === '') {
+    return fallback;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+  if (!Array.isArray(parsed)) {
+    return fallback;
+  }
+  const valid = [...new Set(parsed.filter(isReminderChannel))];
+  // expo 家族互斥（读层防御版）：保留 canonical 序靠前者，丢弃靠后者。
+  const expoKept = [...valid]
+    .filter(isExpoReminderChannel)
+    .sort((a, b) => REMINDER_CHANNELS.indexOf(a) - REMINDER_CHANNELS.indexOf(b))
+    .slice(0, 1);
+  const filtered = valid.filter(
+    (channel) => !isExpoReminderChannel(channel) || (expoKept.length > 0 && channel === expoKept[0]),
+  );
+  if (filtered.length === 0) {
+    return fallback;
+  }
+  return [...filtered].sort(
+    (a, b) => REMINDER_CHANNELS.indexOf(a) - REMINDER_CHANNELS.indexOf(b),
+  );
+}
+
+/**
+ * default_channels 写路径校验（切片 19，AGENTS.md §7.30）：违反约束抛错
+ * （写路径严格纪律，与 normalizeReminderChannelFields 同风格）——
+ * - 必须是非空数组，元素全部为合法渠道 id；
+ * - expo 家族互斥：system-notification 与 alarm 至多一个（§7.30「必须遵守 expo 家族互斥校验」）；
+ * - 通过后返回去重 + REMINDER_CHANNELS canonical 序排列的标准化拷贝。
+ */
+export function validateDefaultChannels(values: readonly ReminderChannel[]): ReminderChannel[] {
+  if (!Array.isArray(values)) {
+    throw new Error('defaultChannels 必须是数组');
+  }
+  if (values.length === 0) {
+    throw new Error('defaultChannels 至少需要 1 个渠道');
+  }
+  for (const channel of values) {
+    if (!isReminderChannel(channel)) {
+      throw new Error(`defaultChannels 含非法渠道：${String(channel)}`);
+    }
+  }
+  const expoCount = values.filter(isExpoReminderChannel).length;
+  if (expoCount > 1) {
+    throw new Error('defaultChannels 的 expo 家族渠道（system-notification/alarm）至多一个');
+  }
+  const unique = [...new Set(values)];
+  return [...unique].sort(
+    (a, b) => REMINDER_CHANNELS.indexOf(a) - REMINDER_CHANNELS.indexOf(b),
+  );
+}
+
+/** default_channels → 存储字符串（切片 19）：写路径恒 JSON 数组；读层见 parseDefaultChannels。 */
+export function serializeDefaultChannels(values: readonly ReminderChannel[]): string {
+  return JSON.stringify(validateDefaultChannels(values));
 }

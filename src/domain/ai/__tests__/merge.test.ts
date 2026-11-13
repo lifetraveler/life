@@ -19,6 +19,7 @@ describe('mergeDraftCorrection（阶段 3 多轮合并）', () => {
     priority: 3,
     recurrence: null,
     reminderOffsetMinutes: 10,
+    reminderDelayMinutes: null,
   };
 
   const next: ParsedItemDraft = {
@@ -33,6 +34,7 @@ describe('mergeDraftCorrection（阶段 3 多轮合并）', () => {
     priority: null,
     recurrence: null,
     reminderOffsetMinutes: null,
+    reminderDelayMinutes: null,
   };
 
   it('只覆盖 expressed 字段，其余沿用上一轮卡片', () => {
@@ -61,9 +63,21 @@ describe('mergeDraftCorrection（阶段 3 多轮合并）', () => {
       'priority',
       'recurrence',
       'reminderOffsetMinutes',
+      'reminderDelayMinutes',
     ]);
     const merged = mergeDraftCorrection(previous, next, all);
     expect(merged).toEqual(next);
+  });
+
+  it('reminderDelayMinutes 只在 expressed 时覆盖（切片 19 §7.30）', () => {
+    const expressed = mergeDraftCorrection(previous, next, new Set(['reminderDelayMinutes']));
+    expect(expressed.reminderDelayMinutes).toBeNull(); // next 值
+    const kept = mergeDraftCorrection(previous, next, new Set(['title']));
+    expect(kept.reminderDelayMinutes).toBeNull(); // previous 也是 null：null 是合法延续值
+    // 非 null 情形：新一轮表达 delay → 采用；未表达 → 保留上一轮。
+    const later: ParsedItemDraft = { ...next, reminderDelayMinutes: 30 };
+    expect(mergeDraftCorrection(previous, later, new Set(['reminderDelayMinutes'])).reminderDelayMinutes).toBe(30);
+    expect(mergeDraftCorrection(previous, later, new Set(['title'])).reminderDelayMinutes).toBeNull();
   });
 
   it('tags 数组不与上一轮/本轮共享引用', () => {

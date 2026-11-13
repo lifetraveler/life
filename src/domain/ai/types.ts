@@ -56,6 +56,12 @@ export interface ParsedItemDraft {
   recurrence: RecurrenceRule | null;
   /** “提前X分钟提醒”换算后的正整数分钟；null=未表达 */
   reminderOffsetMinutes: number | null;
+  /**
+   * “X分钟/小时后提醒我”（相对当前时刻的延迟，切片 19 / AGENTS.md §7.30）换算后的
+   * 正整数分钟；null=未表达。落库语义（阶段 2）：非空且 recurrence 为空时，
+   * 以 now + reminderDelayMinutes*60000 为触发时刻创建 once 提醒（无需 startAt）。
+   */
+  reminderDelayMinutes: number | null;
 }
 
 /** AI 解析器接口（§7.24 冻结语义）：LocalFallbackProvider 与 OpenAICompatibleProvider 均实现它。 */

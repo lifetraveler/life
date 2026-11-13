@@ -185,3 +185,23 @@ bridge 数据源保留（见下），域模型不再暴露。
 - is_default：同 type 至多一个 true，由 Repository 在同一 db.write 事务内保证
   （新默认写入时同 type 其余行自动取消）。
 - 回滚：v10 均为加列迁移，回滚丢弃新列，无数据保全要求（提案 §9）。
+
+## 默认渠道偏好设置字段（v0.19，切片 19 阶段 1，AGENTS.md §7.30）
+
+### Schema v10 → v11（1 个 addColumns，严禁重建表/清库，v10 step 不动）
+- app_settings.default_channels_json: string | null（isOptional TEXT；
+  `ReminderChannel[]` 数组 JSON，默认 `["system-notification"]`——复用
+  DEFAULT_REMINDER_CHANNELS）。零 unsafeExecuteSql：可空列对既有行回填 null，
+  读层归一兜底（v10 chips_increments 同款先例）。
+
+### default_channels 语义
+- 元素 ∈ 'system-notification' | 'alarm' | 'webhook' | 'apprise'；去重后按
+  REMINDER_CHANNELS canonical 序（system-notification, alarm, webhook, apprise）
+  存储；含义是「新建提醒表单默认勾选的渠道集合」（阶段 3 UI 接入）。
+- 读层防御归一（parseDefaultChannels，永不抛错）：null/''/坏 JSON/非数组 → 回退默认；
+  非法元素丢弃；去重；expo 家族双开（system-notification+alarm，只可能来自手工改库）
+  → 保留 canonical 序靠前者、丢弃靠后的（读层不抛错）；结果为空 → 回退默认。
+- 写路径严格校验（validateDefaultChannels，抛明确错误）：必须是非空数组、元素全部
+  合法、expo 家族至多一个（与提醒写路径同一互斥纪律）；通过后返回去重 + canonical
+  序标准化拷贝。serializeDefaultChannels 恒写 JSON 数组。
+- 回滚：加列迁移，回滚丢弃新列，无数据保全要求。

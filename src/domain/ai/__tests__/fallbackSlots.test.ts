@@ -75,6 +75,18 @@ describe('LocalFallbackProvider.parseSlots：expressed 掩码（阶段 3）', ()
     expect(expressed.has('title')).toBe(true);
   });
 
+  it('延迟提醒句：表达 reminderDelayMinutes 与 type(task)，不表达 startAt（切片 19）', () => {
+    const { draft, expressed } = slots('10分钟后提醒我吃药', 0);
+    expect(draft.title).toBe('吃药');
+    expect(draft.reminderDelayMinutes).toBe(10);
+    expect(expressed.has('reminderDelayMinutes')).toBe(true);
+    expect(expressed.has('title')).toBe(true);
+    expect(expressed.has('startAt')).toBe(false);
+    // 提前句不表达 delay 槽（语义独立）
+    const offsetOnly = slots('提前30分钟提醒我吃药', 0);
+    expect(offsetOnly.expressed.has('reminderDelayMinutes')).toBe(false);
+  });
+
   it('标签/优先级/分类命中即表达', () => {
     const a = slots('#生活 买牛奶', 0);
     expect(a.expressed.has('tags')).toBe(true);

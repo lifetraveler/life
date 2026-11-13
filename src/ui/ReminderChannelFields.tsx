@@ -10,6 +10,7 @@ import {
   toggleReminderChannel,
 } from './reminderForm';
 import type { ReminderFormErrors, ReminderFormValues } from './reminderForm';
+import { resolveChannelPreset } from '../domain/channelPreset';
 import type { ChannelPreset } from '../domain/channelPreset';
 import { parseAppriseFormFields } from './reminderForm';
 
@@ -19,7 +20,8 @@ import { parseAppriseFormFields } from './reminderForm';
  * - 4 个渠道 chip 多选（toggleReminderChannel 保证 ≥1 项 + expo 家族互斥）；
  * - 每个「选中」的网络渠道展开自己的预设下拉 + 配置输入框；选中预设 =
  *   整串值复制（此后与预设无关联），手改配置文本即清空预设关联；
- * - 渠道刚选中且配置为空时自动填充该渠道的默认预设（is_default，§7.29）；
+ * - 渠道刚选中且配置为空时自动填充该渠道的预设（默认预设优先，无默认取第一条；
+ *   resolveChannelPreset，切片 19 验收 4 反馈与闪电添加落库链共用）；
  * - 任一网络渠道选中时恒显灰色边界提示（§7.26 约束 2：UI 必须注明「仅 App 进程存活时保证发送」）；
  * - 校验错误经 errors.channels / errors.channelConfig 展示；切渠道不清空已输入的配置文本。
  */
@@ -84,11 +86,11 @@ export default function ReminderChannelFields({
           return;
         }
         for (const channel of targets) {
-          const defaultPreset = presets.find(
-            (preset) => preset.type === channel && preset.isDefault,
-          );
-          if (defaultPreset !== undefined) {
-            applyPreset(defaultPreset);
+          // 切片 19 验收 4 反馈：默认预设优先，无默认取第一条（resolveChannelPreset，
+          // 与闪电添加落库链共用同一规则）。
+          const preset = resolveChannelPreset(channel, presets);
+          if (preset !== null) {
+            applyPreset(preset);
           }
         }
       } catch {

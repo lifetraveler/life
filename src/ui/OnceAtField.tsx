@@ -2,8 +2,9 @@ import { useState } from 'react';
 import DateTimePicker, {
   type DateTimePickerEvent,
 } from '@react-native-community/datetimepicker';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { CHIPS_MAX_MINUTES, CHIPS_MIN_MINUTES } from '../domain/settings';
 import { getDeviceTzid } from './timeFormat';
 import { onceAtPlusMinutes, onceAtTomorrowMorningNine } from './onceAtChips';
 
@@ -50,6 +51,13 @@ export function formatChipIncrementLabel(minutes: number): string {
 
 type PickerStep = 'idle' | 'date' | 'time';
 
+/** 长按编辑中的 Chip：位置 + 输入草稿 + 原增量（展示用） */
+interface ChipEditState {
+  index: number;
+  draft: string;
+  sourceMinutes: number;
+}
+
 const EMPTY_ONCE_AT: OnceAtFormValue = { date: '', hour: null, minute: null };
 
 /** picker 返回的 Date → 'YYYY-MM-DD'（直接取本地数值字段，无时区换算） */
@@ -78,13 +86,20 @@ export default function OnceAtField({
   error,
 }: OnceAtFieldProps) {
   const [step, setStep] = useState<PickerStep>('idle');
+  // 切片 19 阶段 3（§7.30 第三条）：长按快捷 Chip 临时改增量——仅本次生效（本组件
+  // 实例的局部 state），不调用 updateSettings、不写回全局；表单关闭即组件卸载，
+  // 重开恢复全局设置值（验收 5）。
+  const [localIncrements, setLocalIncrements] = useState<number[] | null>(null);
+  const [chipEdit, setChipEdit] = useState<ChipEditState | null>(null);
+  const [chipEditError, setChipEditError] = useState<string | null>(null);
   const deviceTzid = getDeviceTzid();
   const now = Date.now();
   // 读层防御兜底（parseChipsIncrements 已保证形状，此处再防未传/坏引用）
-  const increments =
+  const propIncrements =
     Array.isArray(chipsIncrements) && chipsIncrements.length > 0
       ? chipsIncrements
       : DEFAULT_CHIPS_INCREMENTS;
+  const increments = localIncrements ?? propIncrements;
 
   const dateDisplay = value.date === '' ? '未设置' : value.date;
   const timeDisplay =
@@ -117,6 +132,37 @@ export default function OnceAtField({
     });
   };
 
+  const startChipEdit = (index: number, sourceMinutes: number): void => {
+    setChipEdit({ index, draft: String(sourceMinutes), sourceMinutes });
+    setChipEditError(null);
+  };
+
+  const cancelChipEdit = (): void => {
+    setChipEdit(null);
+    setChipEditError(null);
+  };
+
+  const confirmChipEdit = (): void => {
+    if (chipEdit === null) {
+      return;
+    }
+    const minutes = Number(chipEdit.draft.trim());
+    if (
+      chipEdit.draft.trim().length === 0 ||
+      !Number.isInteger(minutes) ||
+      minutes < CHIPS_MIN_MINUTES ||
+      minutes > CHIPS_MAX_MINUTES
+    ) {
+      setChipEditError(`增量需为 ${CHIPS_MIN_MINUTES}–${CHIPS_MAX_MINUTES} 的整数分钟`);
+      return;
+    }
+    setLocalIncrements(
+      increments.map((existing, index) => (index === chipEdit.index ? minutes : existing)),
+    );
+    setChipEdit(null);
+    setChipEditError(null);
+  };
+
   return (
     <View style={styles.field}>
       <Text style={styles.label}>{label}</Text>
@@ -145,11 +191,12 @@ export default function OnceAtField({
       </View>
 
       <View style={styles.chipRow}>
-        {increments.map((minutes) => (
+        {increments.map((minutes, index) => (
           <Pressable
-            key={minutes}
+            key={`${index}-${minutes}`}
             style={styles.chip}
             onPress={() => applyChip(onceAtPlusMinutes(now, tzid, minutes))}
+            onLongPress={() => startChipEdit(index, minutes)}
           >
             <Text style={styles.chipText}>{formatChipIncrementLabel(minutes)}</Text>
           </Pressable>
@@ -161,6 +208,34 @@ export default function OnceAtField({
           <Text style={styles.chipText}>明早9点</Text>
         </Pressable>
       </View>
+
+      {chipEdit !== null ? (
+        <View style={styles.chipEditBox}>
+          <Text style={styles.chipEditLabel}>
+            {`临时修改「${formatChipIncrementLabel(chipEdit.sourceMinutes)}」的增量（分钟，仅本次生效，不改全局设置）`}
+          </Text>
+          <View style={styles.chipEditRow}>
+            <TextInput
+              style={styles.chipEditInput}
+              value={chipEdit.draft}
+              onChangeText={(text) => setChipEdit({ ...chipEdit, draft: text })}
+              placeholder={`1–${CHIPS_MAX_MINUTES}`}
+              keyboardType="number-pad"
+              maxLength={5}
+              autoFocus
+            />
+            <Pressable style={styles.chipEditSave} onPress={confirmChipEdit}>
+              <Text style={styles.chipEditSaveText}>确定</Text>
+            </Pressable>
+            <Pressable style={styles.chipEditCancel} onPress={cancelChipEdit}>
+              <Text style={styles.chipEditCancelText}>取消</Text>
+            </Pressable>
+          </View>
+          {chipEditError !== null ? (
+            <Text style={styles.chipEditError}>{chipEditError}</Text>
+          ) : null}
+        </View>
+      ) : null}
 
       {tzid !== deviceTzid ? (
         <Text style={styles.tzHint}>{`按提醒时区 ${tzid} 解释`}</Text>
@@ -245,6 +320,62 @@ const styles = StyleSheet.create({
   chipText: {
     fontSize: 13,
     color: '#555',
+  },
+  chipEditBox: {
+    borderWidth: 1,
+    borderColor: '#1976d2',
+    borderRadius: 6,
+    padding: 8,
+    marginBottom: 6,
+    backgroundColor: '#fff',
+  },
+  chipEditLabel: {
+    fontSize: 12,
+    color: '#555',
+    marginBottom: 6,
+  },
+  chipEditRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  chipEditInput: {
+    borderWidth: 1,
+    borderColor: '#d0d0d0',
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    width: 80,
+    fontSize: 15,
+    backgroundColor: '#fff',
+  },
+  chipEditSave: {
+    backgroundColor: '#1976d2',
+    borderRadius: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+  },
+  chipEditSaveText: {
+    fontSize: 13,
+    color: '#fff',
+    fontWeight: '600',
+  },
+  chipEditCancel: {
+    borderWidth: 1,
+    borderColor: '#d0d0d0',
+    borderRadius: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    backgroundColor: '#fff',
+  },
+  chipEditCancelText: {
+    fontSize: 13,
+    color: '#555',
+  },
+  chipEditError: {
+    fontSize: 12,
+    color: '#c62828',
+    marginTop: 6,
   },
   tzHint: {
     fontSize: 12,

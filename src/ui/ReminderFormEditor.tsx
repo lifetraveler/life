@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 
-import type { Reminder, ReminderFrequency } from '../domain/reminder';
+import type { Reminder, ReminderChannel, ReminderFrequency } from '../domain/reminder';
 import DateTimeField from './DateTimeField';
 import OnceAtField from './OnceAtField';
 import ReminderChannelFields from './ReminderChannelFields';
@@ -22,13 +22,19 @@ import TzPicker from './TzPicker';
  * - 切片 17 阶段 2（§7.28）：once 触发时刻废弃手输，改 OnceAtField（Picker + 快捷
  *   Chips，civil 值直出按 reminder.tzid 解释）；渠道新增预设下拉（ReminderChannelFields）；
  * - 切片 18 阶段 3：渠道多选（values.channels）；once 快捷 Chips 增量读取
- *   app_settings.chipsIncrements（§7.29，父级经 chipsIncrements 传入）。
+ *   app_settings.chipsIncrements（§7.29，父级经 chipsIncrements 传入）；
+ * - 切片 19 阶段 3（§7.30）：新建提醒初始勾选渠道读 defaultChannels
+ *   （app_settings.defaultChannels，父级经 defaultChannels 传入）；编辑模式
+ *   回填提醒自身 channels，不受默认值影响。useState 初始化仅取挂载时刻的 prop——
+ *   新建表单为按需挂载（点「新建提醒」才渲染），此时设置已随页面焦点加载完成。
  */
 interface ReminderFormProps {
   initial?: Reminder;
   submitLabel: string;
   /** once 快捷 Chips 的自定义增量（分钟）；缺省 [10, 60]（读层防御由 settings 保证） */
   chipsIncrements?: number[];
+  /** 新建提醒的初始勾选渠道（app_settings.defaultChannels）；缺省 [system-notification] */
+  defaultChannels?: ReminderChannel[];
   onSubmit: (values: ReminderFormValues) => void | Promise<void>;
   onCancel: () => void;
 }
@@ -47,7 +53,10 @@ function formatOnceDateParts(year: number, month: number, day: number): string {
   return `${String(year).padStart(4, '0')}-${monthText}-${dayText}`;
 }
 
-function initialValues(initial?: Reminder): ReminderFormValues {
+function initialValues(
+  initial?: Reminder,
+  defaultChannels?: ReminderChannel[],
+): ReminderFormValues {
   if (initial) {
     const onceAt =
       initial.frequency === 'once' && initial.onceAt !== null
@@ -90,7 +99,11 @@ function initialValues(initial?: Reminder): ReminderFormValues {
     tzid: 'Asia/Shanghai',
     startAt: Date.now(),
     enabled: true,
-    channels: ['system-notification'],
+    // 切片 19（§7.30）：初始勾选读全局默认渠道；空/缺省回退单系统通知。
+    channels:
+      defaultChannels !== undefined && defaultChannels.length > 0
+        ? [...defaultChannels]
+        : ['system-notification'],
     channelConfigText: '',
     appriseBaseUrl: '',
     appriseKey: '',
@@ -102,10 +115,13 @@ export default function ReminderForm({
   initial,
   submitLabel,
   chipsIncrements,
+  defaultChannels,
   onSubmit,
   onCancel,
 }: ReminderFormProps) {
-  const [values, setValues] = useState<ReminderFormValues>(() => initialValues(initial));
+  const [values, setValues] = useState<ReminderFormValues>(() =>
+    initialValues(initial, defaultChannels),
+  );
   const [submitting, setSubmitting] = useState(false);
 
   const errors = useMemo(() => validateReminderForm(values), [values]);

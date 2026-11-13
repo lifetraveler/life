@@ -28,6 +28,7 @@ function draft(overrides: Partial<ParsedItemDraft> = {}): ParsedItemDraft {
     priority: null,
     recurrence: null,
     reminderOffsetMinutes: null,
+    reminderDelayMinutes: null,
     ...overrides,
   };
 }

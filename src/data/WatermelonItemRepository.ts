@@ -41,8 +41,11 @@ import {
   DEFAULT_APP_SETTINGS,
   isTagDisplayMode,
   parseChipsIncrements,
+  parseDefaultChannels,
   serializeChipsIncrements,
+  serializeDefaultChannels,
   validateChipsIncrements,
+  validateDefaultChannels,
 } from '../domain/settings';
 import type { AppSettings } from '../domain/settings';
 import AppSettingsModel from '../db/models/AppSettingsModel';
@@ -200,6 +203,9 @@ function toDomainCategory(model: CategoryModel): Category {
  * 直接映射；列本身无枚举语义，不存在非法值分支。
  * 切片 18（§7.29，schema v10）：chips_increments 经 parseChipsIncrements 读层防御归一
  * （null/坏 JSON/越界项 → 回退默认 [10, 60]，不抛错——对齐 tagDisplayMode 先例）。
+ * 切片 19（§7.30，schema v11）：default_channels_json 经 parseDefaultChannels 读层防御归一
+ * （null/坏 JSON/非法渠道/空 → 回退默认 ["system-notification"]；expo 双开保留 canonical
+ * 序靠前者；不抛错——同上先例）。
  */
 function toDomainSettings(model: AppSettingsModel): AppSettings {
   return {
@@ -211,6 +217,7 @@ function toDomainSettings(model: AppSettingsModel): AppSettings {
     widgetShowCategoryEmoji: model.widgetShowCategoryEmoji,
     widgetShowTags: model.widgetShowTags,
     chipsIncrements: parseChipsIncrements(model.chipsIncrementsJson),
+    defaultChannels: parseDefaultChannels(model.defaultChannelsJson),
   };
 }
 
@@ -1804,6 +1811,10 @@ export class WatermelonItemRepository implements ItemRepository {
           record.chipsIncrementsJson = serializeChipsIncrements(
             DEFAULT_APP_SETTINGS.chipsIncrements,
           );
+          // 切片 19（schema v11）：补插默认行时写默认渠道（读层有回退，此处求自描述）。
+          record.defaultChannelsJson = serializeDefaultChannels(
+            DEFAULT_APP_SETTINGS.defaultChannels,
+          );
         });
         return { ...DEFAULT_APP_SETTINGS };
       }
@@ -1814,7 +1825,9 @@ export class WatermelonItemRepository implements ItemRepository {
   /**
    * 更新全局设置（阶段 7a 扩展：tagDisplayMode + 小组件显示开关 4 项；
    * 切片 18（§7.29）：chipsIncrements 写路径 validateChipsIncrements 严格校验
-   * （1–4 项、每项 1–10080 整数分钟，违反抛错））；
+   * （1–4 项、每项 1–10080 整数分钟，违反抛错）；
+   * 切片 19（§7.30）：defaultChannels 写路径 validateDefaultChannels 严格校验
+   * （非法渠道/空/expo 家族双开抛错，返回 canonical 序标准化拷贝））；
    * 行不存在时以 patch 值（缺省用默认值）建行。
    * 改动小组件显示开关后，调用方需自行触发一次小组件快照刷新
    * （桥不订阅 app_settings；设置页负责）。
@@ -1827,6 +1840,10 @@ export class WatermelonItemRepository implements ItemRepository {
     const chipsIncrements =
       patch.chipsIncrements !== undefined
         ? serializeChipsIncrements(validateChipsIncrements(patch.chipsIncrements))
+        : undefined;
+    const defaultChannels =
+      patch.defaultChannels !== undefined
+        ? serializeDefaultChannels(validateDefaultChannels(patch.defaultChannels))
         : undefined;
     await this.db.write(async () => {
       const models = await this.db.get<AppSettingsModel>(APP_SETTINGS_TABLE).query().fetch();
@@ -1842,6 +1859,8 @@ export class WatermelonItemRepository implements ItemRepository {
           record.widgetShowTags = patch.widgetShowTags ?? DEFAULT_APP_SETTINGS.widgetShowTags;
           record.chipsIncrementsJson =
             chipsIncrements ?? serializeChipsIncrements(DEFAULT_APP_SETTINGS.chipsIncrements);
+          record.defaultChannelsJson =
+            defaultChannels ?? serializeDefaultChannels(DEFAULT_APP_SETTINGS.defaultChannels);
         });
         return;
       }
@@ -1863,6 +1882,9 @@ export class WatermelonItemRepository implements ItemRepository {
         }
         if (chipsIncrements !== undefined) {
           draft.chipsIncrementsJson = chipsIncrements;
+        }
+        if (defaultChannels !== undefined) {
+          draft.defaultChannelsJson = defaultChannels;
         }
       });
     });

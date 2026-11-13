@@ -399,6 +399,7 @@ class FakeRepository implements ItemRepository {
       widgetShowCategoryEmoji: false,
       widgetShowTags: false,
       chipsIncrements: [10, 60],
+      defaultChannels: ['system-notification'],
     };
   }
 
