@@ -40,6 +40,9 @@ import {
   APP_SETTINGS_ROW_ID,
   DEFAULT_APP_SETTINGS,
   isTagDisplayMode,
+  parseChipsIncrements,
+  serializeChipsIncrements,
+  validateChipsIncrements,
 } from '../domain/settings';
 import type { AppSettings } from '../domain/settings';
 import AppSettingsModel from '../db/models/AppSettingsModel';
@@ -75,11 +78,13 @@ import {
   parseOnceCivilJson,
   parseWeekdaysJson,
   resolveOnceAt,
+  resolveReminderChannelRow,
   serializeOnceCivilJson,
+  serializeReminderChannels,
+  serializeReminderChannelConfigs,
   serializeWeekdays,
 } from './reminderRuleMapping';
 import { assertWhitelistedReminderTz } from './reminderTzWhitelist';
-import { DEFAULT_REMINDER_CHANNEL, isReminderChannel } from '../domain/reminder';
 
 const ITEMS_TABLE = 'items';
 const TAGS_TABLE = 'tags';
@@ -193,6 +198,8 @@ function toDomainCategory(model: CategoryModel): Category {
  * 库中读到非法枚举值（理论上不应出现，如手改数据库）时防御性回退默认值，不抛错。
  * 阶段 7a（schema v7）：小组件显示开关 4 列为非可选 boolean（v7 migration/seed 保证有值），
  * 直接映射；列本身无枚举语义，不存在非法值分支。
+ * 切片 18（§7.29，schema v10）：chips_increments 经 parseChipsIncrements 读层防御归一
+ * （null/坏 JSON/越界项 → 回退默认 [10, 60]，不抛错——对齐 tagDisplayMode 先例）。
  */
 function toDomainSettings(model: AppSettingsModel): AppSettings {
   return {
@@ -203,6 +210,7 @@ function toDomainSettings(model: AppSettingsModel): AppSettings {
     widgetShowTodos: model.widgetShowTodos,
     widgetShowCategoryEmoji: model.widgetShowCategoryEmoji,
     widgetShowTags: model.widgetShowTags,
+    chipsIncrements: parseChipsIncrements(model.chipsIncrementsJson),
   };
 }
 
@@ -210,12 +218,18 @@ function toDomainSettings(model: AppSettingsModel): AppSettings {
  * reminders 行 → 领域 Reminder；weekdays / once_civil_json JSON 解析失败在此抛错
  * （不得静默，§4.18/任务卡）。
  *
- * channel 读取防御（切片 16）：读到非法值（含 LokiJS 测试适配器忽略 v8 'sql' 回填步骤
- * 产生的 ''）时回退 DEFAULT_REMINDER_CHANNEL，不抛错——对齐 toDomainSettings 枚举读取
- * 先例：读取行为即 migration 回填意图（'system-notification'，行为与升级前一致）；
- * 写路径仍严格校验（normalizeReminderChannelFields）。
+ * 渠道读取（切片 18，schema v10）：经 resolveReminderChannelRow 的读层 legacy bridge
+ * （all-or-nothing，提案 §4）——未迁移行（channels_json 为 null/''）由旧 channel/
+ * channel_config 推导，已迁移行只认新列；防御纪律与切片 16 相同（读层回退不抛错，
+ * 写路径仍严格校验 normalizeReminderChannelFields）。
  */
 function toDomainReminder(model: ReminderModel): Reminder {
+  const channelFields = resolveReminderChannelRow({
+    channelsJson: model.channelsJson,
+    channelConfigsJson: model.channelConfigsJson,
+    legacyChannel: model.channel,
+    legacyChannelConfig: model.channelConfig,
+  });
   return {
     id: model.id,
     itemId: model.itemId,
@@ -228,8 +242,8 @@ function toDomainReminder(model: ReminderModel): Reminder {
     tzid: model.tzid,
     startAt: model.startAt,
     enabled: model.enabled,
-    channel: isReminderChannel(model.channel) ? model.channel : DEFAULT_REMINDER_CHANNEL,
-    channelConfig: model.channelConfig ?? null,
+    channels: channelFields.channels,
+    channelConfigs: channelFields.channelConfigs,
     lastFiredOccurrenceKey: model.lastFiredOccurrenceKey,
     lastReconciledAt: model.lastReconciledAt,
     createdAt: model.createdAt.getTime(),
@@ -251,6 +265,7 @@ function toDomainChannelPreset(model: ChannelPresetModel): ChannelPreset {
     name: model.name,
     type: model.type,
     configJson: model.configJson,
+    isDefault: model.isDefault,
     createdAt: model.createdAt.getTime(),
   };
 }
@@ -274,6 +289,29 @@ function assertValidChannelPresetConfig(
     parseWebhookChannelConfig(configJson);
   } else {
     parseAppriseChannelConfig(configJson);
+  }
+}
+
+/**
+ * 切片 18（§7.29，提案 §3.3）：取消同 type 其余预设的默认标记（除 exceptId）。
+ * 调用方必须已在 db.write 事务内（createChannelPreset / updateChannelPreset），
+ * 与目标行的写入构成同一事务，保证「同 type 至多一个 is_default=true」不变量。
+ */
+async function unsetOtherDefaultPresets(
+  db: Database,
+  type: ChannelPresetType,
+  exceptId: string,
+): Promise<void> {
+  const defaults = await db
+    .get<ChannelPresetModel>(CHANNEL_PRESETS_TABLE)
+    .query(Q.where('type', type), Q.where('is_default', true))
+    .fetch();
+  for (const model of defaults) {
+    if (model.id !== exceptId) {
+      await model.update((draft) => {
+        draft.isDefault = false;
+      });
+    }
   }
 }
 
@@ -1511,8 +1549,9 @@ export class WatermelonItemRepository implements ItemRepository {
    * - 规则字段经 normalizeReminderRuleFields 归一化校验；
    * - lastFiredOccurrenceKey / lastReconciledAt 初始化为 null（§4.18）。
    * 切片 16（§7.26）：frequency='once' 时 onceAt 必填（resolveOnceAt 运行时强制，
-   * 输入为可选字段的编译期缺口）；channel / channelConfig 经 normalizeReminderChannelFields
-   * 归一化（缺省 'system-notification'，渠道无关时 channelConfig 强制 null）。
+   * 输入为可选字段的编译期缺口）。切片 18（§7.29）：多渠道 channels/channelConfigs
+   * 经 normalizeReminderChannelFields 归一化（缺省 ['system-notification']；
+   * expo 互斥；channelConfigs 仅网络渠道条目，channels_json 恒写非 null）。
    */
   async createReminder(input: CreateReminderInput): Promise<Reminder> {
     const owner = await this.getItem(input.itemId);
@@ -1530,8 +1569,8 @@ export class WatermelonItemRepository implements ItemRepository {
     });
     const onceAt = resolveOnceAt(fields.frequency, input.onceAt);
     const channelFields = normalizeReminderChannelFields({
-      channel: input.channel,
-      channelConfig: input.channelConfig,
+      channels: input.channels,
+      channelConfigs: input.channelConfigs,
     });
 
     const created = await this.db.write(async () =>
@@ -1546,8 +1585,8 @@ export class WatermelonItemRepository implements ItemRepository {
         record.tzid = input.tzid;
         record.startAt = startAt;
         record.enabled = input.enabled;
-        record.channel = channelFields.channel;
-        record.channelConfig = channelFields.channelConfig;
+        record.channelsJson = serializeReminderChannels(channelFields.channels);
+        record.channelConfigsJson = serializeReminderChannelConfigs(channelFields.channelConfigs);
         record.lastFiredOccurrenceKey = null;
         record.lastReconciledAt = null;
       }),
@@ -1563,8 +1602,10 @@ export class WatermelonItemRepository implements ItemRepository {
    * lastReconciledAt 只经 markReminderFired / markReminderReconciled 写入。
    * 切片 16（§7.26）：onceAt 以「patch 合并后的最终 frequency」判定——once 必须有时刻
    * （patch 显式提供，或现状已是非空 onceAt），否则抛明确错误；切回重复频率由
-   * resolveOnceAt 强制置 null（落库清空 once_civil_json）。channel / channelConfig
-   * 按 patch 合并后归一化：切到渠道无关渠道时旧配置强制清空。
+   * resolveOnceAt 强制置 null（落库清空 once_civil_json）。切片 18（§7.29）：channels
+   * 为整体替换语义、channelConfigs 为 per-key merge（null=清除，提案 §5）——
+   * 归一化基于 patch 合并后的 current 展开，结果恒写新列；旧 channel/channel_config
+   * 列不再写入（仅读层 legacy bridge 数据源）。
    */
   async updateReminder(id: string, patch: UpdateReminderInput): Promise<Reminder> {
     if (patch.tzid !== undefined) {
@@ -1587,11 +1628,16 @@ export class WatermelonItemRepository implements ItemRepository {
         fields.frequency,
         patch.onceAt !== undefined ? patch.onceAt : current.onceAt,
       );
-      const channelFields = normalizeReminderChannelFields({
-        channel: patch.channel ?? current.channel,
-        channelConfig:
-          patch.channelConfig !== undefined ? patch.channelConfig : current.channelConfig,
-      });
+      const channelFields = normalizeReminderChannelFields(
+        {
+          channels: patch.channels,
+          channelConfigs: patch.channelConfigs,
+        },
+        {
+          channels: current.channels,
+          channelConfigs: current.channelConfigs,
+        },
+      );
 
       const updated = await record.update((draft) => {
         draft.frequency = fields.frequency;
@@ -1601,8 +1647,8 @@ export class WatermelonItemRepository implements ItemRepository {
         draft.dayOfMonth = fields.dayOfMonth;
         draft.onceCivilJson = onceAt === null ? null : serializeOnceCivilJson(onceAt);
         draft.startAt = startAt;
-        draft.channel = channelFields.channel;
-        draft.channelConfig = channelFields.channelConfig;
+        draft.channelsJson = serializeReminderChannels(channelFields.channels);
+        draft.channelConfigsJson = serializeReminderChannelConfigs(channelFields.channelConfigs);
         if (patch.enabled !== undefined) {
           draft.enabled = patch.enabled;
         }
@@ -1754,6 +1800,10 @@ export class WatermelonItemRepository implements ItemRepository {
           record.widgetShowTodos = DEFAULT_APP_SETTINGS.widgetShowTodos;
           record.widgetShowCategoryEmoji = DEFAULT_APP_SETTINGS.widgetShowCategoryEmoji;
           record.widgetShowTags = DEFAULT_APP_SETTINGS.widgetShowTags;
+          // 切片 18（schema v10）：补插默认行时写 chips 默认值（读层有回退，此处求自描述）。
+          record.chipsIncrementsJson = serializeChipsIncrements(
+            DEFAULT_APP_SETTINGS.chipsIncrements,
+          );
         });
         return { ...DEFAULT_APP_SETTINGS };
       }
@@ -1762,7 +1812,9 @@ export class WatermelonItemRepository implements ItemRepository {
   }
 
   /**
-   * 更新全局设置（阶段 7a 扩展：tagDisplayMode + 小组件显示开关 4 项）；
+   * 更新全局设置（阶段 7a 扩展：tagDisplayMode + 小组件显示开关 4 项；
+   * 切片 18（§7.29）：chipsIncrements 写路径 validateChipsIncrements 严格校验
+   * （1–4 项、每项 1–10080 整数分钟，违反抛错））；
    * 行不存在时以 patch 值（缺省用默认值）建行。
    * 改动小组件显示开关后，调用方需自行触发一次小组件快照刷新
    * （桥不订阅 app_settings；设置页负责）。
@@ -1772,6 +1824,10 @@ export class WatermelonItemRepository implements ItemRepository {
     if (patch.tagDisplayMode !== undefined && !isTagDisplayMode(patch.tagDisplayMode)) {
       throw new Error('updateSettings: invalid tagDisplayMode');
     }
+    const chipsIncrements =
+      patch.chipsIncrements !== undefined
+        ? serializeChipsIncrements(validateChipsIncrements(patch.chipsIncrements))
+        : undefined;
     await this.db.write(async () => {
       const models = await this.db.get<AppSettingsModel>(APP_SETTINGS_TABLE).query().fetch();
       const model = models[0];
@@ -1784,6 +1840,8 @@ export class WatermelonItemRepository implements ItemRepository {
           record.widgetShowCategoryEmoji =
             patch.widgetShowCategoryEmoji ?? DEFAULT_APP_SETTINGS.widgetShowCategoryEmoji;
           record.widgetShowTags = patch.widgetShowTags ?? DEFAULT_APP_SETTINGS.widgetShowTags;
+          record.chipsIncrementsJson =
+            chipsIncrements ?? serializeChipsIncrements(DEFAULT_APP_SETTINGS.chipsIncrements);
         });
         return;
       }
@@ -1802,6 +1860,9 @@ export class WatermelonItemRepository implements ItemRepository {
         }
         if (patch.widgetShowTags !== undefined) {
           draft.widgetShowTags = patch.widgetShowTags;
+        }
+        if (chipsIncrements !== undefined) {
+          draft.chipsIncrementsJson = chipsIncrements;
         }
       });
     });
@@ -1832,8 +1893,15 @@ export class WatermelonItemRepository implements ItemRepository {
         record.name = name;
         record.type = input.type;
         record.configJson = input.configJson;
+        // 切片 18（§7.29）：is_default 列，v9 行经 migration 回填 false（提案 §3.3）。
+        record.isDefault = input.isDefault === true;
         // createdAt 由 WatermelonDB 自动写入（Model/helpers.js createTimestampsFor）。
       });
+      // 切片 18（提案 §3.3）：设为默认时，同 type 其余预设自动取消默认——同一 db.write
+      // 事务内完成，保证「同 type 至多一个 is_default=true」不变量。
+      if (created.isDefault) {
+        await unsetOtherDefaultPresets(this.db, input.type, created.id);
+      }
       return toDomainChannelPreset(created);
     });
   }
@@ -1841,10 +1909,14 @@ export class WatermelonItemRepository implements ItemRepository {
   /**
    * 更新预设（patch 合并语义；type 不可更新——改类型等于换配置语义，应删除重建）。
    * configJson 按该预设的既有 type 重新过守卫（type 未变，校验口径不变）。
+   * 切片 18（§7.29）：isDefault 可 patch——true 时同事务内取消同 type 其余预设的
+   * 默认标记（不变量同 createChannelPreset）。
    */
   async updateChannelPreset(id: string, patch: UpdateChannelPresetInput): Promise<ChannelPreset> {
-    if (patch.name === undefined && patch.configJson === undefined) {
-      throw new Error('updateChannelPreset: patch must contain at least one of name / configJson');
+    if (patch.name === undefined && patch.configJson === undefined && patch.isDefault === undefined) {
+      throw new Error(
+        'updateChannelPreset: patch must contain at least one of name / configJson / isDefault',
+      );
     }
     if (patch.name !== undefined && patch.name.trim().length === 0) {
       throw new Error('updateChannelPreset: name must not be blank');
@@ -1869,7 +1941,13 @@ export class WatermelonItemRepository implements ItemRepository {
         if (patch.configJson !== undefined) {
           draft.configJson = patch.configJson;
         }
+        if (patch.isDefault !== undefined) {
+          draft.isDefault = patch.isDefault;
+        }
       });
+      if (patch.isDefault === true) {
+        await unsetOtherDefaultPresets(this.db, type, id);
+      }
       return toDomainChannelPreset(model);
     });
   }

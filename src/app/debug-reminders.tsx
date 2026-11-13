@@ -372,7 +372,7 @@ export default function DebugRemindersScreen() {
             {reminder.frequency === 'once' && reminder.onceAt !== null
               ? formatOnceAtText(reminder.onceAt)
               : `${String(reminder.localTimeHour).padStart(2, '0')}:${String(reminder.localTimeMinute).padStart(2, '0')}`}
-            {' / 渠道 '}{REMINDER_CHANNEL_LABELS[reminder.channel]}{' / '}{reminder.tzid} / startAt=
+            {' / 渠道 '}{reminder.channels.map((channel) => REMINDER_CHANNEL_LABELS[channel]).join('、')}{' / '}{reminder.tzid} / startAt=
             {new Date(reminder.startAt).toISOString()}）
           </Text>
           <View style={styles.rowWrap}>

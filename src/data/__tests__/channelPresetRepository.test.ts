@@ -168,7 +168,7 @@ describe('WatermelonItemRepository 渠道预设 CRUD（切片 17 阶段 1）', (
     });
 
     await expect(repository.updateChannelPreset(created.id, {})).rejects.toThrow(
-      'updateChannelPreset: patch must contain at least one of name / configJson',
+      'updateChannelPreset: patch must contain at least one of name / configJson / isDefault',
     );
     await expect(repository.updateChannelPreset(created.id, { name: '  ' })).rejects.toThrow(
       'updateChannelPreset: name must not be blank',
@@ -219,5 +219,90 @@ describe('WatermelonItemRepository 渠道预设 CRUD（切片 17 阶段 1）', (
     });
 
     await expect(repository.listChannelPresets()).rejects.toThrow('has invalid type: telegram');
+  });
+});
+
+describe('isDefault 默认预设（切片 18，AGENTS.md §7.29：同 type 至多一个 true）', () => {
+  it('create 缺省 isDefault=false；显式 true 返回 true', async () => {
+    const repository = makeRepository();
+    const plain = await repository.createChannelPreset({
+      name: '普通预设',
+      type: 'webhook',
+      configJson: 'https://hook.example/a',
+    });
+    expect(plain.isDefault).toBe(false);
+
+    const def = await repository.createChannelPreset({
+      name: '默认预设',
+      type: 'webhook',
+      configJson: 'https://hook.example/b',
+      isDefault: true,
+    });
+    expect(def.isDefault).toBe(true);
+  });
+
+  it('create 同 type 第二个 isDefault=true：前者自动取消（同事务保证不变量）', async () => {
+    const repository = makeRepository();
+    const first = await repository.createChannelPreset({
+      name: '第一默认',
+      type: 'webhook',
+      configJson: 'https://hook.example/1',
+      isDefault: true,
+    });
+    const second = await repository.createChannelPreset({
+      name: '第二默认',
+      type: 'webhook',
+      configJson: 'https://hook.example/2',
+      isDefault: true,
+    });
+    expect(second.isDefault).toBe(true);
+
+    const presets = await repository.listChannelPresets();
+    const firstAfter = presets.find((preset: ChannelPreset) => preset.id === first.id);
+    expect(firstAfter?.isDefault).toBe(false);
+    // 全表恰一个 webhook 默认
+    expect(presets.filter((preset: ChannelPreset) => preset.type === 'webhook' && preset.isDefault)).toHaveLength(1);
+  });
+
+  it('updateChannelPreset isDefault=true：同 type 其余取消，异 type 不受影响', async () => {
+    const repository = makeRepository();
+    const webhookOld = await repository.createChannelPreset({
+      name: 'webhook 旧默认',
+      type: 'webhook',
+      configJson: 'https://hook.example/old',
+      isDefault: true,
+    });
+    const appriseOther = await repository.createChannelPreset({
+      name: 'apprise 默认',
+      type: 'apprise',
+      configJson: APPRISE_CONFIG,
+      isDefault: true,
+    });
+    const webhookNew = await repository.createChannelPreset({
+      name: 'webhook 新默认',
+      type: 'webhook',
+      configJson: 'https://hook.example/new',
+    });
+
+    const promoted = await repository.updateChannelPreset(webhookNew.id, { isDefault: true });
+    expect(promoted.isDefault).toBe(true);
+
+    const presets = await repository.listChannelPresets();
+    expect(presets.find((preset: ChannelPreset) => preset.id === webhookOld.id)?.isDefault).toBe(false);
+    expect(presets.find((preset: ChannelPreset) => preset.id === appriseOther.id)?.isDefault).toBe(true);
+    expect(presets.filter((preset: ChannelPreset) => preset.isDefault)).toHaveLength(2); // 每 type 一个
+  });
+
+  it('updateChannelPreset isDefault=false：只取消自身，不产生连锁', async () => {
+    const repository = makeRepository();
+    const created = await repository.createChannelPreset({
+      name: '默认',
+      type: 'apprise',
+      configJson: APPRISE_CONFIG,
+      isDefault: true,
+    });
+    const demoted = await repository.updateChannelPreset(created.id, { isDefault: false });
+    expect(demoted.isDefault).toBe(false);
+    expect((await repository.listChannelPresets()).filter((preset: ChannelPreset) => preset.isDefault)).toHaveLength(0);
   });
 });

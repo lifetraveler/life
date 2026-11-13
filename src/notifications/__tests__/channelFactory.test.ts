@@ -1,6 +1,7 @@
 import * as Notifications from 'expo-notifications';
 
-import { createReminderChannel, isNetworkReminderChannel } from '../channels';
+import { createReminderChannel, isNetworkReminderChannel, scopeReminderToChannel } from '../channels';
+import type { Reminder } from '../../domain/reminder';
 import { AlarmChannel } from '../channels/AlarmChannel';
 import { AppriseChannel } from '../channels/AppriseChannel';
 import { SystemNotificationChannel } from '../channels/SystemNotificationChannel';
@@ -109,23 +110,24 @@ describe('channelFactory 与 AlarmChannel（切片 16 阶段 2）', () => {
   });
 });
 
-// 渠道测试不关心 frequency 展开：daily 夹具即可（schedule 直接消费 reminder）。
+// 渠道测试不关心 frequency 展开：daily 夹具即可（schedule 直接消费 scoped reminder）。
+// 切片 18：域模型改多渠道形状，经 scopeReminderToChannel 收敛成渠道实现消费的投影。
 function testReminderFixture(
   id: string,
   channel: 'system-notification' | 'alarm' | 'webhook' | 'apprise',
   channelConfig: string | null,
 ) {
-  return {
+  const reminder: Reminder = {
     id,
     itemId: 'iA',
-    frequency: 'daily' as const,
+    frequency: 'daily',
     localTimeHour: 9,
     localTimeMinute: 0,
     weekdays: [],
     dayOfMonth: 0,
     onceAt: null,
-    channel,
-    channelConfig,
+    channels: [channel],
+    channelConfigs: channelConfig !== null ? { [channel]: channelConfig } : {},
     tzid: 'UTC',
     startAt: TEST_NOW,
     enabled: true,
@@ -134,4 +136,5 @@ function testReminderFixture(
     createdAt: TEST_NOW - 1,
     updatedAt: TEST_NOW - 1,
   };
+  return scopeReminderToChannel(reminder, channel);
 }

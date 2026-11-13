@@ -92,6 +92,26 @@ export default function ChannelPresetSettingsPage() {
     [saving, load],
   );
 
+  const handleSetDefault = useCallback(
+    async (preset: ChannelPreset): Promise<void> => {
+      if (saving) {
+        return;
+      }
+      setSaving(true);
+      try {
+        // 同 type 其余预设自动取消默认（Repository 事务内保证，AGENTS.md §7.29）。
+        await itemRepository.updateChannelPreset(preset.id, { isDefault: true });
+        await load();
+      } catch (err) {
+        console.warn('[slice-18] 设为默认失败', err);
+        setError(`设为默认失败：${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        setSaving(false);
+      }
+    },
+    [saving, load],
+  );
+
   const handleDelete = useCallback(
     (preset: ChannelPreset): void => {
       Alert.alert(
@@ -171,13 +191,26 @@ export default function ChannelPresetSettingsPage() {
               }}
             >
               <View style={styles.rowTextCol}>
-                <Text style={styles.presetName}>{preset.name}</Text>
+                <Text style={styles.presetName}>
+                  {preset.isDefault ? '★ ' : ''}{preset.name}
+                </Text>
                 <Text style={styles.presetMeta}>
-                  {`[${TYPE_LABELS[preset.type]}] ${channelPresetSummary(preset)}`}
+                  {`[${TYPE_LABELS[preset.type]}]${preset.isDefault ? ' 默认' : ''} ${channelPresetSummary(preset)}`}
                 </Text>
               </View>
               <Text style={styles.rowAction}>{expanded ? '收起' : '编辑'}</Text>
             </Pressable>
+            {!preset.isDefault ? (
+              <Pressable
+                style={styles.defaultButton}
+                disabled={saving}
+                onPress={() => {
+                  void handleSetDefault(preset);
+                }}
+              >
+                <Text style={styles.defaultText}>设为默认</Text>
+              </Pressable>
+            ) : null}
             {expanded ? (
               <View>
                 <ChannelPresetEditor
@@ -267,6 +300,19 @@ const styles = StyleSheet.create({
     color: '#888',
   },
   rowAction: {
+    fontSize: 13,
+    color: '#1e6f5c',
+  },
+  defaultButton: {
+    marginTop: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: '#1e6f5c',
+    borderRadius: 6,
+  },
+  defaultText: {
     fontSize: 13,
     color: '#1e6f5c',
   },

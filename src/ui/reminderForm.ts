@@ -17,6 +17,7 @@ import type {
   UpdateReminderInput,
 } from '../domain/reminder';
 import { REMINDER_CHANNELS } from '../domain/reminder';
+import { isExpoReminderChannel } from '../domain/reminder';
 import { REMINDER_TZ_WHITELIST, isWhitelistedReminderTz } from '../data/reminderTzWhitelist';
 import { parseWebhookChannelConfig } from '../notifications/channels/webhookConfig';
 import type { ChannelPreset } from '../domain/channelPreset';
@@ -34,8 +35,11 @@ export interface ReminderFormValues {
   /** 规则生效起点（绝对毫秒）；默认取创建表单时的当前时刻。once 下不参与触发计算（展示用） */
   startAt: number | null;
   enabled: boolean;
-  /** 提醒渠道（切片 16 阶段 3）；缺省 system-notification 与升级前行为一致 */
-  channel: ReminderChannel;
+  /**
+   * 选中渠道集合（切片 18 阶段 3 多选，提案 §8）：至少 1 项、expo 家族
+   * （system-notification / alarm）至多一项——互斥切换由 toggleReminderChannel 保证。
+   */
+  channels: ReminderChannel[];
   /** webhook 渠道的 URL 原始输入（切渠道不清空，保留用户已输入内容） */
   channelConfigText: string;
   /** apprise 渠道的 BaseURL / Key 两个独立输入（stateful 简写；urls/stateless 不在 UI 暴露） */
@@ -56,6 +60,7 @@ export interface ReminderFormErrors {
   onceAt?: string;
   tzid?: string;
   startAt?: string;
+  channels?: string;
   channelConfig?: string;
 }
 
@@ -92,6 +97,30 @@ export function isNetworkReminderChannel(channel: ReminderChannel): boolean {
 
 /** 网络渠道边界提示文案（§7.26：UI 必须注明，契约措辞） */
 export const NETWORK_CHANNEL_BOUNDARY_NOTICE = '网络推送仅在 App 进程存活时保证发送';
+
+/**
+ * 渠道多选切换纯函数（切片 18 阶段 3，提案 §5 渠道约束的 UI 侧镜像）：
+ * - 选中 expo 渠道（system-notification / alarm）时替换另一 expo 渠道（家族互斥），
+ *   网络渠道保留；
+ * - 任一渠道取消选中后至少保留 1 项（channels ≥ 1，提案已确认决策 ②），
+ *   试图取消最后一项时返回原数组不变；
+ * - 返回值恒为 canonical 序（REMINDER_CHANNELS 声明顺序）。
+ */
+export function toggleReminderChannel(
+  channels: ReminderChannel[],
+  channel: ReminderChannel,
+): ReminderChannel[] {
+  if (channels.includes(channel)) {
+    if (channels.length <= 1) {
+      return channels;
+    }
+    return REMINDER_CHANNELS.filter((existing) => existing !== channel && channels.includes(existing));
+  }
+  const next = isExpoReminderChannel(channel)
+    ? [...channels.filter((existing) => !isExpoReminderChannel(existing)), channel]
+    : [...channels, channel];
+  return REMINDER_CHANNELS.filter((candidate) => next.includes(candidate));
+}
 
 /**
  * 工程内无 `new URL(` 先例（Hermes 环境差异，且 jest node 环境需一致可测）：
@@ -177,24 +206,27 @@ export function parseAppriseFormFields(config: string | null): { baseUrl: string
   return { baseUrl, key };
 }
 
-/** 渠道 + 渠道配置（apprise 按 stateful 简写序列化为 {baseUrl,key} JSON） */
+/**
+ * 选中渠道集合 + 各渠道配置输入 → 多渠道形状（切片 18 阶段 3，提案 §5/§8）：
+ * channels 原样取表单选中集（toggle 已保证 ≥1 与 expo 互斥，Repository 归一化兜底）；
+ * channelConfigs 仅为「选中且为网络渠道」的条目产出（webhook = URL/配置 JSON 原文，
+ * apprise = stateful 简写 {baseUrl,key} JSON），expo 渠道无配置条目。
+ * 写路径最终归一化仍由 Repository 负责。
+ */
 function buildChannelFields(
   values: ReminderFormValues,
-): { channel: ReminderChannel; channelConfig: string | null } {
-  if (values.channel === 'webhook') {
-    return { channel: values.channel, channelConfig: values.channelConfigText.trim() };
+): { channels: ReminderChannel[]; channelConfigs: Partial<Record<ReminderChannel, string>> } {
+  const channelConfigs: Partial<Record<ReminderChannel, string>> = {};
+  if (values.channels.includes('webhook')) {
+    channelConfigs['webhook'] = values.channelConfigText.trim();
   }
-  if (values.channel === 'apprise') {
-    return {
-      channel: values.channel,
-      channelConfig: JSON.stringify({
-        baseUrl: values.appriseBaseUrl.trim(),
-        key: values.appriseKey.trim(),
-      }),
-    };
+  if (values.channels.includes('apprise')) {
+    channelConfigs['apprise'] = JSON.stringify({
+      baseUrl: values.appriseBaseUrl.trim(),
+      key: values.appriseKey.trim(),
+    });
   }
-  // system-notification / alarm：渠道无关，config 恒 null（Repository 强制归一）
-  return { channel: values.channel, channelConfig: null };
+  return { channels: [...values.channels], channelConfigs };
 }
 
 /** 全部字段合法时返回空对象 {}（无错误键） */
@@ -245,7 +277,11 @@ export function validateReminderForm(values: ReminderFormValues): ReminderFormEr
     errors.startAt = '生效起点无效';
   }
 
-  if (values.channel === 'webhook') {
+  if (values.channels.length === 0) {
+    errors.channels = '请至少选择一个渠道';
+  }
+
+  if (values.channels.includes('webhook')) {
     const url = values.channelConfigText.trim();
     if (url.length === 0) {
       errors.channelConfig = 'Webhook URL 不能为空';
@@ -257,7 +293,7 @@ export function validateReminderForm(values: ReminderFormValues): ReminderFormEr
     }
   }
 
-  if (values.channel === 'apprise') {
+  if (values.channels.includes('apprise')) {
     const baseUrl = values.appriseBaseUrl.trim();
     if (baseUrl.length === 0) {
       errors.channelConfig = 'Apprise BaseURL 不能为空';
@@ -316,7 +352,7 @@ export function buildCreateReminderInput(
   itemId: string,
 ): CreateReminderInput {
   const isOnce = values.frequency === 'once';
-  const { channel, channelConfig } = buildChannelFields(values);
+  const channelFields = buildChannelFields(values);
   return {
     itemId,
     frequency: values.frequency,
@@ -325,8 +361,8 @@ export function buildCreateReminderInput(
     weekdays: values.frequency === 'weekly' ? values.weekdays : [],
     dayOfMonth: values.frequency === 'monthly' ? (values.dayOfMonth ?? 1) : 0,
     onceAt: isOnce ? buildOnceCivilTime(values.onceAt) : null,
-    channel,
-    channelConfig,
+    channels: channelFields.channels,
+    channelConfigs: channelFields.channelConfigs,
     tzid: values.tzid,
     startAt: values.startAt ?? 0,
     enabled: values.enabled,
@@ -343,7 +379,7 @@ export function buildUpdateReminderInput(
   target: Reminder,
 ): UpdateReminderInput {
   const isOnce = values.frequency === 'once';
-  const { channel, channelConfig } = buildChannelFields(values);
+  const channelFields = buildChannelFields(values);
   return {
     frequency: values.frequency,
     localTimeHour: isOnce ? 0 : (values.localTimeHour ?? 0),
@@ -351,8 +387,8 @@ export function buildUpdateReminderInput(
     weekdays: values.frequency === 'weekly' ? values.weekdays : [],
     dayOfMonth: values.frequency === 'monthly' ? (values.dayOfMonth ?? 1) : 0,
     onceAt: isOnce ? buildOnceCivilTime(values.onceAt) : null,
-    channel,
-    channelConfig,
+    channels: channelFields.channels,
+    channelConfigs: channelFields.channelConfigs,
     startAt: values.startAt ?? target.startAt,
     enabled: values.enabled,
     tzid: values.tzid,

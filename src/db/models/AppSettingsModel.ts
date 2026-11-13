@@ -19,4 +19,11 @@ export default class AppSettingsModel extends Model {
   @field('widget_show_todos') widgetShowTodos!: boolean;
   @field('widget_show_category_emoji') widgetShowCategoryEmoji!: boolean;
   @field('widget_show_tags') widgetShowTags!: boolean;
+
+  /**
+   * 切片 18（schema v10，AGENTS.md §7.29）：once 快捷 Chips 增量（分钟）JSON 数字数组，
+   * 默认 [10,60]；null/坏值由读取层防御归一（domain/settings.ts parseChipsIncrements），
+   * 写路径校验 1–4 项、每项 1–10080 整数。
+   */
+  @text('chips_increments') chipsIncrementsJson!: string | null;
 }

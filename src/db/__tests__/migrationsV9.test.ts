@@ -27,16 +27,16 @@ afterAll(() => {
 });
 
 describe('schema v9（切片 17 阶段 1）', () => {
-  it('SCHEMA_VERSION = 9 且 migrations 链 maxVersion = 9', () => {
-    expect(SCHEMA_VERSION).toBe(9);
-    expect(schema.version).toBe(9);
-    expect(migrations.maxVersion).toBe(9);
+  it('SCHEMA_VERSION = 10 且 migrations 链 maxVersion = 10（切片 18 追加 v10 后例行更新）', () => {
+    expect(SCHEMA_VERSION).toBe(10);
+    expect(schema.version).toBe(10);
+    expect(migrations.maxVersion).toBe(10);
     expect(migrations.minVersion).toBe(1);
   });
 
-  it('migration 链 toVersion 从 2 连续递增到 9，无跳号（v2–v8 已发布 step 未回改）', () => {
+  it('migration 链 toVersion 从 2 连续递增到 10，无跳号（v2–v9 已发布 step 未回改）', () => {
     const versions = migrations.sortedMigrations.map((entry) => entry.toVersion);
-    expect(versions).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(versions).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10]);
   });
 
   it('v9 step：仅一个 create_table（channel_presets），列定义与 schema.ts 逐字段一致', () => {
@@ -57,8 +57,11 @@ describe('schema v9（切片 17 阶段 1）', () => {
       { name: 'config_json', type: 'string' },
       { name: 'created_at', type: 'number' },
     ]);
-    // 全新安装路径（schema.ts）同一张表同一份列定义
-    expect(schema.tables.channel_presets?.columnArray).toEqual(createStep.schema.columnArray);
+    // 全新安装路径（schema.ts）同一张表；v10 追加 is_default 列（addColumns step，
+    // 已发布 v9 create_table step 不回改），比对时剔除 v10 新增列。
+    expect(
+      schema.tables.channel_presets?.columnArray.filter((column) => column.name !== 'is_default'),
+    ).toEqual(createStep.schema.columnArray);
   });
 
   it('v2–v8 已发布 step 不含 create_table channel_presets（只允许末尾追加）', () => {

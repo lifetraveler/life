@@ -10,14 +10,13 @@ import { fetchWithTimeout, notificationBody } from './shared';
 import { parseAppriseChannelConfig } from './appriseConfig';
 import { BaseNetworkChannel } from './BaseNetworkChannel';
 import type { Item } from '../../domain/item';
-import type { Reminder } from '../../domain/reminder';
-import type { ReminderChannelId } from './types';
+import type { ReminderChannelId, ScopedReminder } from './types';
 
 export class AppriseChannel extends BaseNetworkChannel {
   readonly channel: ReminderChannelId = 'apprise';
 
   protected async send(
-    reminder: Reminder,
+    reminder: ScopedReminder,
     occurrenceKey: string,
     fireAt: number,
     item: Item,

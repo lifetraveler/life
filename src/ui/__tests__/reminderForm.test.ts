@@ -2,6 +2,7 @@ import {
   buildCreateReminderInput,
   buildUpdateReminderInput,
   isWebhookConfigJson,
+  toggleReminderChannel,
   validateReminderForm,
 } from '../reminderForm';
 import type { ReminderFormValues } from '../reminderForm';
@@ -18,7 +19,7 @@ function validValues(overrides: Partial<ReminderFormValues> = {}): ReminderFormV
     tzid: 'Asia/Shanghai',
     startAt: 1749427200000,
     enabled: true,
-    channel: 'system-notification',
+    channels: ['system-notification'],
     channelConfigText: '',
     appriseBaseUrl: '',
     appriseKey: '',
@@ -112,35 +113,35 @@ describe('validateReminderForm（切片 16 阶段 3：once 与渠道）', () => 
   });
 
   it('webhook：空/空白/格式错 URL 拦截，合法 http/https 通过（含 trim）', () => {
-    expect(validateReminderForm(validValues({ channel: 'webhook', channelConfigText: '' })).channelConfig)
+    expect(validateReminderForm(validValues({ channels: ['webhook'], channelConfigText: '' })).channelConfig)
       .toBeDefined();
-    expect(validateReminderForm(validValues({ channel: 'webhook', channelConfigText: '   ' })).channelConfig)
+    expect(validateReminderForm(validValues({ channels: ['webhook'], channelConfigText: '   ' })).channelConfig)
       .toBeDefined();
     expect(
-      validateReminderForm(validValues({ channel: 'webhook', channelConfigText: 'ftp://example.com/hook' })).channelConfig,
+      validateReminderForm(validValues({ channels: ['webhook'], channelConfigText: 'ftp://example.com/hook' })).channelConfig,
     ).toBeDefined();
-    expect(validateReminderForm(validValues({ channel: 'webhook', channelConfigText: 'http://' })).channelConfig)
+    expect(validateReminderForm(validValues({ channels: ['webhook'], channelConfigText: 'http://' })).channelConfig)
       .toBeDefined();
     expect(
-      validateReminderForm(validValues({ channel: 'webhook', channelConfigText: 'https://example.com/hook' })).channelConfig,
+      validateReminderForm(validValues({ channels: ['webhook'], channelConfigText: 'https://example.com/hook' })).channelConfig,
     ).toBeUndefined();
     expect(
-      validateReminderForm(validValues({ channel: 'webhook', channelConfigText: '  http://localhost:8080/hook ' })).channelConfig,
+      validateReminderForm(validValues({ channels: ['webhook'], channelConfigText: '  http://localhost:8080/hook ' })).channelConfig,
     ).toBeUndefined();
   });
 
   it('apprise：BaseURL 空/格式错、Key 空拦截；齐全通过', () => {
     expect(
-      validateReminderForm(validValues({ channel: 'apprise', appriseBaseUrl: '', appriseKey: 'k' })).channelConfig,
+      validateReminderForm(validValues({ channels: ['apprise'], appriseBaseUrl: '', appriseKey: 'k' })).channelConfig,
     ).toBeDefined();
     expect(
-      validateReminderForm(validValues({ channel: 'apprise', appriseBaseUrl: 'example.com', appriseKey: 'k' })).channelConfig,
+      validateReminderForm(validValues({ channels: ['apprise'], appriseBaseUrl: 'example.com', appriseKey: 'k' })).channelConfig,
     ).toBeDefined();
     expect(
-      validateReminderForm(validValues({ channel: 'apprise', appriseBaseUrl: 'https://a.example.com', appriseKey: '' })).channelConfig,
+      validateReminderForm(validValues({ channels: ['apprise'], appriseBaseUrl: 'https://a.example.com', appriseKey: '' })).channelConfig,
     ).toBeDefined();
     expect(
-      validateReminderForm(validValues({ channel: 'apprise', appriseBaseUrl: 'https://a.example.com', appriseKey: 'secret' })).channelConfig,
+      validateReminderForm(validValues({ channels: ['apprise'], appriseBaseUrl: 'https://a.example.com', appriseKey: 'secret' })).channelConfig,
     ).toBeUndefined();
   });
 });
@@ -174,30 +175,32 @@ describe('buildCreateReminderInput', () => {
 });
 
 describe('buildCreateReminderInput（切片 16 阶段 3：渠道与 once）', () => {
-  it('webhook：channelConfig 为 trim 后 URL；system-notification 渠道 config 恒 null', () => {
+  it('webhook：config 为 trim 后 URL；system-notification 渠道 configs 恒空（切片 18 多渠道形状）', () => {
     const webhook = buildCreateReminderInput(
-      validValues({ channel: 'webhook', channelConfigText: '  https://example.com/hook  ' }),
+      validValues({ channels: ['webhook'], channelConfigText: '  https://example.com/hook  ' }),
       'item-1',
     );
-    expect(webhook.channel).toBe('webhook');
-    expect(webhook.channelConfig).toBe('https://example.com/hook');
+    expect(webhook.channels).toEqual(['webhook']);
+    expect(webhook.channelConfigs).toEqual({ webhook: 'https://example.com/hook' });
 
     const sys = buildCreateReminderInput(validValues(), 'item-1');
-    expect(sys.channel).toBe('system-notification');
-    expect(sys.channelConfig).toBeNull();
+    expect(sys.channels).toEqual(['system-notification']);
+    expect(sys.channelConfigs).toEqual({});
   });
 
-  it('apprise：channelConfig 序列化为 {baseUrl,key} JSON（trim）', () => {
+  it('apprise：config 序列化为 {baseUrl,key} JSON（trim）', () => {
     const apprise = buildCreateReminderInput(
       validValues({
-        channel: 'apprise',
+        channels: ['apprise'],
         appriseBaseUrl: ' https://apprise.example.com/ ',
         appriseKey: ' k1 ',
       }),
       'item-1',
     );
-    expect(apprise.channel).toBe('apprise');
-    expect(apprise.channelConfig).toBe(JSON.stringify({ baseUrl: 'https://apprise.example.com/', key: 'k1' }));
+    expect(apprise.channels).toEqual(['apprise']);
+    expect(apprise.channelConfigs).toEqual({
+      apprise: JSON.stringify({ baseUrl: 'https://apprise.example.com/', key: 'k1' }),
+    });
   });
 
   it('once：localTime 归零、onceAt 由表单文本解析、非 weekly/monthly 字段归零', () => {
@@ -228,8 +231,8 @@ describe('buildUpdateReminderInput（切片 16 阶段 3）', () => {
       tzid: 'Asia/Shanghai',
       startAt: 1749427200000,
       enabled: true,
-      channel: 'system-notification',
-      channelConfig: null,
+      channels: ['system-notification'],
+      channelConfigs: {},
       lastFiredOccurrenceKey: null,
       lastReconciledAt: null,
       createdAt: 0,
@@ -240,13 +243,13 @@ describe('buildUpdateReminderInput（切片 16 阶段 3）', () => {
 
   it('重复频率：onceAt 显式 null、渠道字段透传、startAt 未填回退 target 现值', () => {
     const patch = buildUpdateReminderInput(
-      validValues({ channel: 'alarm', channelConfigText: '' }),
+      validValues({ channels: ['alarm'], channelConfigText: '' }),
       targetReminder(),
     );
     expect(patch.frequency).toBe('daily');
     expect(patch.onceAt).toBeNull();
-    expect(patch.channel).toBe('alarm');
-    expect(patch.channelConfig).toBeNull();
+    expect(patch.channels).toEqual(['alarm']);
+    expect(patch.channelConfigs).toEqual({});
     expect(patch.startAt).toBe(1749427200000);
     expect(patch.tzid).toBe('Asia/Shanghai');
     expect(patch.enabled).toBe(true);
@@ -257,17 +260,107 @@ describe('buildUpdateReminderInput（切片 16 阶段 3）', () => {
       validValues({
         frequency: 'once',
         onceAt: { date: '2026-11-12', hour: 8, minute: 50 },
-        channel: 'webhook',
+        channels: ['webhook'],
         channelConfigText: 'https://example.com/hook',
       }),
       targetReminder({ frequency: 'once', onceAt: { year: 2026, month: 11, day: 11, hour: 9, minute: 0 } }),
     );
     expect(patch.frequency).toBe('once');
     expect(patch.onceAt).toEqual({ year: 2026, month: 11, day: 12, hour: 8, minute: 50 });
-    expect(patch.channel).toBe('webhook');
-    expect(patch.channelConfig).toBe('https://example.com/hook');
+    expect(patch.channels).toEqual(['webhook']);
+    expect(patch.channelConfigs).toEqual({ webhook: 'https://example.com/hook' });
     expect(patch.localTimeHour).toBe(0);
     expect(patch.localTimeMinute).toBe(0);
+  });
+});
+
+describe('validateReminderForm（切片 18 阶段 3：多渠道）', () => {
+  it('channels 为空报 channels 错误；多渠道组合合法通过', () => {
+    expect(validateReminderForm(validValues({ channels: [] })).channels).toBeDefined();
+    expect(
+      validateReminderForm(validValues({ channels: ['system-notification', 'webhook'] })).channels,
+    ).toBeUndefined();
+  });
+
+  it('多渠道：webhook 配置错误仍报 channelConfig；未选网络渠道不校验其配置', () => {
+    // webhook 选中但 URL 空 → 报错
+    expect(
+      validateReminderForm(validValues({ channels: ['system-notification', 'webhook'] })).channelConfig,
+    ).toBeDefined();
+    // apprise 未选中时其输入为空不报错
+    expect(
+      validateReminderForm(validValues({ channels: ['system-notification'] })).channelConfig,
+    ).toBeUndefined();
+  });
+});
+
+describe('toggleReminderChannel（切片 18 阶段 3：多选切换纯函数）', () => {
+  it('网络渠道加入/移除，返回 canonical 序', () => {
+    expect(toggleReminderChannel(['system-notification'], 'webhook')).toEqual([
+      'system-notification',
+      'webhook',
+    ]);
+    // 乱序输入归一 canonical 序
+    expect(toggleReminderChannel(['webhook', 'system-notification'], 'apprise')).toEqual([
+      'system-notification',
+      'webhook',
+      'apprise',
+    ]);
+    expect(toggleReminderChannel(['system-notification', 'webhook'], 'webhook')).toEqual([
+      'system-notification',
+    ]);
+  });
+
+  it('expo 家族互斥：选 alarm 替换 system-notification，网络渠道保留', () => {
+    expect(toggleReminderChannel(['system-notification', 'webhook'], 'alarm')).toEqual([
+      'alarm',
+      'webhook',
+    ]);
+    expect(toggleReminderChannel(['alarm', 'webhook', 'apprise'], 'system-notification')).toEqual([
+      'system-notification',
+      'webhook',
+      'apprise',
+    ]);
+  });
+
+  it('至少保留 1 项：试图移除最后一项时原样返回', () => {
+    expect(toggleReminderChannel(['system-notification'], 'system-notification')).toEqual([
+      'system-notification',
+    ]);
+    expect(toggleReminderChannel(['webhook'], 'webhook')).toEqual(['webhook']);
+  });
+});
+
+describe('buildCreateReminderInput（切片 18 阶段 3：多渠道组合）', () => {
+  it('expo+网络并存：configs 仅含选中网络渠道条目', () => {
+    const input = buildCreateReminderInput(
+      validValues({
+        channels: ['system-notification', 'webhook', 'apprise'],
+        channelConfigText: 'https://hook.example/x',
+        appriseBaseUrl: 'https://apprise.example.com',
+        appriseKey: 'k',
+      }),
+      'item-1',
+    );
+    expect(input.channels).toEqual(['system-notification', 'webhook', 'apprise']);
+    expect(input.channelConfigs).toEqual({
+      webhook: 'https://hook.example/x',
+      apprise: JSON.stringify({ baseUrl: 'https://apprise.example.com', key: 'k' }),
+    });
+  });
+
+  it('未选中的网络渠道不产出配置条目（选中态裁剪）', () => {
+    const input = buildCreateReminderInput(
+      validValues({
+        channels: ['system-notification'],
+        channelConfigText: 'https://hook.example/leftover',
+        appriseBaseUrl: 'https://apprise.example.com',
+        appriseKey: 'k',
+      }),
+      'item-1',
+    );
+    expect(input.channels).toEqual(['system-notification']);
+    expect(input.channelConfigs).toEqual({});
   });
 });
 
@@ -300,7 +393,7 @@ describe('isWebhookConfigJson（切片 17 阶段 2：预设整串复制的配置
   });
 
   it('validate：webhook 选预设后 channelConfigText=配置 JSON 不再报 URL 错误', () => {
-    const values = validValues({ channel: 'webhook' });
+    const values = validValues({ channels: ['webhook'] });
     values.channelConfigText = JSON.stringify({
       url: 'https://hooks.example.com/zulip',
       mode: 'form',

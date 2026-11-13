@@ -412,12 +412,16 @@ export default function SettingsPage() {
         {widgetError !== null ? <Text style={styles.errorHint}>{widgetError}</Text> : null}
       </View>
 
-      {/* 切片 17 阶段 2：提醒渠道预设管理（AGENTS.md §7.27） */}
+      {/* 切片 17 阶段 2：提醒渠道预设管理（AGENTS.md §7.27）；切片 18：Chips 增量设置（§7.29） */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>提醒渠道</Text>
         <Text style={styles.hint}>管理 Webhook / Apprise 渠道预设，在提醒详情页直接选择。</Text>
         <Pressable style={styles.navRow} onPress={() => router.push('/settings/channels')}>
           <Text style={styles.navLabel}>渠道预设管理</Text>
+          <Text style={styles.navChevron}>›</Text>
+        </Pressable>
+        <Pressable style={styles.navRow} onPress={() => router.push('/settings/chips')}>
+          <Text style={styles.navLabel}>快捷 Chips 增量设置</Text>
           <Text style={styles.navChevron}>›</Text>
         </Pressable>
       </View>

@@ -17,8 +17,7 @@ import {
 import { fetchWithTimeout, notificationBody } from './shared';
 import { BaseNetworkChannel } from './BaseNetworkChannel';
 import type { Item } from '../../domain/item';
-import type { Reminder } from '../../domain/reminder';
-import type { ReminderChannelId } from './types';
+import type { ReminderChannelId, ScopedReminder } from './types';
 
 /** 切片 16 固定 payload（json 模式缺省 payloadTemplate 时维持不变，存量提醒零行为变化） */
 function legacyFixedPayload(
@@ -44,7 +43,7 @@ export class WebhookChannel extends BaseNetworkChannel {
   readonly channel: ReminderChannelId = 'webhook';
 
   protected async send(
-    reminder: Reminder,
+    reminder: ScopedReminder,
     occurrenceKey: string,
     fireAt: number,
     item: Item,

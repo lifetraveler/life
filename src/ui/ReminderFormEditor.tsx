@@ -20,11 +20,15 @@ import TzPicker from './TzPicker';
  * - tz 选择器只含白名单两项（§4.25）；
  * - 切片 16 阶段 3：新增 once 频率与渠道选择（ReminderChannelFields 子组件）；
  * - 切片 17 阶段 2（§7.28）：once 触发时刻废弃手输，改 OnceAtField（Picker + 快捷
- *   Chips，civil 值直出按 reminder.tzid 解释）；渠道新增预设下拉（ReminderChannelFields）。
+ *   Chips，civil 值直出按 reminder.tzid 解释）；渠道新增预设下拉（ReminderChannelFields）；
+ * - 切片 18 阶段 3：渠道多选（values.channels）；once 快捷 Chips 增量读取
+ *   app_settings.chipsIncrements（§7.29，父级经 chipsIncrements 传入）。
  */
 interface ReminderFormProps {
   initial?: Reminder;
   submitLabel: string;
+  /** once 快捷 Chips 的自定义增量（分钟）；缺省 [10, 60]（读层防御由 settings 保证） */
+  chipsIncrements?: number[];
   onSubmit: (values: ReminderFormValues) => void | Promise<void>;
   onCancel: () => void;
 }
@@ -53,8 +57,9 @@ function initialValues(initial?: Reminder): ReminderFormValues {
             minute: initial.onceAt.minute,
           }
         : { date: '', hour: null, minute: null };
-    const appriseFields = initial.channel === 'apprise'
-      ? parseAppriseFormFields(initial.channelConfig)
+    // 切片 18 阶段 3：多选编辑——回填全量 channels；网络渠道配置按渠道独立回填。
+    const appriseFields = initial.channels.includes('apprise')
+      ? parseAppriseFormFields(initial.channelConfigs['apprise'] ?? null)
       : { baseUrl: '', key: '' };
     return {
       frequency: initial.frequency,
@@ -66,8 +71,10 @@ function initialValues(initial?: Reminder): ReminderFormValues {
       tzid: initial.tzid,
       startAt: initial.startAt,
       enabled: initial.enabled,
-      channel: initial.channel,
-      channelConfigText: initial.channel === 'webhook' ? (initial.channelConfig ?? '') : '',
+      channels: [...initial.channels],
+      channelConfigText: initial.channels.includes('webhook')
+        ? (initial.channelConfigs['webhook'] ?? '')
+        : '',
       appriseBaseUrl: appriseFields.baseUrl,
       appriseKey: appriseFields.key,
       channelPresetId: null,
@@ -83,7 +90,7 @@ function initialValues(initial?: Reminder): ReminderFormValues {
     tzid: 'Asia/Shanghai',
     startAt: Date.now(),
     enabled: true,
-    channel: 'system-notification',
+    channels: ['system-notification'],
     channelConfigText: '',
     appriseBaseUrl: '',
     appriseKey: '',
@@ -91,7 +98,13 @@ function initialValues(initial?: Reminder): ReminderFormValues {
   };
 }
 
-export default function ReminderForm({ initial, submitLabel, onSubmit, onCancel }: ReminderFormProps) {
+export default function ReminderForm({
+  initial,
+  submitLabel,
+  chipsIncrements,
+  onSubmit,
+  onCancel,
+}: ReminderFormProps) {
   const [values, setValues] = useState<ReminderFormValues>(() => initialValues(initial));
   const [submitting, setSubmitting] = useState(false);
 
@@ -222,6 +235,7 @@ export default function ReminderForm({ initial, submitLabel, onSubmit, onCancel 
           label="触发时刻"
           value={values.onceAt}
           tzid={values.tzid}
+          chipsIncrements={chipsIncrements}
           onChange={(onceAt) => patch({ onceAt })}
           error={errors.onceAt}
         />

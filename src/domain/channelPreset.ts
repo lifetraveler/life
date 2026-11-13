@@ -31,6 +31,11 @@ export interface ChannelPreset {
    * 写路径经对应渠道守卫校验后才落库；读取层原样返回（阶段 2 选用时再 parse）。
    */
   configJson: string;
+  /**
+   * 默认预设标记（切片 18，schema v10，AGENTS.md §7.29）：详情页表单默认选中。
+   * 「同 type 至多一个 true」由 Repository 写路径在同事务内保证（提案 §3.3）。
+   */
+  isDefault: boolean;
   /** 列表排序用（created_at 降序），毫秒时间戳 */
   createdAt: number;
 }
@@ -40,10 +45,14 @@ export interface CreateChannelPresetInput {
   name: string;
   type: ChannelPresetType;
   configJson: string;
+  /** 切片 18：设 true 时同 type 其余预设自动取消默认（缺省 false，提案 §3.3） */
+  isDefault?: boolean;
 }
 
 /** updateChannelPreset 输入：patch 合并语义（仅提供要改的字段），与 UpdateReminderInput 同纪律 */
 export interface UpdateChannelPresetInput {
   name?: string;
   configJson?: string;
+  /** 切片 18：patch 合并；设 true 时同 type 其余预设自动取消默认（提案 §3.3） */
+  isDefault?: boolean;
 }

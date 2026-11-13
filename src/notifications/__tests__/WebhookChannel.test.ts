@@ -1,5 +1,5 @@
 import { WebhookChannel } from '../channels/WebhookChannel';
-import { NetworkTimerRegistry } from '../channels/networkTimers';
+import { NetworkTimerRegistry, networkTimerKey } from '../channels/networkTimers';
 import type { NetworkChannelDeps } from '../channels/types';
 import type { ItemRepository } from '../../data/ItemRepository';
 import { stubRepositoryWith, testItem, testReminder, TEST_NOW } from './channelTestSupport';
@@ -52,7 +52,7 @@ describe('WebhookChannel（切片 16 阶段 2）', () => {
       fireAt: TEST_NOW,
       sentAt: TEST_NOW,
     });
-    expect(registry.attemptStatus('once:rW:123')).toBe('ok');
+    expect(registry.attemptStatus('webhook', 'once:rW:123')).toBe('ok');
   });
 
   it('deliver：非 2xx 返回 failed 并记录 attempt，不抛出', async () => {
@@ -64,7 +64,7 @@ describe('WebhookChannel（切片 16 阶段 2）', () => {
     const status = await channel.deliver(reminder, 'once:rW:500', TEST_NOW);
 
     expect(status).toBe('failed');
-    expect(registry.attemptStatus('once:rW:500')).toBe('failed');
+    expect(registry.attemptStatus('webhook', 'once:rW:500')).toBe('failed');
   });
 
   it('deliver：fetch 抛错（网络不可达）返回 failed，不抛出', async () => {
@@ -76,7 +76,7 @@ describe('WebhookChannel（切片 16 阶段 2）', () => {
     const status = await channel.deliver(reminder, 'once:rW:down', TEST_NOW);
 
     expect(status).toBe('failed');
-    expect(registry.attemptStatus('once:rW:down')).toBe('failed');
+    expect(registry.attemptStatus('webhook', 'once:rW:down')).toBe('failed');
   });
 
   it('deliver：channelConfig 为空白时返回 failed 且不发起 fetch', async () => {
@@ -88,7 +88,7 @@ describe('WebhookChannel（切片 16 阶段 2）', () => {
 
     expect(status).toBe('failed');
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(registry.attemptStatus('once:rW:nourl')).toBe('failed');
+    expect(registry.attemptStatus('webhook', 'once:rW:nourl')).toBe('failed');
   });
 
   it('deliver：item 缺失时返回 failed 且不发起 fetch', async () => {
@@ -100,7 +100,7 @@ describe('WebhookChannel（切片 16 阶段 2）', () => {
 
     expect(status).toBe('failed');
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(registry.attemptStatus('once:rW:noitem')).toBe('failed');
+    expect(registry.attemptStatus('webhook', 'once:rW:noitem')).toBe('failed');
   });
 
   it('schedule/cancel 只操作内存定时器，不发起 fetch', async () => {
@@ -109,7 +109,7 @@ describe('WebhookChannel（切片 16 阶段 2）', () => {
     const reminder = testReminder('rW', 'iW', 'webhook', 'https://hook.example/hi');
 
     await channel.schedule(reminder, 'once:rW:future', TEST_NOW + 1000);
-    expect(registry.armedKeys()).toEqual(['once:rW:future']);
+    expect(registry.armedKeys()).toEqual([networkTimerKey('webhook', 'once:rW:future')]);
 
     await channel.cancel('rW');
     expect(registry.armedKeys()).toEqual([]);
@@ -251,7 +251,7 @@ describe('WebhookChannel 载荷适配（切片 17 阶段 1，AGENTS.md §7.27）
 
     expect(status).toBe('failed');
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(registry.attemptStatus('once:rW:badmode')).toBe('failed');
+    expect(registry.attemptStatus('webhook', 'once:rW:badmode')).toBe('failed');
   });
 
   it('旧形态纯 URL 与新形态 JSON 配置可共存（同一存量库混用零回归）', async () => {

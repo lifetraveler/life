@@ -7,13 +7,21 @@
  * - once_civil_json 在存储层是单列 JSON（切片 16，schema v8，提案 §2.1，键序固定
  *   {year,month,day,hour,minute}）：serializeOnceCivilJson / parseOnceCivilJson 是唯一出入；
  *   解析失败必须抛明确错误（与 weekdays 同纪律）。
+ * - 多渠道（切片 18，schema v10，docs/proposals/slice-18-multi-channel.md）：
+ *   channels_json / channel_configs_json 的序列化（serializeReminderChannels /
+ *   serializeReminderChannelConfigs）、写路径归一（normalizeReminderChannelFields 多渠道版：
+ *   校验/去重/canonical 序/expo 互斥/per-key merge）与读层 legacy bridge
+ *   （resolveReminderChannelRow，all-or-nothing）全部收敛在本模块。
  * - 本模块为纯 TypeScript：不得 import WatermelonDB / expo-notifications / React。
  */
 
 import type { LocalTime, RecurrenceRule } from '../domain/recurrence';
 import {
   DEFAULT_REMINDER_CHANNEL,
+  DEFAULT_REMINDER_CHANNELS,
   REMINDER_CHANNELS,
+  isExpoReminderChannel,
+  isNetworkReminderChannel,
   isReminderChannel,
 } from '../domain/reminder';
 import type { OnceCivilTime, ReminderChannel, ReminderFrequency } from '../domain/reminder';
@@ -177,38 +185,214 @@ export function resolveOnceAt(
 }
 
 /**
- * 渠道字段归一化（切片 16，提案 §2.1）：channel 缺省 'system-notification'，枚举外抛错；
- * channelConfig——system-notification / alarm 渠道无关强制 null，webhook / apprise 接受
- * null/undefined 或非空白字符串（trim 后落库），纯空白抛错。供 createReminder /
- * updateReminder 写路径共用。
+ * 多渠道归一结果（切片 18，提案 §5）：channels ≥1、至多一个 expo 渠道、canonical 序
+ * （存储枚举顺序，不保留用户输入顺序）；channelConfigs 仅含网络渠道条目。
  */
-export function normalizeReminderChannelFields(input: {
-  channel?: ReminderChannel;
-  channelConfig?: string | null;
-}): { channel: ReminderChannel; channelConfig: string | null } {
-  const channel = input.channel ?? DEFAULT_REMINDER_CHANNEL;
-  if (!isReminderChannel(channel)) {
+export interface ReminderChannelFields {
+  channels: ReminderChannel[];
+  channelConfigs: Partial<Record<ReminderChannel, string>>;
+}
+
+/** channels 数组校验：枚举外抛错、去重、canonical 序、空数组抛错、expo 互斥（提案 §6）。 */
+function normalizeReminderChannels(raw: ReminderChannel[]): ReminderChannel[] {
+  if (!Array.isArray(raw)) {
+    throw new Error(`reminder channels must be an array, got: ${typeof raw}`);
+  }
+  for (const channel of raw) {
+    if (!isReminderChannel(channel)) {
+      throw new Error(
+        `reminder channel must be one of ${REMINDER_CHANNELS.join(', ')}, got: ${String(channel)}`,
+      );
+    }
+  }
+  const deduped = [...new Set(raw)];
+  const ordered = REMINDER_CHANNELS.filter((channel) => deduped.includes(channel));
+  if (ordered.length === 0) {
+    throw new Error('reminder requires at least one channel (channels must not be empty)');
+  }
+  if (ordered.filter(isExpoReminderChannel).length > 1) {
     throw new Error(
-      `reminder channel must be one of ${REMINDER_CHANNELS.join(', ')}, got: ${String(channel)}`,
+      'reminder supports at most one expo channel (system-notification / alarm are mutually exclusive)',
     );
   }
+  return ordered;
+}
 
-  const configFree = channel === 'system-notification' || channel === 'alarm';
-  if (configFree) {
-    return { channel, channelConfig: null };
+/**
+ * 多渠道字段归一化（切片 18，提案 §5/§6，供 createReminder / updateReminder 写路径共用）：
+ * - channels：缺省取 current（update patch 保留语义）→ DEFAULT_REMINDER_CHANNELS；
+ * - channelConfigs per-key merge（已确认决策点 ④）：基于 current 逐键合并，
+ *   value===null → 清除该键；expo 渠道条目静默丢弃（expo 无配置，对齐 v9 对 expo
+ *   传 config 强制 null 的先例）；网络渠道空白串抛错（v9 同文案，键名替换）。
+ * - 返回值已按生效 channels prune：非网络渠道或未启用渠道的配置一律不落库。
+ */
+export function normalizeReminderChannelFields(
+  input: {
+    channels?: ReminderChannel[];
+    channelConfigs?: Partial<Record<ReminderChannel, string | null>>;
+  },
+  current?: ReminderChannelFields,
+): ReminderChannelFields {
+  const channels = normalizeReminderChannels(
+    input.channels ?? current?.channels ?? [...DEFAULT_REMINDER_CHANNELS],
+  );
+
+  const merged: Partial<Record<ReminderChannel, string>> = { ...(current?.channelConfigs ?? {}) };
+  if (input.channelConfigs !== undefined) {
+    for (const [key, value] of Object.entries(input.channelConfigs)) {
+      if (!isReminderChannel(key)) {
+        throw new Error(
+          `reminder channelConfigs key must be one of ${REMINDER_CHANNELS.join(', ')}, got: ${String(key)}`,
+        );
+      }
+      if (value === null) {
+        delete merged[key];
+        continue;
+      }
+      if (isExpoReminderChannel(key)) {
+        continue;
+      }
+      const trimmed = value.trim();
+      if (trimmed === '') {
+        throw new Error(
+          `reminder channelConfig for "${key}" must be a non-empty string, got whitespace-only`,
+        );
+      }
+      merged[key] = trimmed;
+    }
   }
 
-  const raw = input.channelConfig;
-  if (raw === undefined || raw === null) {
-    return { channel, channelConfig: null };
+  const channelConfigs: Partial<Record<ReminderChannel, string>> = {};
+  for (const channel of channels) {
+    const config = merged[channel];
+    if (isNetworkReminderChannel(channel) && config !== undefined) {
+      channelConfigs[channel] = config;
+    }
   }
-  const trimmed = raw.trim();
-  if (trimmed === '') {
-    throw new Error(
-      `reminder channelConfig for "${channel}" must be a non-empty string, got whitespace-only`,
-    );
+  return { channels, channelConfigs };
+}
+
+/**
+ * channels → 存储字符串（切片 18）：恒写非 null JSON 数组（归一保证 ≥1 项；
+ * 「全部渠道」与「未迁移行」的区分由 channels_json 是否非 null 承担，提案 §4）。
+ */
+export function serializeReminderChannels(channels: ReminderChannel[]): string {
+  return JSON.stringify(channels);
+}
+
+/**
+ * channelConfigs → 存储字符串（切片 18）：空字典存 null 而非 '{}'，
+ * 读层 parse 侧对 null 直接返回 {}，避免空对象JSON 与「无配置」两种表示。
+ */
+export function serializeReminderChannelConfigs(
+  channelConfigs: Partial<Record<ReminderChannel, string>>,
+): string | null {
+  const keys = Object.keys(channelConfigs);
+  return keys.length === 0 ? null : JSON.stringify(channelConfigs);
+}
+
+/** reminders 行的渠道列读取输入（切片 18）：新列两列 + legacy 两列。 */
+export interface ReminderChannelRowInput {
+  channelsJson: string | null;
+  channelConfigsJson: string | null;
+  legacyChannel: string | null;
+  legacyChannelConfig: string | null;
+}
+
+/**
+ * reminders 行 → 多渠道领域字段（切片 18 读层 legacy bridge，提案 §4，all-or-nothing）：
+ * - channels_json 为 null/'' → 「未迁移旧行」：由旧 channel/channel_config 推导单元素
+ *   数组与配置字典（channel 非法 → 默认渠道；网络渠道且 config 非空白才带配置）；
+ * - channels_json 非空 → 「已迁移行」：只认新列（channel_configs_json 坏值 → {}，
+ *   绝不回头读旧列，防止编辑清空配置后被 bridge 回魂）；
+ * - 防御纪律（v8 channel 先例）：channels_json 坏 JSON/非数组 → 回退 legacy bridge；
+ *   数组元素非法丢弃；有效结果为空 → 默认渠道；configs 键非法/不在生效渠道内/
+ *   expo 键/值非字符串一律丢弃。读层不抛错。
+ */
+export function resolveReminderChannelRow(
+  row: ReminderChannelRowInput,
+): ReminderChannelFields {
+  const parsed = parseReminderChannelsJson(row.channelsJson);
+  if (parsed === null) {
+    const channel =
+      row.legacyChannel !== null && isReminderChannel(row.legacyChannel)
+        ? row.legacyChannel
+        : DEFAULT_REMINDER_CHANNEL;
+    const channelConfigs: Partial<Record<ReminderChannel, string>> = {};
+    if (
+      isNetworkReminderChannel(channel) &&
+      row.legacyChannelConfig !== null &&
+      row.legacyChannelConfig.trim() !== ''
+    ) {
+      channelConfigs[channel] = row.legacyChannelConfig;
+    }
+    return { channels: [channel], channelConfigs };
   }
-  return { channel, channelConfig: trimmed };
+
+  const channels = parsed.length > 0 ? parsed : [...DEFAULT_REMINDER_CHANNELS];
+  const channelConfigs = parseReminderChannelConfigsJson(row.channelConfigsJson, channels);
+  return { channels, channelConfigs };
+}
+
+/**
+ * channels_json 存储字符串 → 合法渠道数组（canonical 序，去重）；返回 null 表示
+ * 未迁移行（raw 为 null/''）或坏值（坏 JSON/非数组），由调用方走 legacy bridge。
+ */
+export function parseReminderChannelsJson(
+  raw: string | null | undefined,
+): ReminderChannel[] | null {
+  if (raw === null || raw === undefined || raw === '') {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) {
+    return null;
+  }
+  const valid: ReminderChannel[] = [];
+  for (const item of parsed) {
+    if (isReminderChannel(item) && !valid.includes(item)) {
+      valid.push(item);
+    }
+  }
+  return REMINDER_CHANNELS.filter((channel) => valid.includes(channel));
+}
+
+/**
+ * channel_configs_json 存储字符串 → 配置字典（切片 18 读层）：null/''/坏 JSON/
+ * 非普通对象 → {}；键非法、不在生效 channels 内、expo 渠道、值非字符串 → 丢弃该键。
+ */
+function parseReminderChannelConfigsJson(
+  raw: string | null | undefined,
+  channels: ReminderChannel[],
+): Partial<Record<ReminderChannel, string>> {
+  if (raw === null || raw === undefined || raw === '') {
+    return {};
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return {};
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return {};
+  }
+  const channelConfigs: Partial<Record<ReminderChannel, string>> = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (!isReminderChannel(key) || !channels.includes(key)) {
+      continue;
+    }
+    if (isExpoReminderChannel(key) || typeof value !== 'string') {
+      continue;
+    }
+    channelConfigs[key] = value;
+  }
+  return channelConfigs;
 }
 
 /**

@@ -6,8 +6,11 @@ import { appSchema, tableSchema } from '@nozbe/watermelondb';
  * v8（切片 16 阶段 1）：reminders 新增 once_civil_json / channel / channel_config 列
  * （AGENTS.md §7.26，docs/proposals/slice-16-reminder-channels.md）。
  * v9（切片 17 阶段 1）：新增 channel_presets 表（AGENTS.md §7.27 渠道配置中心）。
+ * v10（切片 18 阶段 1）：reminders 新增 channels_json / channel_configs_json（多渠道），
+ * app_settings 新增 chips_increments，channel_presets 新增 is_default
+ * （AGENTS.md §7.29，docs/proposals/slice-18-multi-channel.md）。
  */
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 export const schema = appSchema({
   version: SCHEMA_VERSION,
@@ -92,6 +95,18 @@ export const schema = appSchema({
         { name: 'once_civil_json', type: 'string', isOptional: true },
         { name: 'channel', type: 'string' },
         { name: 'channel_config', type: 'string', isOptional: true },
+        // v10（切片 18 阶段 1，AGENTS.md §7.29 / docs/proposals/slice-18-multi-channel.md）：
+        // 多渠道列。均 isOptional：既有行回填 null，读取层经 legacy bridge 归一
+        // （resolveReminderChannelRow：channels_json 为空 → 由旧 channel/channel_config
+        // 推导单元素数组/字典；channels_json 非空 → 只认新列，绝不回头读旧列）。
+        // 旧 channel / channel_config 两列保留但 deprecated：v10 写路径不再更新它们，
+        // 仅作为 legacy bridge 数据源（WatermelonDB 无 dropColumn，见提案 §3.1）。
+        // - channels_json：JSON 字符串数组，如 ["system-notification","webhook"]；
+        //   ≥1 个渠道、至多一个 expo 渠道、去重 + REMINDER_CHANNELS canonical 序（写路径保证）。
+        // - channel_configs_json：JSON 对象，键为网络渠道 id，值为渠道配置原文
+        //   （如 {"webhook":"{\"url\":...}"}，双编码属正常）；expo 渠道不得有条目。
+        { name: 'channels_json', type: 'string', isOptional: true },
+        { name: 'channel_configs_json', type: 'string', isOptional: true },
         { name: 'last_fired_occurrence_key', type: 'string', isOptional: true },
         { name: 'last_reconciled_at', type: 'number', isOptional: true },
         { name: 'created_at', type: 'number' },
@@ -114,6 +129,9 @@ export const schema = appSchema({
     // 切片 14（AGENTS.md §7.22，schema v6）：全局设置单行表（id 固定 'global'）。
     // getSettings 无记录时兜底返回默认值（repository.md v0.14），seed/migration 均会插入默认行。
     // v7（阶段 7a）：小组件显示开关 4 列（非可选 boolean，列名 widget_show_*）。
+    // v10（切片 18 阶段 1，AGENTS.md §7.29）：chips_increments——once 快捷 Chips 增量
+    // （分钟）的 JSON 数字数组，默认 [10,60]；isOptional 回填 null，读取层防御归一
+    // （坏 JSON/空/越界 → 默认值），写路径校验 1–4 项、每项 1–10080 整数。
     tableSchema({
       name: 'app_settings',
       columns: [
@@ -122,6 +140,7 @@ export const schema = appSchema({
         { name: 'widget_show_todos', type: 'boolean' },
         { name: 'widget_show_category_emoji', type: 'boolean' },
         { name: 'widget_show_tags', type: 'boolean' },
+        { name: 'chips_increments', type: 'string', isOptional: true },
       ],
     }),
     // 切片 17 阶段 1（AGENTS.md §7.27 渠道配置中心，schema v9）：渠道预设表。
@@ -136,12 +155,16 @@ export const schema = appSchema({
     // - created_at 供预设列表稳定排序（created_at 降序），对齐 tags 表先例；
     //   预设支持编辑（阶段 2）但 MVP 不需要 updated_at（同 categories 无时间戳先例）。
     // - 无预置数据、无 seed：预设全部由用户在设置页创建（阶段 2）。
+    // v10（切片 18 阶段 1，AGENTS.md §7.29）：is_default——详情页表单默认选中的预设；
+    // 非可选 boolean，addColumns 对既有行自动回填 false（v7 widget 开关先例，无需 UPDATE）；
+    // 「同 type 至多一个 true」由 Repository 写路径在同事务内保证（提案 §3.3）。
     tableSchema({
       name: 'channel_presets',
       columns: [
         { name: 'name', type: 'string' },
         { name: 'type', type: 'string', isIndexed: true },
         { name: 'config_json', type: 'string' },
+        { name: 'is_default', type: 'boolean' },
         { name: 'created_at', type: 'number' },
       ],
     }),
