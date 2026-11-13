@@ -256,6 +256,93 @@ describe('LocalFallbackProvider：提醒偏移', () => {
   });
 });
 
+describe('LocalFallbackProvider：延迟提醒（切片 19 §7.30）', () => {
+  it('10分钟后提醒我吃药 → reminderDelayMinutes=10、task、title 吃药', async () => {
+    const d = await parse('10分钟后提醒我吃药');
+    expect(d.reminderDelayMinutes).toBe(10);
+    expect(d.type).toBe('task');
+    expect(d.title).toBe('吃药');
+    expect(d.startAt).toBeNull(); // delay 不换算进 start
+  });
+
+  it('半小时后叫我起床 → 30、task', async () => {
+    const d = await parse('半小时后叫我起床');
+    expect(d.reminderDelayMinutes).toBe(30);
+    expect(d.title).toBe('起床');
+  });
+
+  it('1小时后提醒我出门 → 60', async () => {
+    const d = await parse('1小时后提醒我出门');
+    expect(d.reminderDelayMinutes).toBe(60);
+  });
+
+  it('一个半小时后提醒我拿外卖 → 90（n=1 + 半=30）', async () => {
+    const d = await parse('一个半小时后提醒我拿外卖');
+    expect(d.reminderDelayMinutes).toBe(90);
+    expect(d.title).toBe('拿外卖');
+  });
+
+  it('两小时后提醒我拿快递 → 120（“两”按 2）', async () => {
+    const d = await parse('两小时后提醒我拿快递');
+    expect(d.reminderDelayMinutes).toBe(120);
+  });
+
+  it('100分钟后提醒我收衣服 → 100（\d{1,4} 数字不被 \d{1,2} 截断）', async () => {
+    const d = await parse('100分钟后提醒我收衣服');
+    expect(d.reminderDelayMinutes).toBe(100);
+    expect(d.title).toBe('收衣服');
+  });
+
+  it('“以后/之后/再”变体：30分钟以后再提醒我浇花 → 30', async () => {
+    const d = await parse('30分钟以后再提醒我浇花');
+    expect(d.reminderDelayMinutes).toBe(30);
+    expect(d.title).toBe('浇花');
+  });
+
+  it('同句既有 offset 又有 delay：各归各槽（提前5分钟、30分钟后再提醒）', async () => {
+    const d = await parse('提前5分钟提醒我出门，30分钟后再提醒我一次');
+    expect(d.reminderOffsetMinutes).toBe(5);
+    expect(d.reminderDelayMinutes).toBe(30);
+    expect(d.type).toBe('task');
+  });
+
+  it('负例：提前30分钟提醒我吃药 → 只有 offset，delay=null', async () => {
+    const d = await parse('提前30分钟提醒我吃药');
+    expect(d.reminderOffsetMinutes).toBe(30);
+    expect(d.reminderDelayMinutes).toBeNull();
+  });
+
+  it('负例：明天提醒我吃药 → start 语义，delay=null', async () => {
+    const d = await parse('明天提醒我吃药');
+    expect(d.reminderDelayMinutes).toBeNull();
+    expect(d.startAt).toBe(at(2026, 11, 11, 0, 0));
+    expect(d.allDay).toBe(true);
+  });
+
+  it('负例：下午3点提醒我开会 → start 语义，delay=null', async () => {
+    const d = await parse('下午3点提醒我开会');
+    expect(d.reminderDelayMinutes).toBeNull();
+    expect(d.startAt).toBe(at(2026, 11, 10, 15, 0));
+  });
+
+  it('负例：3天后提醒我复诊 → 天单位不支持，被日期槽认领为 start，不产 delay', async () => {
+    const d = await parse('3天后提醒我复诊');
+    expect(d.reminderDelayMinutes).toBeNull();
+    expect(d.startAt).toBe(at(2026, 11, 13, 0, 0));
+    expect(d.title).toBe('提醒我复诊');
+  });
+
+  it('负例：等10分钟提醒我（无“后”）不产 delay', async () => {
+    const d = await parse('等10分钟提醒我吃药');
+    expect(d.reminderDelayMinutes).toBeNull();
+  });
+
+  it('负例：半分钟后提醒我 → “半”只修饰小时，不产 delay', async () => {
+    const d = await parse('半分钟后提醒我');
+    expect(d.reminderDelayMinutes).toBeNull();
+  });
+});
+
 describe('LocalFallbackProvider：标签', () => {
   it('明天买牛奶 #购物 → tags=[购物]、全天、task', async () => {
     const d = await parse('明天买牛奶 #购物');

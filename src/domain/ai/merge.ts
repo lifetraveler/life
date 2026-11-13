@@ -25,7 +25,8 @@ export type DraftField =
   | 'tags'
   | 'priority'
   | 'recurrence'
-  | 'reminderOffsetMinutes';
+  | 'reminderOffsetMinutes'
+  | 'reminderDelayMinutes';
 
 export function mergeDraftCorrection(
   previous: ParsedItemDraft,
@@ -46,5 +47,8 @@ export function mergeDraftCorrection(
     reminderOffsetMinutes: expressed.has('reminderOffsetMinutes')
       ? next.reminderOffsetMinutes
       : previous.reminderOffsetMinutes,
+    reminderDelayMinutes: expressed.has('reminderDelayMinutes')
+      ? next.reminderDelayMinutes
+      : previous.reminderDelayMinutes,
   };
 }

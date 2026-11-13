@@ -9,8 +9,10 @@ import { appSchema, tableSchema } from '@nozbe/watermelondb';
  * v10（切片 18 阶段 1）：reminders 新增 channels_json / channel_configs_json（多渠道），
  * app_settings 新增 chips_increments，channel_presets 新增 is_default
  * （AGENTS.md §7.29，docs/proposals/slice-18-multi-channel.md）。
+ * v11（切片 19 阶段 1）：app_settings 新增 default_channels_json
+ * （AGENTS.md §7.30 延迟提醒意图与默认渠道）。
  */
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 
 export const schema = appSchema({
   version: SCHEMA_VERSION,
@@ -132,6 +134,10 @@ export const schema = appSchema({
     // v10（切片 18 阶段 1，AGENTS.md §7.29）：chips_increments——once 快捷 Chips 增量
     // （分钟）的 JSON 数字数组，默认 [10,60]；isOptional 回填 null，读取层防御归一
     // （坏 JSON/空/越界 → 默认值），写路径校验 1–4 项、每项 1–10080 整数。
+    // v11（切片 19 阶段 1，AGENTS.md §7.30）：default_channels_json——新建提醒表单的
+    // 默认渠道集合，JSON 字符串数组，默认 ["system-notification"]；isOptional 回填 null，
+    // 读取层防御归一（parseDefaultChannels：坏值/空/expo 双开 → 回退或丢弃），写路径
+    // 校验（validateDefaultChannels：非法渠道/空/expo 双开抛错）。
     tableSchema({
       name: 'app_settings',
       columns: [
@@ -141,6 +147,7 @@ export const schema = appSchema({
         { name: 'widget_show_category_emoji', type: 'boolean' },
         { name: 'widget_show_tags', type: 'boolean' },
         { name: 'chips_increments', type: 'string', isOptional: true },
+        { name: 'default_channels_json', type: 'string', isOptional: true },
       ],
     }),
     // 切片 17 阶段 1（AGENTS.md §7.27 渠道配置中心，schema v9）：渠道预设表。

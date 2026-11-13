@@ -1,4 +1,4 @@
-# AI 解析层契约（v0.16）
+# AI 解析层契约（v0.17）
 
 ## 接口定义
 ```typescript
@@ -20,6 +20,7 @@ export interface ParsedItemDraft {
   priority: number | null; // 0=无 1=低 2=中 3=高；null=用户未表达
   recurrence: RecurrenceRule | null; // 严格遵循 src/domain/recurrence/types.ts
   reminderOffsetMinutes: number | null; 
+  reminderDelayMinutes: number | null; // v0.17（切片 19）：相对当前时刻“X分钟后提醒”
 }
 
 export interface AiParser {
@@ -51,6 +52,7 @@ interface RemoteDraftWire {
   priority: 0 | 1 | 2 | 3 | null;
   recurrence: RecurrenceRule | null; // 形状同 src/domain/recurrence/types.ts
   reminderOffsetMinutes: number | null;
+  reminderDelayMinutes: number | null; // v0.17（切片 19）
 }
 ```
 
@@ -78,6 +80,22 @@ Reminder 模型中没有落库位置：data-model.md §4.1 冻结
   （Reminder 模型加一次性频率或偏移字段 + schema migration + 调度器支持），
   属后续切片，未经确认不得实现。
 
+## reminderDelayMinutes 语义（v0.17 新增，切片 19 阶段 1，任务卡三阶段划分已确认）
+`ParsedItemDraft.reminderDelayMinutes`（延迟提醒，“10分钟后提醒我吃药”）表示
+**相对当前时刻**延迟多少分钟再提醒，与 `reminderOffsetMinutes`（提前提醒，
+“提前10分钟”）语义独立、可在同一句分别出现、分别填写，互不覆盖/换算：
+
+- 取值：≥1 的整数分钟或 null（与 offset 同纪律：缺键整体拒绝，0/负数/小数拒绝）。
+- 换算边界（prompt.ts“延迟提醒判定规则”一节与 localFallback 延迟槽均已固化，
+  测试断言关键句存在）：
+  - 只支持“分钟/小时”两种单位；X小时=X*60、半小时=30、一个半小时=90；
+  - 不支持的单位一律 null，禁止自行换算（“X天后提醒”→null、“X秒后”→null）；
+  - “明天提醒我”“下午3点提醒我”是 start 时间语义，填 start、delay 为 null；
+  - delay 禁止换算成 start/end；同句另有具体时间时 start 照常按字面填写。
+- 落库（阶段 2 实现）：`recurrence` 为空且 `reminderDelayMinutes` 非空时，
+  以 `now + delay*60000` 为触发时刻创建 once 提醒（无需 startAt）；本阶段（阶段 1）
+  只落数据契约，落库映射未实现，draft 字段随卡片流转。
+
 ## 变更记录（v0.15.1，切片 15 阶段 1，变更提案已经用户当场确认）
 - ParsedItemDraft 新增 `tags: string[]` 与 `priority: number | null` 两个字段。
 - 原因：tasks/slice-15.md 阶段 4 验收 6 要求预览卡片包含“标签”；priority 是 §7.22 的卡片可编辑字段，
@@ -100,3 +118,15 @@ Reminder 模型中没有落库位置：data-model.md §4.1 冻结
   不涉及 schema、migration、Repository 签名；LocalFallbackProvider 不受影响。
 - 迁移方案：无库迁移。旧 wire（含 startAt/endAt 数字）会被新守卫整体拒绝
   （schema-mismatch），不存在兼容路径需要——模型响应即弃即换。
+
+## 变更记录（v0.17，切片 19 阶段 1，任务卡三阶段划分经用户确认）
+- ParsedItemDraft 与 RemoteDraftWire 新增 `reminderDelayMinutes: number | null`
+  （延迟提醒：相对当前时刻 X 分钟/小时后提醒，AGENTS.md §7.30 第一条）。
+- 原因：切片 19 任务卡要求 AI 域与本地降级层支持延迟提醒意图；prompt 必须明确
+  写清边界与示例，不得依赖模型自行推断（防静默丢失）。
+- 影响范围：types.ts / guard.ts（缺键与非法值整体拒绝，同 offset 纪律）/
+  merge.ts（DraftField 加行）/ openAiCompatible.ts（wire 守卫 + 透传）/
+  prompt.ts（字段行 + “延迟提醒判定规则”一节）/ localFallback.ts（延迟提醒槽，
+  先于提前槽扫描、命中整段认领）；不涉及 schema、migration、Repository 签名。
+- 迁移方案：无库迁移。旧 wire 缺 reminderDelayMinutes 键会被守卫整体拒绝
+  （schema-mismatch → 降级本地解析），模型响应即弃即换（v0.16 先例）。

@@ -22,6 +22,7 @@ function validDraft(overrides: Record<string, unknown> = {}): object {
     priority: 2,
     recurrence: null,
     reminderOffsetMinutes: null,
+    reminderDelayMinutes: null,
     ...overrides,
   };
 }
@@ -106,6 +107,18 @@ describe('isParsedItemDraft', () => {
     expect(isParsedItemDraft(validDraft({ reminderOffsetMinutes: 0 }))).toBeNull();
     expect(isParsedItemDraft(validDraft({ reminderOffsetMinutes: -5 }))).toBeNull();
     expect(isParsedItemDraft(validDraft({ reminderOffsetMinutes: 1.5 }))).toBeNull();
+    expect(isParsedItemDraft(validDraft({ reminderOffsetMinutes: '30' }))).toBeNull();
+  });
+
+  it('reminderDelayMinutes 必须是 ≥1 整数或 null（切片 19 §7.30）', () => {
+    expect(isParsedItemDraft(validDraft({ reminderDelayMinutes: 10 }))).not.toBeNull();
+    expect(isParsedItemDraft(validDraft({ reminderDelayMinutes: 0 }))).toBeNull();
+    expect(isParsedItemDraft(validDraft({ reminderDelayMinutes: -10 }))).toBeNull();
+    expect(isParsedItemDraft(validDraft({ reminderDelayMinutes: 2.5 }))).toBeNull();
+    expect(isParsedItemDraft(validDraft({ reminderDelayMinutes: '10' }))).toBeNull();
+    // 键缺失属于形状不完整：整体拒绝（与 reminderOffsetMinutes 同纪律）。
+    const { reminderDelayMinutes: _d, ...noDelay } = validDraft() as Record<string, unknown>;
+    expect(isParsedItemDraft(noDelay)).toBeNull();
   });
 
   it('recurrence 残缺时整体拒绝（不静默降级为单次）', () => {

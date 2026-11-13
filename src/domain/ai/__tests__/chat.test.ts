@@ -37,6 +37,7 @@ describe('runFlashTurn（阶段 3 编排）', () => {
     priority: 2,
     recurrence: null,
     reminderOffsetMinutes: null,
+    reminderDelayMinutes: null,
   };
 
   const config = {
@@ -86,6 +87,7 @@ describe('runFlashTurn（阶段 3 编排）', () => {
       priority: 2,
       recurrence: null,
       reminderOffsetMinutes: null,
+      reminderDelayMinutes: null,
     };
     const result = await runFlashTurn('改成后天下午3点', {
       config,
@@ -119,6 +121,7 @@ describe('runFlashTurn（阶段 3 编排）', () => {
       priority: null,
       recurrence: null,
       reminderOffsetMinutes: null,
+      reminderDelayMinutes: null,
     };
     const result = await runFlashTurn('改成后天', {
       config,

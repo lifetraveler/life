@@ -22,6 +22,7 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
       priority: 2,
       recurrence: null,
       reminderOffsetMinutes: null,
+      reminderDelayMinutes: null,
       ...overrides,
     };
   }

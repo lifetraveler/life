@@ -5,7 +5,8 @@ import type { TagDisplayMode } from '../../domain/settings';
 
 /**
  * app_settings 表的 WatermelonDB model（切片 14，AGENTS.md §7.22，schema v6；
- * v7 阶段 7a 扩展小组件显示开关 4 列，docs/proposals/slice-14-widget-phase7.md）。
+ * v7 阶段 7a 扩展小组件显示开关 4 列，docs/proposals/slice-14-widget-phase7.md；
+ * v10/v11 扩展（chips_increments / default_channels_json）见各字段注释）。
  * 单行表：主键固定 'global'（domain/settings.ts APP_SETTINGS_ROW_ID）；
  * 无记录时 Repository 的 getSettings 兜底返回默认值（repository.md v0.14）。
  */
@@ -26,4 +27,12 @@ export default class AppSettingsModel extends Model {
    * 写路径校验 1–4 项、每项 1–10080 整数。
    */
   @text('chips_increments') chipsIncrementsJson!: string | null;
+
+  /**
+   * 切片 19（schema v11，AGENTS.md §7.30）：新建提醒表单的默认渠道集合，
+   * JSON 字符串数组，默认 ["system-notification"]；null/坏值由读取层防御归一
+   * （domain/settings.ts parseDefaultChannels），写路径校验（validateDefaultChannels：
+   * 非法渠道/空/expo 家族双开抛错）。
+   */
+  @text('default_channels_json') defaultChannelsJson!: string | null;
 }
