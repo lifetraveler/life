@@ -5,7 +5,12 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { itemRepository } from '../../data';
 import { itemPriorityLabel } from '../../domain/category';
 import type { ItemWithRelations } from '../../domain/relations/itemWithRelations';
-import type { Reminder, ReconcileResult, UpdateReminderInput } from '../../domain/reminder';
+import type {
+  Reminder,
+  ReminderChannel,
+  ReconcileResult,
+  UpdateReminderInput,
+} from '../../domain/reminder';
 import {
   getLastAutoReconcileResult,
   reminderScheduler,
@@ -61,6 +66,10 @@ export default function ItemDetailPage() {
   const [reminders, setReminders] = useState<Reminder[]>([]);
   // 切片 18 阶段 3：once 快捷 Chips 增量（app_settings.chipsIncrements，§7.29）
   const [chipsIncrements, setChipsIncrements] = useState<number[]>([10, 60]);
+  // 切片 19 阶段 3：新建提醒初始勾选渠道（app_settings.defaultChannels，§7.30）
+  const [defaultChannels, setDefaultChannels] = useState<ReminderChannel[]>([
+    'system-notification',
+  ]);
   const [formMode, setFormMode] = useState<FormMode>(null);
   const [saveReconcile, setSaveReconcile] = useState<ReconcileResult | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -90,11 +99,16 @@ export default function ItemDetailPage() {
   useFocusEffect(
     useCallback(() => {
       void load();
-      // Chips 增量读取失败不阻断页面（保持默认 [10, 60]）。
+      // Chips 增量 / 默认渠道读取失败不阻断页面（保持默认值）。
       itemRepository
         .getSettings()
-        .then((settings) => setChipsIncrements(settings.chipsIncrements))
-        .catch((error) => console.warn('[slice-18] Chips 增量读取失败', error));
+        .then((settings) => {
+          setChipsIncrements(settings.chipsIncrements);
+          setDefaultChannels(settings.defaultChannels);
+        })
+        .catch((error) =>
+          console.warn('[slice-18/19] 设置读取失败（Chips 增量/默认渠道）', error),
+        );
     }, [load]),
   );
 
@@ -359,6 +373,7 @@ export default function ItemDetailPage() {
           <ReminderFormEditor
             submitLabel="创建"
             chipsIncrements={chipsIncrements}
+            defaultChannels={defaultChannels}
             onSubmit={handleCreateReminder}
             onCancel={() => setFormMode(null)}
           />
