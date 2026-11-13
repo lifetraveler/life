@@ -255,7 +255,7 @@ schema 版本 5→6，新增/修改如下：
 
 
 ## 8. 当前切片
-tasks/slice-19.md（已完成阶段 1–3 与真机验收：延迟提醒意图补全 + 默认渠道偏好 + Chip 临时编辑——schema v11（app_settings.default_channels_json）、AI 契约 reminderDelayMinutes（ai.md v0.17，prompt 判定规则节防静默丢失）、localFallback 延迟槽、savePlan 落库（now+delay*60000 生成 once + 渠道跟随默认 + 网络渠道自动取默认/第一条预设）、默认提醒方式设置页 + 表单接入 + 长按 Chip 临时改增量；真机验收 4 轮反馈全过（验收修正 5ef51d0/210c5b3）；closeout 见 tasks/slice-19-closeout.md。下一候选：网络渠道后台送达可靠性提案 docs/proposals/slice-20-network-channel-reliability.md（电池优化白名单 + 前台服务），待用户确认后按 §7.17 惯例开工）
+tasks/slice-20.md（已完成阶段 1–3 与 MuMu 联调：网络渠道后台可靠性变更 A——电池优化白名单。manifest REQUEST_IGNORE_BATTERY_OPTIMIZATIONS + 本地模块 modules/battery-optimization（检测/官方弹窗/降级设置页）+ src/system/batteryOptimization.ts 三分支降级编排 + 设置页「后台运行保障」（状态卡 + 弹窗申请 + 1s 轮询刷新）+ 我的 Tab 入口；MuMu 实测确认白名单价值边界 = 进程存活 + 回前台秒级补发，「后台即时送达」受缓存冻结器与 RN host-pause 定时器停摆双重平台限制（验收 4 按 A 口径修订，用户确认）；🐛 回前台迟到补发 × reconcile 并发重复投递缺陷已披露（src/notifications/ 冻结区，留切片 11/21）；release APK 已交付并烟测（用户要求，commit 外产物）；closeout 见 tasks/slice-20-closeout.md。下一候选：变更 B 提案重估——前台服务救不了 RN JS 定时器，需评估原生 AlarmManager 驱动投递或 Headless 唤醒，提案须携带 closeout 遗留披露 1/2，确认前不修改 src/notifications/ 实现文件）
 
 
 

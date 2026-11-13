@@ -33,6 +33,24 @@
 4. 核心业务验证：App 切后台/锁屏 5 分钟后，Webhook 正常发送（证明进程存活且定时器未被冻结）。
 5. 代码检查：无 `as any`，未引入 WorkManager 等重型后台任务依赖。
 
+## 验收记录（v0.20 实测修订，用户确认按 A 口径）
+
+实测平台：MuMu 模拟器（Android 15，127.0.0.1:16384），用户改用模拟器联调（真机未插）。
+
+| 验收项 | 结果 |
+| --- | --- |
+| 1 tsc/jest | ✅ tsc 通过；jest 71 套件 / 918 用例全过（1782e04） |
+| 2 授权弹窗 | ✅（MuMu 档）设置页「去开启」唤起系统弹窗，允许后 `dumpsys deviceidle whitelist` 含本应用 |
+| 3 状态显示 | ✅（MuMu 档）「未开启/已开启」为原生 `isIgnoringBatteryOptimizations` 真实返回；授权后 1s 轮询自动刷新；摘除指引展示 |
+| 4 后台 5 分钟送达 | ⚠️ **口径修订（见下）**：进程存活保障 ✅、回前台秒级补发 ✅；后台即时送达 ❌（平台机制，非本切片可修） |
+| 5 代码检查 | ✅ 无 `as any`；未引入 WorkManager/前台服务 |
+
+**验收 4 实测与修订**（两轮对照，详见 closeout）：
+- 第 1 轮（白名单✓，冻结器默认开）：后台 75 秒后进程被 Android 缓存应用冻结器（cgroup freezer）冻结，早于触发时刻 → JS 定时器未执行；前台化解冻后 3 秒内补发到达。
+- 第 2 轮（白名单✓，`cached_apps_freezer=disabled`）：进程未冻结，RN JS 定时器仍不开火（RN Android 退后台无 Choreographer 帧 → 定时器队列停摆）；同刻系统通知渠道经 OS 调度准时送达。
+- **修订后口径**：本切片交付的「白名单」价值 = 进程不被杀 + 内存挂起 Timer 完好 + 回前台立即补发（迟到 timer 立即开火 + reconcile 补发）。「后台即时送达」需要进程存活**且未冻结**且 **RN 处于前台**三条件同时成立，属于变更B（后续切片）须重新设计的命题——前台服务仅保进程，救不了 RN JS 定时器，后续提案需评估原生 AlarmManager 驱动投递或 Headless 唤醒。
+- **遗留缺陷披露（非本切片范围）**：回前台时「迟到 timer 补发」与「启动 reconcile」并发导致同 occurrenceKey 重复投递（两轮均复现，间隔 ~70ms）。根因：投递完成后才 `recordAttempt`（BaseNetworkChannel.ts:60-74），`ReminderScheduler.ts:591` 仅抑制 `'ok'`。修复方向 = 派发前记 in-flight 标记；`src/notifications/` 为冻结区，留切片 11/21。
+
 ## 分支与提交
 - 从最新 main 新建 `task/slice-20`。
 - 由于修改了 AndroidManifest 并可能需要引入原生 Intent 模块，必须重新构建 dev client。
