@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.19
+版本：v0.20
 
 ## 1. 项目概览
 
@@ -245,6 +245,14 @@ schema 版本 5→6，新增/修改如下：
 - **默认渠道偏好**：`app_settings` 新增 `default_channels_json`（JSON 数组，默认 `["system-notification"]`）。必须遵守 expo 家族互斥校验。
 - **Chip 临时编辑**：once 表单的长按快捷 Chip，允许临时修改增量值，仅本次生效，不持久化覆盖全局设置。
 - **Schema v11**：完成 `app_settings` 的 addColumns 迁移，旧数据默认回退。
+
+### 7.31 网络渠道后台可靠性（v0.20）
+- 遵循提案 `docs/proposals/slice-20-network-channel-reliability.md`。
+- **电池优化白名单**：在 Android 上，允许用户申请忽略电池优化，以保障网络渠道（Webhook/Apprise）的 `setTimeout` 定时器在后台存活。
+- **原生配置**：在 AndroidManifest 中声明 `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` 权限。
+- **UI 引导**：在“我的 -> 设置”页面增加“后台运行权限”入口，展示当前白名单状态，并提供一键跳转系统设置或直接唤起系统弹窗的能力。
+- **约束**：本切片仅解决“系统由于省电策略杀进程”的问题，不引入 WorkManager 或前台服务（Foreground Service），不改变“App 进程存活则保证送达”的核心边界。
+
 
 ## 8. 当前切片
 tasks/slice-19.md（已完成阶段 1–3 与真机验收：延迟提醒意图补全 + 默认渠道偏好 + Chip 临时编辑——schema v11（app_settings.default_channels_json）、AI 契约 reminderDelayMinutes（ai.md v0.17，prompt 判定规则节防静默丢失）、localFallback 延迟槽、savePlan 落库（now+delay*60000 生成 once + 渠道跟随默认 + 网络渠道自动取默认/第一条预设）、默认提醒方式设置页 + 表单接入 + 长按 Chip 临时改增量；真机验收 4 轮反馈全过（验收修正 5ef51d0/210c5b3）；closeout 见 tasks/slice-19-closeout.md。下一候选：网络渠道后台送达可靠性提案 docs/proposals/slice-20-network-channel-reliability.md（电池优化白名单 + 前台服务），待用户确认后按 §7.17 惯例开工）
