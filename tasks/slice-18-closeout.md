@@ -45,3 +45,22 @@
 3. **iOS 家族判定退化**：无 trigger.channelId 时一律视为 system 家族——iOS 通知通道未配置 reminder-alarm channel，alarm 渠道在 iOS 上与 system 同家族（互斥仍由写路径保证，不产生双 identifier 冲突）；Android 行为精确。
 4. **Chips 校验错误文案**为中文断言（「1–4 项」「1–10080」「整数分钟」），与 validateChipsIncrements 实现耦合；文案改动需同步测试。
 5. 后续切片候选（详见提案 §10）：频道级静音时段、网络渠道重试策略（当前 attemptStatus 仅 ok/failed 一次）、旧列清理。
+
+## 后续切片候选（真机验收反馈 2026-11-13，用户手动排任务）
+
+### 候选 A：延迟提醒——「X分钟后提醒我…」不生成提醒（缺陷修复，切片 15/16 能力缺口）
+- **真机复现**：闪电添加输入「10分钟后提醒我出门」→ 只建日程，无提醒、无任何提示（静默丢失）。
+- **根因**（已排查定位）：解析层只有「提前X分钟提醒」槽位（`reminderOffsetMinutes`，语义=事件 startAt 前的提前量），不存在「从现在起 X 分钟后」的延迟提醒槽位：
+  1. AI 路径：src/domain/ai/prompt.ts:39 只指令「提前X分钟提醒时填 reminderOffsetMinutes」；「10分钟后提醒我」不在指令内，模型不产出提醒字段。**用户要求：AI 需要输出新字段/新格式时，必须在提示词里明确告知标准格式（含示例与边界），不能依赖模型自行推断。**
+  2. 本地降级路径：src/domain/ai/localFallback.ts:467-472 正则只匹配 `提前N分钟…(提醒|叫我|闹钟|响铃)` 与 `N分钟…(之?前|以前)…(提醒|叫我)`——「10分钟**后**」两者均不命中。
+  3. 即便有提前量：src/domain/ai/savePlan.ts:49-51 `buildOnceReminderPlan` 必须锚定事件 `startAt`（触发时刻=startAt−offset），「出门」无绝对时间 → startAt null → notice「需设定时间才能提前提醒」不落库；且该输入下 `reminderOffsetMinutes` 未被解析出来，`reminderNotice` 也为 null，卡片静默。
+- **修复方案**：草稿（ParsedItemDraft，docs/contracts/ai.md）新增 `reminderDelayMinutes: number|null`（正整数分钟）；prompt.ts 增加字段说明与示例（用户明确要求提示词里写清标准格式）；guard.ts 校验、merge.ts 多轮纠正合并、openAiCompatible.ts 响应映射同步；LocalFallback 新增 `N(分钟|小时)…后…(提醒|叫我|闹钟|响铃)` 槽位（复用提醒句式裁剪）；savePlan 新分支：recurrence 与 offset 皆空且 delay 非空 → once 提醒触发时刻 = now + delay×60000（无需 startAt，tzid 白名单照旧）；预览卡显示意图（如「10分钟后提醒」），多轮「改成20分钟后提醒」可更新。
+
+### 候选 B：长按快捷 Chips 临时修改数字（功能）
+- once 表单（src/ui/OnceAtField.tsx）快捷 chip 长按 → 行内数字编辑框 → 点对号提交；提交后 chip 标签变为临时值，可再次长按修改。
+- **语义边界（用户确认）**：临时值仅本次编辑会话生效，**不写回** app_settings.chipsIncrements（设置页配置不受影响）；下次打开表单仍用全局配置渲染。
+
+### 候选 C：默认提醒方式（功能，需 schema v11）
+- 设置页新增「默认选中渠道」：4 种渠道（system-notification/alarm/webhook/apprise）多选，沿用 ≥1 项 + expo 家族互斥校验（复用 normalizeReminderChannelFields 的 expo 互斥语义）。
+- 存储：app_settings 新列 `default_channels_json`（schema v10→v11 addColumns 套路，isOptional TEXT，缺省回退 ['system-notification']；读层坏值防御参照 parseChipsIncrements）。
+- 生效点：新建/编辑提醒表单（ReminderFormEditor initial channels 取默认配置；编辑已有提醒仍以提醒自身 channels 为准）——**是否只在新建时生效待排任务时定**。
