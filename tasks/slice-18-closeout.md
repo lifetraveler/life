@@ -40,7 +40,7 @@
 - 单测覆盖：Schema v10 迁移（migrationsV8/V9 版本链更新 + is_default 过滤断言）、多渠道去重/互斥/merge/prune（reminderRuleMapping 13+3 describe）、legacy bridge 防御（reminderOnce 直置 channelsJson=null 模拟 v9 存量行）、家族感知 diff/双网络补发独立性（ReminderScheduler.test 6 新用例）、复合键定时器（networkTimers.test 全量重写）、表单多选（reminderForm.test 迁移+7 新用例）。
 
 ## 遗留披露
-1. **真机验收未执行**（需用户配合，任务卡阶段 4 + 验收标准 2–4）：①建提醒同时勾选「系统通知」+「Webhook（Zulip）」到点两者同时触发；②Chips 改 [15,120] 后表单显示「+15分钟/+2小时」；③预设设为默认后新建 Webhook 提醒自动选中。代码侧 tsc/jest 已全过，语义由单测覆盖，但通知到达/设备行为必须真机确认。
+1. **真机验收已执行（2026-11-13，用户反馈）**：①多渠道双触发「通过」；②Chips [15,120] 显示「+15分钟/+2小时」通过，另提出增强需求（长按 chip 临时改数字，见候选 B）；③默认预设自动选中「通过」。验收标准 2–4 全过，切片按 §7.9 收官合并（main 972b4a4）。
 2. **Scheduler 阶段 1 shim 已在阶段 2 移除**（shimScoped 删除，家族感知 diff 全量落地），无过渡代码残留；但 `Reminder.channel`/`channel_config` 旧列仍在 schema（只读不写，无 dropColumn 能力），待未来 schema 清理切片评估。
 3. **iOS 家族判定退化**：无 trigger.channelId 时一律视为 system 家族——iOS 通知通道未配置 reminder-alarm channel，alarm 渠道在 iOS 上与 system 同家族（互斥仍由写路径保证，不产生双 identifier 冲突）；Android 行为精确。
 4. **Chips 校验错误文案**为中文断言（「1–4 项」「1–10080」「整数分钟」），与 validateChipsIncrements 实现耦合；文案改动需同步测试。
