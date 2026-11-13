@@ -63,4 +63,11 @@
 
 ## 确认记录
 
-（待用户确认后填写。）
+（2026-11-13，阶段 1 复核会话确认；本文其余章节为提案原文，以下为确认结论。）
+
+- **决策点 1（白名单状态检测）**：自写轻量本地 Expo Module。理由：`Linking.sendIntent` 不支持设置 intent data URI（授权弹窗 intent 必须携带 `package:` 数据），`expo-intent-launcher` 能发弹窗但状态检测仍缺 API，均需自写检测；本地模块路径已有 `modules/widget-snapshot-store` 注册先例。落地：`modules/battery-optimization`（Kotlin：`PowerManager.isIgnoringBatteryOptimizations` + 官方 `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` data URI 弹窗 + `ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS` 降级页），JS 封装 `src/system/batteryOptimization.ts`。
+- **决策点 2 / 3（变更 B 依赖与应用层开关）**：变更 B（前台服务）整体移出本切片。依据 AGENTS §7.31 收口：「不引入 WorkManager 或前台服务（Foreground Service）」，本切片仅落地变更 A；变更 B 的依赖选型与开关决策随其延后到后续切片再议。本切片不触碰 src/notifications/ 实现文件。
+- **决策点 4（切片编号）**：定稿 slice-20。
+- **复核修正（权限声明位置）**：不采纳提案原文「app.json android.permissions 声明」——android/ 已 checked in（bare 工作流），android.permissions 是完整权限集声明，未来 prebuild 时会整体替换默认权限集（§5 风险）；改为仅在 AndroidManifest.xml 手工追加 `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` + 切片注释（沿用切片 9/10 manifest 手工同步惯例）。
+- **复核修正（封装落位）**：原生调用封装落 `src/system/`（不进 src/notifications/ 冻结区；冻结区解禁仅待后续变更 B 切片按 §7.17 流程另行提案）。
+- **变更 A 降级链定稿**：弹窗 intent 发出失败（ROM 剥离）→ 跳 `ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS` 系统设置页 → 仍失败返回 unavailable；helper 结果类型 `'dialog' | 'settings-fallback' | 'unavailable'`，UI 层（阶段 2）按结果区分文案。
