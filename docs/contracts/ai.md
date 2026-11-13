@@ -93,8 +93,17 @@ Reminder 模型中没有落库位置：data-model.md §4.1 冻结
   - “明天提醒我”“下午3点提醒我”是 start 时间语义，填 start、delay 为 null；
   - delay 禁止换算成 start/end；同句另有具体时间时 start 照常按字面填写。
 - 落库（阶段 2 实现）：`recurrence` 为空且 `reminderDelayMinutes` 非空时，
-  以 `now + delay*60000` 为触发时刻创建 once 提醒（无需 startAt）；本阶段（阶段 1）
-  只落数据契约，落库映射未实现，draft 字段随卡片流转。
+  以 `now + delay*60000` 为触发时刻创建 once 提醒（无需 startAt）。
+- 落库修订（切片 19 真机验收 3/4 反馈，用户提出）：
+  - 条目时间锚定：原 draft 无 startAt 时，条目 `startAt` 取触发时刻
+    （now + delay），条目落入日程时刻分组而非无时间「待办」组；draft 已有
+    startAt 时照常保留原值。提醒因时区白名单等原因未创建时锚定仍成立
+    （条目时间与提醒互相独立）。上句「delay 禁止换算成 start/end」仍指
+    AI/prompt 层纪律（模型不得自行换算），落库层的锚定是产品行为；
+  - 提醒渠道跟随全局默认渠道：AI 落库提醒的 `channels` 取
+    `app_settings.defaultChannels`（savePlan 第 4 入参，闪电添加链路传入），
+    不再恒为系统通知单渠道；channelConfigs 保持空，含网络渠道时 notice
+    诚实披露「闪电添加未配置其参数，到点投递会失败」。
 
 ## 变更记录（v0.15.1，切片 15 阶段 1，变更提案已经用户当场确认）
 - ParsedItemDraft 新增 `tags: string[]` 与 `priority: number | null` 两个字段。

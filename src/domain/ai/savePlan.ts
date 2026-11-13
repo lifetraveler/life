@@ -12,12 +12,18 @@
  * 无时间 / 白名单外 / 触发时刻已过去时不落库，保留卡片意图并以 reminderNotice 说明。
  * 切片 19 阶段 2（AGENTS.md §7.30）：reminderDelayMinutes 落库——无重复规则时
  * 以 now + delay*60000 创建 once 提醒（无需 startAt）；白名单外不落库并披露。
+ * 切片 19 真机验收修正：
+ * - 验收 3 反馈：延迟落库时条目 startAt 锚定触发时刻（now + delay），否则条目
+ *   没有任何时间、落入无时间「待办」组，用户预期是出现在日程/时刻上；
+ * - 验收 4 反馈：AI 落库提醒的渠道跟随全局默认渠道（defaultChannels 入参，
+ *   app_settings.defaultChannels），不再恒为系统通知单渠道。
  */
 
 import type { CreateItemInput } from '../item';
 import { isWhitelistedReminderTz } from '../../data/reminderTzWhitelist';
 import { resolveOnceAt } from '../../data/reminderRuleMapping';
 import { getZonedParts } from '../recurrence/civilTime';
+import { isNetworkReminderChannel, type ReminderChannel } from '../reminder';
 import { mapDraftToCreateInputs } from './mapper';
 import type { ReminderPlan } from './mapper';
 import type { ParsedItemDraft } from './types';
@@ -108,15 +114,16 @@ function buildDelayReminderPlan(
   delayMinutes: number,
   tzid: string,
   now: number,
-): { plan: ReminderPlan | null; notice: string | null } {
+): { plan: ReminderPlan | null; notice: string | null; fireInstant: number } {
   const fireInstant = now + delayMinutes * 60000;
-  return toOncePlan(fireInstant, tzid);
+  return { ...toOncePlan(fireInstant, tzid), fireInstant };
 }
 
 export function buildFlashSavePlan(
   draft: ParsedItemDraft,
   tzid: string,
   now: number,
+  defaultChannels?: ReminderChannel[],
 ): FlashSavePlan {
   const mapped = mapDraftToCreateInputs(draft, tzid, now);
   const { startAt, endAt, allDay, ...itemInput } = mapped.item;
@@ -127,6 +134,10 @@ export function buildFlashSavePlan(
     reminderPlan = null;
     reminderNotice = `重复提醒未创建：设备时区 ${tzid} 暂不支持（仅支持上海/纽约）`;
   }
+  // 延迟意图锚定条目 startAt（验收 3 反馈）：仅当原 draft 没有给出 startAt 且按
+  // 延迟落库时，条目开始时刻取触发时刻，避免落入无时间「待办」组。提醒即使因
+  // 白名单等原因未创建（plan null），该时刻锚定仍成立（条目时间与提醒互相独立）。
+  let delayAnchoredStartAt: number | null = null;
 
   // 切片 16 阶段 3：无重复规则 + 有提前量 → 自动创建 once 提醒。
   // recurrence 命中时重复计划优先（mapper 产出），offset/delay 仍只保留在卡片意图，行为不变。
@@ -149,6 +160,7 @@ export function buildFlashSavePlan(
       } else {
         const delayed = buildDelayReminderPlan(delay, tzid, now);
         reminderPlan = delayed.plan;
+        delayAnchoredStartAt = startAt === null ? delayed.fireInstant : null;
         reminderNotice =
           delayed.plan !== null
             ? `已按「${delay} 分钟后」创建提醒；「提前 ${offset} 分钟」需设定时间，已保留在卡片`
@@ -161,14 +173,33 @@ export function buildFlashSavePlan(
     } else if (delay !== null) {
       const delayed = buildDelayReminderPlan(delay, tzid, now);
       reminderPlan = delayed.plan;
+      // 仅当 draft 本身没有 startAt 才锚定（startAt 有值时条目时间照常保留，验收 3
+      // 场景是「10分钟后提醒我起床」这类无具体时间输入）。
+      delayAnchoredStartAt = startAt === null ? delayed.fireInstant : null;
       reminderNotice = delayed.notice;
     }
+  }
+
+  // 切片 19 验收 4 反馈：AI 落库提醒渠道跟随全局默认渠道（app_settings.defaultChannels，
+  // §7.30 默认渠道偏好），覆盖 once/重复计划的默认单系统通知。入参来自设置读层
+  // （已 canonical/去重/expo 互斥归一），Repository 写路径仍会再校验。
+  if (reminderPlan !== null && defaultChannels !== undefined && defaultChannels.length > 0) {
+    reminderPlan = { ...reminderPlan, channels: [...defaultChannels] };
+  }
+  // 网络渠道诚实披露：闪电添加不配置 webhook/apprise 参数，到点投递会失败。
+  if (
+    reminderPlan !== null &&
+    (reminderPlan.channels ?? []).some(isNetworkReminderChannel)
+  ) {
+    const hint =
+      '提醒含网络渠道：闪电添加未配置其参数，到点投递会失败（请到条目详情页补全渠道配置）';
+    reminderNotice = reminderNotice === null ? hint : `${reminderNotice}；${hint}`;
   }
 
   return {
     itemInput,
     timePatch: {
-      startAt: startAt ?? null,
+      startAt: delayAnchoredStartAt ?? startAt ?? null,
       endAt: endAt ?? null,
       allDay: allDay ?? false,
     },

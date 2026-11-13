@@ -168,7 +168,8 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
       'Asia/Shanghai',
       NOW,
     );
-    // NOW = 2026-11-10T10:00+08:00 → 触发 10:10；timePatch 仍无时间（事件本身无 start）。
+    // NOW = 2026-11-10T10:00+08:00 → 触发 10:10；条目 startAt 锚定触发时刻（验收 3 反馈），
+    // 不再落入无时间「待办」组。
     expect(plan.reminderPlan).toEqual({
       frequency: 'once',
       localTimeHour: 0,
@@ -181,7 +182,7 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
       enabled: true,
     });
     expect(plan.reminderNotice).toBeNull();
-    expect(plan.timePatch.startAt).toBeNull();
+    expect(plan.timePatch.startAt).toBe(NOW + 10 * 60000);
   });
 
   it('切片 19：仅延迟提醒 + startAt 有值 → 提醒按 delay 落库，timePatch.startAt 照常保留', () => {
@@ -196,7 +197,7 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
     expect(plan.reminderNotice).toBeNull();
   });
 
-  it('切片 19：白名单外时区 + 延迟提醒 → 不落库并附说明', () => {
+  it('切片 19：白名单外时区 + 延迟提醒 → 不落库并附说明；条目时刻仍锚定触发时刻', () => {
     const plan = buildFlashSavePlan(
       baseDraft({ startAt: null, endAt: null, reminderDelayMinutes: 10 }),
       'Europe/Paris',
@@ -205,6 +206,8 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
     expect(plan.reminderPlan).toBeNull();
     expect(plan.reminderNotice).toContain('Europe/Paris');
     expect(plan.reminderNotice).toContain('暂不支持');
+    // 提醒未创建不影响条目时间锚定（验收 3 反馈：条目时间与提醒互相独立）。
+    expect(plan.timePatch.startAt).toBe(NOW + 10 * 60000);
   });
 
   it('切片 19：延迟与提前同现 + startAt 有值 → 提前提醒优先，延迟意图披露并保留卡片', () => {
@@ -229,9 +232,53 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
     );
     expect(plan.reminderPlan?.frequency).toBe('once');
     expect(plan.reminderPlan?.startAt).toBe(NOW + 30 * 60000);
+    expect(plan.timePatch.startAt).toBe(NOW + 30 * 60000);
     expect(plan.reminderNotice).toContain('30 分钟后');
     expect(plan.reminderNotice).toContain('提前 5 分钟');
     expect(plan.reminderNotice).toContain('需设定时间');
+  });
+
+  it('切片 19：defaultChannels 入参 → once 提醒渠道跟随全局默认（验收 4 反馈），网络渠道附披露', () => {
+    const plan = buildFlashSavePlan(
+      baseDraft({ startAt: null, endAt: null, reminderDelayMinutes: 10 }),
+      'Asia/Shanghai',
+      NOW,
+      ['system-notification', 'webhook'],
+    );
+    expect(plan.reminderPlan?.channels).toEqual(['system-notification', 'webhook']);
+    // channelConfigs 保持空：网络渠道无参数，到点投递会失败——notice 必须诚实披露。
+    expect(plan.reminderPlan?.channelConfigs).toEqual({});
+    expect(plan.reminderNotice).toContain('网络渠道');
+    expect(plan.reminderNotice).toContain('补全渠道配置');
+  });
+
+  it('切片 19：defaultChannels 入参 → 重复计划渠道同样跟随（验收 4 反馈）', () => {
+    const plan = buildFlashSavePlan(
+      baseDraft({
+        startAt: null,
+        endAt: null,
+        recurrence: {
+          frequency: 'daily',
+          localTime: { hour: 9, minute: 0 },
+        },
+        reminderDelayMinutes: 10,
+      }),
+      'Asia/Shanghai',
+      NOW,
+      ['webhook'],
+    );
+    expect(plan.reminderPlan?.frequency).toBe('daily');
+    expect(plan.reminderPlan?.channels).toEqual(['webhook']);
+  });
+
+  it('切片 19：defaultChannels 缺省 → 维持系统通知单渠道（旧行为不变）', () => {
+    const plan = buildFlashSavePlan(
+      baseDraft({ startAt: null, endAt: null, reminderDelayMinutes: 10 }),
+      'Asia/Shanghai',
+      NOW,
+    );
+    expect(plan.reminderPlan?.channels).toEqual(['system-notification']);
+    expect(plan.reminderNotice).toBeNull();
   });
 
   it('切片 19：重复规则与延迟提醒同现 → 重复计划优先（delay 保留在卡片意图）', () => {
