@@ -238,7 +238,7 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
     expect(plan.reminderNotice).toContain('需设定时间');
   });
 
-  it('切片 19：defaultChannels 入参 → once 提醒渠道跟随全局默认（验收 4 反馈），网络渠道附披露', () => {
+  it('切片 19：defaultChannels 入参 → once 提醒渠道跟随全局默认（验收 4 反馈），无预设时披露', () => {
     const plan = buildFlashSavePlan(
       baseDraft({ startAt: null, endAt: null, reminderDelayMinutes: 10 }),
       'Asia/Shanghai',
@@ -246,10 +246,60 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
       ['system-notification', 'webhook'],
     );
     expect(plan.reminderPlan?.channels).toEqual(['system-notification', 'webhook']);
-    // channelConfigs 保持空：网络渠道无参数，到点投递会失败——notice 必须诚实披露。
+    // 无任何预设：channelConfigs 空 + 一句事实披露（不再催用户补参数）。
     expect(plan.reminderPlan?.channelConfigs).toEqual({});
-    expect(plan.reminderNotice).toContain('网络渠道');
-    expect(plan.reminderNotice).toContain('补全渠道配置');
+    expect(plan.reminderNotice).toContain('尚未配置任何渠道预设');
+    expect(plan.reminderNotice).toContain('到点投递会失败');
+  });
+
+  it('切片 19：默认渠道含 webhook + 有默认预设 → channelConfigs 自动取默认预设配置，不再披露', () => {
+    const plan = buildFlashSavePlan(
+      baseDraft({ startAt: null, endAt: null, reminderDelayMinutes: 10 }),
+      'Asia/Shanghai',
+      NOW,
+      ['system-notification', 'webhook'],
+      [
+        { id: 'p1', name: '旧', type: 'webhook', configJson: 'https://hook.example/old', isDefault: false, createdAt: 1 },
+        { id: 'p2', name: '默认', type: 'webhook', configJson: 'https://hook.example/def', isDefault: true, createdAt: 2 },
+      ],
+    );
+    expect(plan.reminderPlan?.channels).toEqual(['system-notification', 'webhook']);
+    expect(plan.reminderPlan?.channelConfigs).toEqual({ webhook: 'https://hook.example/def' });
+    expect(plan.reminderNotice).toBeNull();
+  });
+
+  it('切片 19：无默认预设 → 网络渠道参数取该渠道第一条预设（用户既定需求）', () => {
+    const plan = buildFlashSavePlan(
+      baseDraft({ startAt: null, endAt: null, reminderDelayMinutes: 10 }),
+      'Asia/Shanghai',
+      NOW,
+      ['webhook'],
+      [
+        { id: 'p1', name: '第一条', type: 'webhook', configJson: 'https://hook.example/first', isDefault: false, createdAt: 2 },
+        { id: 'p0', name: '更早', type: 'webhook', configJson: 'https://hook.example/older', isDefault: false, createdAt: 1 },
+      ],
+    );
+    // 「第一条」= 入参首位（listChannelPresets 为 created_at 降序 → 最新创建）。
+    expect(plan.reminderPlan?.channelConfigs).toEqual({ webhook: 'https://hook.example/first' });
+    expect(plan.reminderNotice).toBeNull();
+  });
+
+  it('切片 19：webhook/apprise 同时默认勾选 → 各自按默认→第一条解析', () => {
+    const plan = buildFlashSavePlan(
+      baseDraft({ startAt: null, endAt: null, reminderDelayMinutes: 10 }),
+      'Asia/Shanghai',
+      NOW,
+      ['webhook', 'apprise'],
+      [
+        { id: 'pW', name: '钩子', type: 'webhook', configJson: 'https://hook.example/w', isDefault: false, createdAt: 1 },
+        { id: 'pA', name: '通知', type: 'apprise', configJson: '{"baseUrl":"http://apprise.local","key":"k"}', isDefault: true, createdAt: 2 },
+      ],
+    );
+    expect(plan.reminderPlan?.channelConfigs).toEqual({
+      webhook: 'https://hook.example/w',
+      apprise: '{"baseUrl":"http://apprise.local","key":"k"}',
+    });
+    expect(plan.reminderNotice).toBeNull();
   });
 
   it('切片 19：defaultChannels 入参 → 重复计划渠道同样跟随（验收 4 反馈）', () => {

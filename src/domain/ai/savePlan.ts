@@ -16,12 +16,14 @@
  * - 验收 3 反馈：延迟落库时条目 startAt 锚定触发时刻（now + delay），否则条目
  *   没有任何时间、落入无时间「待办」组，用户预期是出现在日程/时刻上；
  * - 验收 4 反馈：AI 落库提醒的渠道跟随全局默认渠道（defaultChannels 入参，
- *   app_settings.defaultChannels），不再恒为系统通知单渠道。
+ *   app_settings.defaultChannels），不再恒为系统通知单渠道；网络渠道参数自动取
+ *   渠道预设（默认预设 → 第一条，用户既定需求），完全无预设时才披露投递会失败。
  */
 
 import type { CreateItemInput } from '../item';
 import { isWhitelistedReminderTz } from '../../data/reminderTzWhitelist';
 import { resolveOnceAt } from '../../data/reminderRuleMapping';
+import { resolveChannelPreset, type ChannelPreset } from '../channelPreset';
 import { getZonedParts } from '../recurrence/civilTime';
 import { isNetworkReminderChannel, type ReminderChannel } from '../reminder';
 import { mapDraftToCreateInputs } from './mapper';
@@ -124,6 +126,7 @@ export function buildFlashSavePlan(
   tzid: string,
   now: number,
   defaultChannels?: ReminderChannel[],
+  presets?: readonly ChannelPreset[],
 ): FlashSavePlan {
   const mapped = mapDraftToCreateInputs(draft, tzid, now);
   const { startAt, endAt, allDay, ...itemInput } = mapped.item;
@@ -186,14 +189,38 @@ export function buildFlashSavePlan(
   if (reminderPlan !== null && defaultChannels !== undefined && defaultChannels.length > 0) {
     reminderPlan = { ...reminderPlan, channels: [...defaultChannels] };
   }
-  // 网络渠道诚实披露：闪电添加不配置 webhook/apprise 参数，到点投递会失败。
-  if (
-    reminderPlan !== null &&
-    (reminderPlan.channels ?? []).some(isNetworkReminderChannel)
-  ) {
-    const hint =
-      '提醒含网络渠道：闪电添加未配置其参数，到点投递会失败（请到条目详情页补全渠道配置）';
-    reminderNotice = reminderNotice === null ? hint : `${reminderNotice}；${hint}`;
+  // 切片 19 验收 4 反馈（用户既定需求）：网络渠道参数自动取渠道预设——默认预设优先，
+  // 无默认取第一条（resolveChannelPreset 与手动表单共用）。完全无预设时才披露
+  // （AI 提醒不该催用户补渠道参数；静默创建注定失败的投递也不诚实，故留一句事实陈述）。
+  if (reminderPlan !== null) {
+    const baseConfigs = reminderPlan.channelConfigs ?? {};
+    const filledConfigs: Record<string, string> = { ...baseConfigs };
+    const missingConfig: string[] = [];
+    for (const channel of reminderPlan.channels ?? []) {
+      // 手写窄化（isNetworkReminderChannel 不携带类型谓词）：仅在 channel 为
+      // webhook/apprise 时做预设解析。
+      if (channel !== 'webhook' && channel !== 'apprise') {
+        continue;
+      }
+      if (filledConfigs[channel] !== undefined && filledConfigs[channel] !== '') {
+        continue;
+      }
+      const preset = resolveChannelPreset(channel, presets ?? []);
+      if (preset !== null) {
+        filledConfigs[channel] = preset.configJson;
+      } else {
+        missingConfig.push(channel);
+      }
+    }
+    // 仅在真正解析出配置时重建计划对象：mapper 的重复计划不含 channelConfigs 键，
+    // 无谓重建会在全量断言测试里多出一个空对象键（表现层无差，但不诚实）。
+    if (Object.keys(filledConfigs).length > Object.keys(baseConfigs).length) {
+      reminderPlan = { ...reminderPlan, channelConfigs: filledConfigs };
+    }
+    if (missingConfig.length > 0) {
+      const hint = `网络渠道（${missingConfig.join('/')}）尚未配置任何渠道预设，到点投递会失败`;
+      reminderNotice = reminderNotice === null ? hint : `${reminderNotice}；${hint}`;
+    }
   }
 
   return {
