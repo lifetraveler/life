@@ -159,4 +159,97 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
     expect(plan.reminderPlan?.frequency).toBe('weekly');
     expect(plan.reminderNotice).toBeNull();
   });
+
+  // —— 切片 19 阶段 2：延迟提醒落库（AGENTS.md §7.30 第一条） ——
+
+  it('切片 19：仅延迟提醒 + startAt null → once 计划（触发时刻 = now + delay*60000，不再报错）', () => {
+    const plan = buildFlashSavePlan(
+      baseDraft({ startAt: null, endAt: null, reminderDelayMinutes: 10 }),
+      'Asia/Shanghai',
+      NOW,
+    );
+    // NOW = 2026-11-10T10:00+08:00 → 触发 10:10；timePatch 仍无时间（事件本身无 start）。
+    expect(plan.reminderPlan).toEqual({
+      frequency: 'once',
+      localTimeHour: 0,
+      localTimeMinute: 0,
+      onceAt: { year: 2026, month: 11, day: 10, hour: 10, minute: 10 },
+      channels: ['system-notification'],
+      channelConfigs: {},
+      tzid: 'Asia/Shanghai',
+      startAt: NOW + 10 * 60000,
+      enabled: true,
+    });
+    expect(plan.reminderNotice).toBeNull();
+    expect(plan.timePatch.startAt).toBeNull();
+  });
+
+  it('切片 19：仅延迟提醒 + startAt 有值 → 提醒按 delay 落库，timePatch.startAt 照常保留', () => {
+    const plan = buildFlashSavePlan(
+      baseDraft({ reminderDelayMinutes: 60 }),
+      'Asia/Shanghai',
+      NOW,
+    );
+    expect(plan.reminderPlan?.frequency).toBe('once');
+    expect(plan.reminderPlan?.startAt).toBe(NOW + 60 * 60000);
+    expect(plan.timePatch.startAt).toBe(new Date('2026-11-11T15:00:00+08:00').getTime());
+    expect(plan.reminderNotice).toBeNull();
+  });
+
+  it('切片 19：白名单外时区 + 延迟提醒 → 不落库并附说明', () => {
+    const plan = buildFlashSavePlan(
+      baseDraft({ startAt: null, endAt: null, reminderDelayMinutes: 10 }),
+      'Europe/Paris',
+      NOW,
+    );
+    expect(plan.reminderPlan).toBeNull();
+    expect(plan.reminderNotice).toContain('Europe/Paris');
+    expect(plan.reminderNotice).toContain('暂不支持');
+  });
+
+  it('切片 19：延迟与提前同现 + startAt 有值 → 提前提醒优先，延迟意图披露并保留卡片', () => {
+    const plan = buildFlashSavePlan(
+      baseDraft({ reminderOffsetMinutes: 5, reminderDelayMinutes: 30 }),
+      'Asia/Shanghai',
+      NOW,
+    );
+    // 主提醒锚定事件开始（startAt - 5min），delay 不落库。
+    expect(plan.reminderPlan?.frequency).toBe('once');
+    expect(plan.reminderPlan?.startAt).toBe(new Date('2026-11-11T14:55:00+08:00').getTime());
+    expect(plan.reminderNotice).toContain('提前 5 分钟');
+    expect(plan.reminderNotice).toContain('30 分钟后提醒');
+    expect(plan.reminderNotice).toContain('已保留在卡片');
+  });
+
+  it('切片 19：延迟与提前同现 + startAt null → 按 delay 落库，提前量披露需设定时间', () => {
+    const plan = buildFlashSavePlan(
+      baseDraft({ startAt: null, endAt: null, reminderOffsetMinutes: 5, reminderDelayMinutes: 30 }),
+      'Asia/Shanghai',
+      NOW,
+    );
+    expect(plan.reminderPlan?.frequency).toBe('once');
+    expect(plan.reminderPlan?.startAt).toBe(NOW + 30 * 60000);
+    expect(plan.reminderNotice).toContain('30 分钟后');
+    expect(plan.reminderNotice).toContain('提前 5 分钟');
+    expect(plan.reminderNotice).toContain('需设定时间');
+  });
+
+  it('切片 19：重复规则与延迟提醒同现 → 重复计划优先（delay 保留在卡片意图）', () => {
+    const plan = buildFlashSavePlan(
+      baseDraft({
+        startAt: null,
+        endAt: null,
+        recurrence: {
+          frequency: 'daily',
+          localTime: { hour: 9, minute: 0 },
+        },
+        reminderDelayMinutes: 10,
+      }),
+      'Asia/Shanghai',
+      NOW,
+    );
+    expect(plan.reminderPlan).not.toBeNull();
+    expect(plan.reminderPlan?.frequency).toBe('daily');
+    expect(plan.reminderNotice).toBeNull();
+  });
 });

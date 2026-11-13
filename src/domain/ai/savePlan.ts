@@ -10,6 +10,8 @@
  * 无重复规则且有提前量时自动创建 once 提醒，触发时刻 = startAt - offset；
  * 民用分解只用 civilTime.getZonedParts（不自行实现时区/DST 换算）。
  * 无时间 / 白名单外 / 触发时刻已过去时不落库，保留卡片意图并以 reminderNotice 说明。
+ * 切片 19 阶段 2（AGENTS.md §7.30）：reminderDelayMinutes 落库——无重复规则时
+ * 以 now + delay*60000 创建 once 提醒（无需 startAt）；白名单外不落库并披露。
  */
 
 import type { CreateItemInput } from '../item';
@@ -40,21 +42,12 @@ export interface FlashSavePlan {
  * allDay 条目不做特殊分支：机械按「当天 00:00 - offset」计算，可能落在前一日晚间；
  * 披露为已知边界（AI 仅对明确带时刻的输入产出 offset）。
  */
-function buildOnceReminderPlan(
-  offsetMinutes: number,
-  startAt: number | null,
+function toOncePlan(
+  fireInstant: number,
   tzid: string,
-  now: number,
 ): { plan: ReminderPlan | null; notice: string | null } {
-  if (startAt === null) {
-    return { plan: null, notice: '需设定时间才能提前提醒' };
-  }
   if (!isWhitelistedReminderTz(tzid)) {
     return { plan: null, notice: `提醒未创建：设备时区 ${tzid} 暂不支持（仅支持上海/纽约）` };
-  }
-  const fireInstant = startAt - offsetMinutes * 60000;
-  if (fireInstant <= now) {
-    return { plan: null, notice: '提醒时刻已过去，未创建一次性提醒' };
   }
   // 民用换算唯一入口（任务约束）：不自行实现时区/DST 逻辑。
   const parts = getZonedParts(fireInstant, tzid);
@@ -89,6 +82,37 @@ function buildOnceReminderPlan(
   };
 }
 
+function buildOnceReminderPlan(
+  offsetMinutes: number,
+  startAt: number | null,
+  tzid: string,
+  now: number,
+): { plan: ReminderPlan | null; notice: string | null } {
+  if (startAt === null) {
+    return { plan: null, notice: '需设定时间才能提前提醒' };
+  }
+  const fireInstant = startAt - offsetMinutes * 60000;
+  if (fireInstant <= now) {
+    return { plan: null, notice: '提醒时刻已过去，未创建一次性提醒' };
+  }
+  return toOncePlan(fireInstant, tzid);
+}
+
+/**
+ * 延迟提醒计划构造（切片 19 阶段 2，AGENTS.md §7.30 第一条）：
+ * 触发时刻 = now + delay*60000，相对当前时刻、无需 startAt（startAt 为 null 也正常落库）。
+ * delay ≥ 1（guard 纪律）保证 fireInstant 恒晚于 now，无需「已过去」降级；
+ * tzid 白名单校验与民用换算复用 once 通道（toOncePlan）。
+ */
+function buildDelayReminderPlan(
+  delayMinutes: number,
+  tzid: string,
+  now: number,
+): { plan: ReminderPlan | null; notice: string | null } {
+  const fireInstant = now + delayMinutes * 60000;
+  return toOncePlan(fireInstant, tzid);
+}
+
 export function buildFlashSavePlan(
   draft: ParsedItemDraft,
   tzid: string,
@@ -105,11 +129,40 @@ export function buildFlashSavePlan(
   }
 
   // 切片 16 阶段 3：无重复规则 + 有提前量 → 自动创建 once 提醒。
-  // recurrence 命中时重复计划优先（mapper 产出），offset 仍只保留在卡片意图，行为不变。
-  if (draft.recurrence === null && draft.reminderOffsetMinutes !== null) {
-    const once = buildOnceReminderPlan(draft.reminderOffsetMinutes, startAt ?? null, tzid, now);
-    reminderPlan = once.plan;
-    reminderNotice = once.notice;
+  // recurrence 命中时重复计划优先（mapper 产出），offset/delay 仍只保留在卡片意图，行为不变。
+  // 切片 19 阶段 2（AGENTS.md §7.30 第一条）：无重复规则 + 延迟提醒 → once 提醒
+  // （触发时刻 = now + delay*60000，无需 startAt）。提前量与延迟量同现时二者是两条
+  // 独立意图（ai.md v0.17），但闪电落库一次只产一条计划（任务卡「生成一条」）：
+  // 提前量可锚定（startAt 非空）时提前提醒优先（「再提醒一次」语义中锚定事件开始的
+  // 是主提醒），延迟意图披露在 notice 并保留卡片；提前量无法锚定时按延迟落库并披露。
+  if (draft.recurrence === null) {
+    const offset = draft.reminderOffsetMinutes;
+    const delay = draft.reminderDelayMinutes;
+    if (offset !== null && delay !== null) {
+      if (startAt !== null) {
+        const once = buildOnceReminderPlan(offset, startAt ?? null, tzid, now);
+        reminderPlan = once.plan;
+        reminderNotice =
+          once.plan !== null
+            ? `已按「提前 ${offset} 分钟」创建提醒；「${delay} 分钟后提醒」意图已保留在卡片（暂不支持一次创建两条提醒）`
+            : once.notice;
+      } else {
+        const delayed = buildDelayReminderPlan(delay, tzid, now);
+        reminderPlan = delayed.plan;
+        reminderNotice =
+          delayed.plan !== null
+            ? `已按「${delay} 分钟后」创建提醒；「提前 ${offset} 分钟」需设定时间，已保留在卡片`
+            : delayed.notice;
+      }
+    } else if (offset !== null) {
+      const once = buildOnceReminderPlan(offset, startAt ?? null, tzid, now);
+      reminderPlan = once.plan;
+      reminderNotice = once.notice;
+    } else if (delay !== null) {
+      const delayed = buildDelayReminderPlan(delay, tzid, now);
+      reminderPlan = delayed.plan;
+      reminderNotice = delayed.notice;
+    }
   }
 
   return {
