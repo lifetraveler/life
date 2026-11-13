@@ -5,6 +5,7 @@
 
 import {
   isIgnoringBatteryOptimizations,
+  openBatteryOptimizationSettings,
   requestIgnoreBatteryOptimizations,
 } from '../batteryOptimization';
 
@@ -72,6 +73,16 @@ describe('batteryOptimization', () => {
       await expect(requestIgnoreBatteryOptimizations()).resolves.toBe(
         'unavailable',
       );
+    });
+  });
+
+  describe('openBatteryOptimizationSettings', () => {
+    it('透传原生 openSettings 的跳转结果', async () => {
+      mockedNative.openSettings.mockReturnValue(true);
+      await expect(openBatteryOptimizationSettings()).resolves.toBe(true);
+
+      mockedNative.openSettings.mockReturnValue(false);
+      await expect(openBatteryOptimizationSettings()).resolves.toBe(false);
     });
   });
 });

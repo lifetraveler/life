@@ -45,3 +45,11 @@ export async function requestIgnoreBatteryOptimizations(): Promise<BatteryOptimi
   }
   return 'unavailable';
 }
+
+/**
+ * 直接跳转电池优化系统设置页（AGENTS §7.31「一键跳转系统设置」）：
+ * 独立入口，供用户手动复查/摘除白名单，不经过弹窗降级编排。
+ */
+export async function openBatteryOptimizationSettings(): Promise<boolean> {
+  return batteryModule.openSettings();
+}
