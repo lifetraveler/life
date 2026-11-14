@@ -2,7 +2,7 @@
   "expo": {
     "name": "life",
     "slug": "life",
-    "version": "0.1.0",
+    "version": "0.21.0",
     "scheme": "life",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
