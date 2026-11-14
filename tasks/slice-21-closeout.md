@@ -7,8 +7,9 @@
   - `bddfe0f` 阶段 1 UI 显示修补（5 files, +105/-10）；
   - `1ee0e82` 阶段 2 网络渠道防重发（7 files, +269/-6，notifications 冻结区单独 commit）；
   - 真机反馈修补（plan.tsx 跨午夜滚动 + agenda 空今日降级定位，closeout/AGENTS §8 同笔提交；commit 信息含「切片 21 修补」，可从 git log 追溯）。
+  - 真机反馈修补第 2 笔（plan.tsx「今天」组头恒显示——空今日合成组头+空态卡挂组头下；closeout/AGENTS 同步）。
 - 无 schema 变更、无新依赖、无 native 配置改动。
-- 真机验收（MuMu，release APK @2026-11-15）：flash 顶部不遮挡 ✓、空今日空态卡+「＋ 快速安排」✓、「今天」pill 空今日回位月名行 ✓、font_scale 1.3 频率/渠道/时区 chips 不折行 ✓、闪电本地降级解析+落库 ✓（测试条目已归档清理）；**webhook 回前台不双发实机复验留待用户**。
+- 真机验收（MuMu，release APK @2026-11-15）：flash 顶部不遮挡 ✓、空今日「今天 0」合成组头+空态卡 ✓（第二轮验收：冷启动与「今天」pill 从 2027年2月回位均落今天组头顶）、font_scale 1.3 频率/渠道/时区 chips 不折行 ✓、闪电本地降级解析+落库 ✓（测试条目已归档清理）；**webhook 回前台不双发实机复验留待用户**。
 
 ## 1. 环境事实（承接 slice-20，均复验）
 
@@ -42,9 +43,10 @@
 - `src/notifications/ReminderScheduler.ts`：reconcile missed 循环在 `attemptStatus==='ok'` 判重后新增 `isInFlight` 跳过——迟到 timer × reconcile 竞态窗口（slice-20 披露的回前台双 POST 缺陷）双向封闭。
 - 测试：`networkTimers.test.ts` +5（占位原子性/复合键隔离/清除方法不清占位/endDeliver 幂等/与 attempts 独立）；`WebhookChannel.test.ts` +2（并发第二路 skipped 且 fetch 恒 1 次、失败路径 finally 释放后可重试）；`ReminderScheduler.test.ts` +1（端到端 race：deferred fetch 挂起首路投递 → 并发 reconcile 不双发 → 完成 → 下一轮不再补发）。
 
-### 真机反馈修补（plan.tsx，与 closeout/AGENTS 同笔提交）
+### 真机反馈修补（plan.tsx；修补 1–2 在 commit 568d3f3，修补 3 在其后的追加提交，closeout/AGENTS 同步）
 - `src/app/(tabs)/plan.tsx` 修补 1 —— **viewTime 跨午夜滚动**：`viewTime` 由挂载固化改为可滚动（`setViewTime`）；新增 `rollViewTimeToNow` useCallback（tzid 重取 + nowMs=Date.now()，**同民用日不重置**避免无谓重渲染，anchor 不动）；AppState 'active'（回 App 前台，subscription.remove() 清理）与 `useFocusEffect`（回页签）双触发。修复：App 进程长存跨午夜不重挂 → todayKey 停在挂载日（用户报「北京时间已 11-15 但今日还是 11-14」），「今天」判定/空态卡/回位全部停滞。
 - `src/app/(tabs)/plan.tsx` 修补 2 —— **agenda 定位 effect 补空今日降级**：今日组行 600ms 未解析则 `scrollToOffset(index * AGENDA_MONTH_HEADER_BLOCK)` 回退到今天所在月页的月名行顶并 `agendaJumpTargetRef.current = null`（月名行恒存在，offset 不依赖行测量）；600ms 内 items 到位则 effect 随 agendaRows 重跑走正常 header 定位、timer 随 cleanup 取消。修复：原分支 header 缺失时挂起目标永不清除——「今天」pill 与冷启动定位在空今日上双双失效（原注释声称「无今日组回退月名行」但代码无此路径）。
+- `src/app/(tabs)/plan.tsx` 修补 3 —— **「今天」组头恒显示**（用户反馈第二轮）：参考「今天 1」有内容组头的视觉，空今日时也在月名行后合成「今天」组头（key=`header-<todayKey>`、label '今天' 与 domain `dayGroupLabel` today 分支同文案、isToday 高亮/count 0，复用真实组头渲染与 `todayHeaderRef` 精修定位）+ 空态卡挂组头下。`header-<todayKey>` 由此恒存在 ⇒ 今天 pill/冷启动定位与「有内容」走同一条 header 定位路径；600ms 月名行降级（修补 2）退居兜底，仅覆盖 rows 未到位（observer 未推送）窗口。
 - 诊断记录：「今日停 11-14」**不是时区问题**——getDeviceTzid（slice-11 起 expo-localization）无 UTC 伪影，MuMu `persist.sys.timezone=Asia/Shanghai` 正确；根因即修补 1。today.tsx/week.tsx 的挂载固化 viewState 不受影响（独立页每次进入重挂，slice-14 契约原样保留不动）。
 
 ## 4. 踩坑教训
@@ -55,6 +57,7 @@
 4. **`windowOccurrences` 纯未来窗口（instant > now）是防重发设计成立的前提**：调度桶/replace 永不重挂已投递的过去 occurrence，定时器路径对已 'ok' occurrence 无重复 fire 通道；双发唯一入口就是迟到 timer × reconcile missed 竞态，本次双向封闭后链路完备。
 5. **「挂载固化 now」的设计意图 vs 长存进程**：plan/today/week 的 viewTime 固化本意是「活跃使用期间不漂移」，但 App 进程可存活远超一天且 Tab 页不重挂——固化变成缺陷。修法取中：保留固化语义（同民用日不重置），仅在回前台/回页签两个明确时机滚动 now；独立路由页（today/week）每次进入重挂，无需同款修补。
 6. **注释声称的降级路径必须在代码里存在**：plan.tsx 定位 effect 注释写着「无今日组回退月名行」但实现只有 `rowIndex >= 0` 才滚动，空今日上挂起目标永不清除——注释与代码的偏差是用户报「定位到今日失效」的直接根因之一。写注释时应让分支结构与注释逐条对应。
+7. **本机构建必须走 `gradlew.bat`（cmd /c），不能用 POSIX `./gradlew`**：原生 Windows bash 无 cygpath——gradlew shell 脚本在路径转换处直接 `cygpath: command not found` → `exec: : not found`（exit 127）；且此 bash 不做 MSYS 路径改写，`cmd //c` 不会被转成 `/c`，cmd 进交互模式立即 EOF 退出造成 exit 0 假象（APK 未重建——字节大小不变可识别）。正确姿势：`cmd /c "set JAVA_HOME=D:\enviroment\java\jdk\oracle-jdk-17.0.10&& gradlew.bat assembleRelease --console=plain"`，核对 `grep "BUILD SUCCESSFUL"` + APK mtime。
 
 ## 5. 遗留披露
 

@@ -139,7 +139,7 @@ interface AgendaRowItem {
   item: ItemWithRelations;
 }
 
-/** 切片 21（AGENTS.md §7.32 空态引导）：agenda 月窗口中「今天」组缺席时的空态占位行 */
+/** 切片 21（AGENTS.md §7.32 空态引导）：agenda 月窗口中「今天」组缺席时的空态占位行（挂合成「今天」组头下） */
 interface AgendaRowEmptyToday {
   kind: 'empty-today';
   key: string;
@@ -601,13 +601,23 @@ export default function PlanScreen() {
         nowMs: viewTime.nowMs,
         tzid: viewTime.tzid,
       });
-      // 切片 21（AGENTS.md §7.32 空态引导）：今天所在月页若「今天」组缺席
-      // （当天无安排/被筛选过滤），在月名行后插入空态卡，避免「今天」无声消失。
+      // 切片 21（AGENTS.md §7.32 空态引导）：「今天」组头恒显示——今天所在月页
+      // 若「今天」组缺席（当天无安排/被筛选过滤），合成今天组头（count 0，isToday
+      // 高亮与精修定位 ref 同真实组头）+ 空态卡挂其下。header-<todayKey> 由此
+      // 恒存在，今天 pill/冷启动定位与「有内容」走同一条路径（真机反馈：定位
+      // 逻辑一致）。label '今天' 与 domain dayGroupLabel 的 today 分支文案一致。
       if (
         page.year === todayParts.year &&
         page.month === todayParts.month &&
         !groups.some((group) => group.kind === 'day' && group.key === todayKey)
       ) {
+        result.push({
+          kind: 'header',
+          key: `header-${todayKey}`,
+          label: '今天',
+          isToday: true,
+          count: 0,
+        });
         result.push({ kind: 'empty-today', key: 'empty-today', civilKey: todayKey });
       }
       for (const group of groups) {
@@ -661,7 +671,9 @@ export default function PlanScreen() {
       return { year: Number(yearPart), month: Number(monthPart) };
     };
     if (target.kind === 'day') {
-      // 今日组头定位（5f）：滚到 header-<todayKey> 行；无今日组（当天无安排）回退月名行。
+      // 今日组头定位（5f）：滚到 header-<todayKey> 行。切片 21 修补 2 起「今天」
+      // 组头恒显示（空今日合成组头），目标行最终必存在；下方 600ms 降级仅覆盖
+      // rows 未到位的窗口（observer 未推送）。
       // 定位目标统一降级为月定位（今天组行用 scrollToIndex，Fabric 首帧常未测量，
       // 失败走 FlatList onScrollToIndexFailed 的 400ms 重试兜底）。
       const rowIndex = agendaRows.findIndex(
@@ -699,10 +711,10 @@ export default function PlanScreen() {
       }
       // 首帧 agendaRows 可能尚未含今日组（observer 未推送）——不清目标，等 rows
       // 到位后本 effect 随 agendaRows 依赖重跑再定位（冷启动实测必须保留）。
-      // 切片 21 真机反馈：今日组可能根本不存在（当天无安排），原实现无限等待导致
-      // 「今天」pill 与冷启动定位双双失效——600ms 内 items 到位则本 effect 先重跑
-      // 走上方今日组定位（timer 随 cleanup 取消）；仍未解析则降级为月名行定位并
-      // 清除目标。月名行恒存在于 agendaRows（4 页固定追加），offset 不依赖行测量。
+      // 切片 21 真机反馈：600ms 内 items 到位则本 effect 先重跑走上方今日组定位
+      // （timer 随 cleanup 取消）；仍未解析则降级为月名行定位并清除目标。正常路径
+      // 下「今天」组头恒存在（空今日合成），此降级只兜 rows 迟到的极端窗口。
+      // 月名行恒存在于 agendaRows（4 页固定追加），offset 不依赖行测量。
       const timer = setTimeout(() => {
         if (agendaJumpTargetRef.current !== target) {
           return;
