@@ -47,6 +47,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
+  AppState,
   Easing,
   FlatList,
   PanResponder,
@@ -62,7 +63,7 @@ import type {
   NativeSyntheticEvent,
   ViewToken,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
 import { itemRepository } from '../../data';
@@ -216,11 +217,42 @@ export default function PlanScreen() {
     return { year: parts.year, month: parts.month };
   });
 
-  // 视图时间坐标：挂载时固化（today.tsx 同款模式）——页面存续期间「今天」不漂移。
-  const [viewTime] = useState(() => {
+  // 视图时间坐标：挂载时固化（today.tsx 同款模式）；活跃使用期间不漂移。
+  // 切片 21 真机反馈：App 进程长存且本页不重挂时，原「永久固化」会让 todayKey
+  // 停在挂载那天的民用日（回前台已过午夜，「今天」仍指昨天）——回 App 前台或
+  // 切回本页签时滚动到当前时刻；同一民用日不重置，避免无谓重渲染。
+  const [viewTime, setViewTime] = useState(() => {
     const tzid = getDeviceTzid();
     return { tzid, nowMs: Date.now() };
   });
+
+  /** 滚动视图时间坐标：仅民用日（或时区）变化才 setState；anchor 不动。 */
+  const rollViewTimeToNow = useCallback((): void => {
+    setViewTime((prev) => {
+      const tzid = getDeviceTzid();
+      const nowMs = Date.now();
+      if (
+        prev.tzid === tzid &&
+        formatLocalDate(getZonedParts(prev.nowMs, prev.tzid)) ===
+          formatLocalDate(getZonedParts(nowMs, tzid))
+      ) {
+        return prev;
+      }
+      return { tzid, nowMs };
+    });
+  }, []);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (status) => {
+      if (status === 'active') {
+        rollViewTimeToNow();
+      }
+    });
+    return () => subscription.remove();
+  }, [rollViewTimeToNow]);
+
+  // 应用活跃期间跨午夜后切回本页签，也要把「今天」滚过来
+  useFocusEffect(rollViewTimeToNow);
 
   /** 年月标签（阶段 5c 任务 0；阶段 5e 前移供月窗口行复用）：今年只显「11月」，非今年显「2027年1月」。 */
   const monthLabelOf = useCallback(
@@ -232,7 +264,8 @@ export default function PlanScreen() {
   );
 
   // 阶段 5b 锚点：week/day 用 anchorMs（民用日锚点），month 用 anchorMonth（民用月锚点）。
-  // 「今天」pill / 周条横滑 / 顶栏 ‹ › 都只改锚点；viewTime 保持固化供回位与「今天」判定。
+  // 「今天」pill / 周条横滑 / 顶栏 ‹ › 都只改锚点；viewTime 在活跃使用期间保持固化
+  // 供回位与「今天」判定（仅回前台/回页签跨午夜时滚动，见上方 rollViewTimeToNow）。
   const [anchorMs, setAnchorMs] = useState(() => viewTime.nowMs);
   const [anchorMonth, setAnchorMonth] = useState<CivilMonth>(() => {
     const parts = getZonedParts(viewTime.nowMs, viewTime.tzid);
@@ -664,9 +697,29 @@ export default function PlanScreen() {
         }, 120);
         return () => clearTimeout(timer);
       }
-      // 首帧 agendaRows 可能为空（observer 未推送）——不清目标，等 rows 到位后本
-      // effect 随 agendaRows 依赖重跑再定位（冷启动实测必须保留）。
-      return undefined;
+      // 首帧 agendaRows 可能尚未含今日组（observer 未推送）——不清目标，等 rows
+      // 到位后本 effect 随 agendaRows 依赖重跑再定位（冷启动实测必须保留）。
+      // 切片 21 真机反馈：今日组可能根本不存在（当天无安排），原实现无限等待导致
+      // 「今天」pill 与冷启动定位双双失效——600ms 内 items 到位则本 effect 先重跑
+      // 走上方今日组定位（timer 随 cleanup 取消）；仍未解析则降级为月名行定位并
+      // 清除目标。月名行恒存在于 agendaRows（4 页固定追加），offset 不依赖行测量。
+      const timer = setTimeout(() => {
+        if (agendaJumpTargetRef.current !== target) {
+          return;
+        }
+        const month = parseMonth(target.civilKey);
+        const index = agendaPages.findIndex(
+          (page) => page.year === month.year && page.month === month.month,
+        );
+        if (index >= 0) {
+          listRef.current?.scrollToOffset({
+            offset: index * AGENDA_MONTH_HEADER_BLOCK,
+            animated: false,
+          });
+        }
+        agendaJumpTargetRef.current = null;
+      }, 600);
+      return () => clearTimeout(timer);
     }
     // 走到这里 target.kind 必为 'month'（'day' 分支已全部 return）
     const month: CivilMonth = target.month;
