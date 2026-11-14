@@ -45,7 +45,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert,
   Animated,
   AppState,
   Easing,
@@ -178,18 +177,13 @@ function AgendaItemCard({
   );
 }
 
-/** 切片 21（AGENTS.md §7.32 空态引导）：agenda「今日没有安排」空态卡，CTA 与 FAB 同路由 /item/new */
-function AgendaEmptyTodayCard({ onPress }: { onPress: () => void }) {
+/** 切片 21（AGENTS.md §7.32 空态引导）：agenda「今日没有安排」空态卡。
+ * v0.21 注记（用户 2026-11-15 拍板）：快速安排按钮移除——右下角 FAB 已是常驻新建入口
+ * （短按 → /item/new、长按 → 闪电录入 tab），卡片仅保留文案提示。 */
+function AgendaEmptyTodayCard() {
   return (
     <View style={styles.emptyTodayCard}>
       <Text style={styles.emptyTodayText}>今日没有安排</Text>
-      <Pressable
-        style={({ pressed }) => [styles.emptyTodayButton, pressed && styles.iconPressed]}
-        onPress={onPress}
-        accessibilityLabel="快速安排"
-      >
-        <Text style={styles.emptyTodayButtonText}>＋ 快速安排</Text>
-      </Pressable>
     </View>
   );
 }
@@ -422,10 +416,10 @@ export default function PlanScreen() {
     router.push('/item/new');
   }, [router]);
 
-  /** FAB 长按：闪电录入占位（切片 15 上线前的提示，阶段 5b 拍板）。 */
-  const showFlashPlaceholder = useCallback((): void => {
-    Alert.alert('闪电录入', '即将上线');
-  }, []);
+  /** FAB 长按：切到闪电录入 tab（切片 15 已上线；用户 2026-11-15 拍板，替换阶段 5b 占位提示）。 */
+  const openFlashTab = useCallback((): void => {
+    router.push('/flash');
+  }, [router]);
 
   const openItemDetail = useCallback(
     (itemId: string): void => {
@@ -1058,12 +1052,12 @@ export default function PlanScreen() {
         );
       }
       if (row.kind === 'empty-today') {
-        // 切片 21：今日无安排空态卡（CTA → /item/new，与 FAB 同路由）
-        return <AgendaEmptyTodayCard onPress={openNewItem} />;
+        // 切片 21：今日无安排空态卡（v0.21 注记：按钮移除，仅文案提示）
+        return <AgendaEmptyTodayCard />;
       }
       return <AgendaItemCard item={row.item} tzid={viewTime.tzid} onPress={openItemDetail} />;
     },
-    [openItemDetail, openNewItem, viewTime.tzid],
+    [openItemDetail, viewTime.tzid],
   );
 
   return (
@@ -1307,11 +1301,11 @@ export default function PlanScreen() {
         />
       )}
 
-      {/* FAB：新建条目 → 全屏新建页（阶段 5）；长按=闪电录入占位提示（切片 15 上线，阶段 5b） */}
+      {/* FAB：短按新建条目 → 全屏新建页（阶段 5）；长按=切闪电录入 tab（用户 2026-11-15 拍板，替换占位提示） */}
       <Pressable
         style={styles.fab}
         onPress={openNewItem}
-        onLongPress={showFlashPlaceholder}
+        onLongPress={openFlashTab}
         delayLongPress={400}
         hitSlop={4}
       >
@@ -1618,21 +1612,9 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: '#FFFFFF',
     alignItems: 'center',
-    gap: 14,
   },
   emptyTodayText: {
     fontSize: 14,
     color: '#666666',
-  },
-  emptyTodayButton: {
-    backgroundColor: '#111111',
-    borderRadius: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 24,
-  },
-  emptyTodayButtonText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600',
   },
 });

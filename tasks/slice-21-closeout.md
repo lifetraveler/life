@@ -9,7 +9,7 @@
   - 真机反馈修补（plan.tsx 跨午夜滚动 + agenda 空今日降级定位，closeout/AGENTS §8 同笔提交；commit 信息含「切片 21 修补」，可从 git log 追溯）。
   - 真机反馈修补第 2 笔（plan.tsx「今天」组头恒显示——空今日合成组头+空态卡挂组头下；closeout/AGENTS 同步）。
 - 无 schema 变更、无新依赖、无 native 配置改动。
-- 真机验收（MuMu，release APK @2026-11-15）：flash 顶部不遮挡 ✓、空今日「今天 0」合成组头+空态卡 ✓（第二轮验收：冷启动与「今天」pill 从 2027年2月回位均落今天组头顶）、font_scale 1.3 频率/渠道/时区 chips 不折行 ✓、闪电本地降级解析+落库 ✓（测试条目已归档清理）；**webhook 回前台不双发实机复验留待用户**。
+- 真机验收（MuMu，release APK @2026-11-15）：flash 顶部不遮挡 ✓、空今日「今天 0」合成组头+空态卡 ✓（第二轮验收：冷启动与「今天」pill 从 2027年2月回位均落今天组头顶）、font_scale 1.3 频率/渠道/时区 chips 不折行 ✓、闪电本地降级解析+落库 ✓（测试条目已归档清理）；第三轮验收（新 APK）：空态卡无「＋ 快速安排」按钮仅文案 ✓、长按 FAB 800ms 跳闪电录入页（dump 证实「⚡ 闪电添加」+输入框）✓；**webhook 回前台不双发实机复验留待用户**。
 
 ## 1. 环境事实（承接 slice-20，均复验）
 
@@ -43,10 +43,11 @@
 - `src/notifications/ReminderScheduler.ts`：reconcile missed 循环在 `attemptStatus==='ok'` 判重后新增 `isInFlight` 跳过——迟到 timer × reconcile 竞态窗口（slice-20 披露的回前台双 POST 缺陷）双向封闭。
 - 测试：`networkTimers.test.ts` +5（占位原子性/复合键隔离/清除方法不清占位/endDeliver 幂等/与 attempts 独立）；`WebhookChannel.test.ts` +2（并发第二路 skipped 且 fetch 恒 1 次、失败路径 finally 释放后可重试）；`ReminderScheduler.test.ts` +1（端到端 race：deferred fetch 挂起首路投递 → 并发 reconcile 不双发 → 完成 → 下一轮不再补发）。
 
-### 真机反馈修补（plan.tsx；修补 1–2 在 commit 568d3f3，修补 3 在其后的追加提交，closeout/AGENTS 同步）
+### 真机反馈修补（plan.tsx；修补 1–2 在 commit 568d3f3，修补 3 在 c4c7785，修补 4 在其后的追加提交，closeout/AGENTS 同步）
 - `src/app/(tabs)/plan.tsx` 修补 1 —— **viewTime 跨午夜滚动**：`viewTime` 由挂载固化改为可滚动（`setViewTime`）；新增 `rollViewTimeToNow` useCallback（tzid 重取 + nowMs=Date.now()，**同民用日不重置**避免无谓重渲染，anchor 不动）；AppState 'active'（回 App 前台，subscription.remove() 清理）与 `useFocusEffect`（回页签）双触发。修复：App 进程长存跨午夜不重挂 → todayKey 停在挂载日（用户报「北京时间已 11-15 但今日还是 11-14」），「今天」判定/空态卡/回位全部停滞。
 - `src/app/(tabs)/plan.tsx` 修补 2 —— **agenda 定位 effect 补空今日降级**：今日组行 600ms 未解析则 `scrollToOffset(index * AGENDA_MONTH_HEADER_BLOCK)` 回退到今天所在月页的月名行顶并 `agendaJumpTargetRef.current = null`（月名行恒存在，offset 不依赖行测量）；600ms 内 items 到位则 effect 随 agendaRows 重跑走正常 header 定位、timer 随 cleanup 取消。修复：原分支 header 缺失时挂起目标永不清除——「今天」pill 与冷启动定位在空今日上双双失效（原注释声称「无今日组回退月名行」但代码无此路径）。
 - `src/app/(tabs)/plan.tsx` 修补 3 —— **「今天」组头恒显示**（用户反馈第二轮）：参考「今天 1」有内容组头的视觉，空今日时也在月名行后合成「今天」组头（key=`header-<todayKey>`、label '今天' 与 domain `dayGroupLabel` today 分支同文案、isToday 高亮/count 0，复用真实组头渲染与 `todayHeaderRef` 精修定位）+ 空态卡挂组头下。`header-<todayKey>` 由此恒存在 ⇒ 今天 pill/冷启动定位与「有内容」走同一条 header 定位路径；600ms 月名行降级（修补 2）退居兜底，仅覆盖 rows 未到位（observer 未推送）窗口。
+- `src/app/(tabs)/plan.tsx` 修补 4 —— **空态卡去按钮 + FAB 长按跳闪电录入**（用户反馈第三轮）：空态卡移除「＋ 快速安排」按钮——右下角 FAB 已是常驻新建入口，卡片仅保留「今日没有安排」文案（AgendaEmptyTodayCard 改无 prop 纯文案卡，emptyTodayButton/emptyTodayButtonText 样式删除）；FAB 长按由 stale Alert「闪电录入 即将上线」（阶段 5b 占位）改为 `openFlashTab` → `router.push('/flash')` 切闪电录入 tab（delayLongPress=400 不变，onPress=openNewItem 仍新建）；renderRow deps 去 openNewItem，Alert 从 react-native import 移除。**§5 原披露的 FAB stale Alert 遗留就此解决**（原计划并入 slice-22，用户提前拍板）。
 - 诊断记录：「今日停 11-14」**不是时区问题**——getDeviceTzid（slice-11 起 expo-localization）无 UTC 伪影，MuMu `persist.sys.timezone=Asia/Shanghai` 正确；根因即修补 1。today.tsx/week.tsx 的挂载固化 viewState 不受影响（独立页每次进入重挂，slice-14 契约原样保留不动）。
 
 ## 4. 踩坑教训
@@ -62,7 +63,7 @@
 ## 5. 遗留披露
 
 - **阶段 3 真机/MuMu 验收已执行（2026-11-15，release APK）**：flash 顶部不遮挡、空今日空态卡+「＋ 快速安排」、「今天」pill 空今日回位、font_scale 1.3 频率/渠道/时区 chips、闪电本地降级解析+落库均实测通过（真机反馈修补两处即出自本轮验收：viewTime 跨午夜滚动、空今日降级定位）。**唯一遗留：webhook 回前台不双发的实机复验留待用户**（webhook 渠道造 once 提醒 → 触发后杀/切后台 → 回前台秒级补发，对照 receiver 日志 C:\Users\Public\webhook-receiver-s20.log 时间戳应只出现一条 POST）。
-- **FAB 长按 stale Alert「闪电录入 即将上线」**（plan.tsx，切片 14 后已过时）不在本切片范围，仍未清理，建议并入 slice-22 闪电录入卡片化。
+- ~~FAB 长按 stale Alert「闪电录入 即将上线」~~ **已解决（修补 4，用户 2026-11-15 拍板）**：FAB 长按改为 `router.push('/flash')` 切闪电录入 tab，不再并入 slice-22。
 - **skipped 语义的边界**：并发持有方投递失败（attempt 'failed'）且 reconcile 游标已推进时，下一轮 reconcile 不再补发（既有「每轮至多一次机会」语义，单测 L919 已覆盖）；渠道级直接重试同一 occurrenceKey 仍可行（WebhookChannel 单测覆盖）。
 - **in-flight 与 attempts 同为进程内存态**：进程死亡即失，at-least-once 边界不变（notifications.md v0.16「attempts 随进程生命周期存在」承诺的实现强化，无契约语义变更，docs/contracts/ 未动）。
 
