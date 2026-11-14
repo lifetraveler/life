@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.22
+版本：v0.23
 
 ## 1. 项目概览
 
@@ -260,17 +260,21 @@ schema 版本 5→6，新增/修改如下：
   （v0.21 注记，切片 21 修补：按钮移除——右下角 FAB 已是常驻新建入口，空态卡仅保留文案提示；FAB 长按跳转闪电录入 tab，短按仍新建条目 /item/new）
 - **网络渠道防重发**：在并发补发和 reconcile 时，必须增加 in-flight 状态防重，避免同一 occurrenceKey 发生双发。
 
-### 7.33 阶段反馈总结文件惯例（v0.22，切片 21 起成文）
-- 每个切片的**每个阶段完成时**，写 `tasks/slice-NN-phaseM-feedback.md` 阶段反馈总结（沿 slice-14 phase1–5 / slice-16 phase1–2 / slice-17 phase1 / slice-21 phase1 惯例；无 fallback 变体命名）。结构：
-  1. 头部：日期、阶段（Phase M / N + 一句话）、分支（基点 main @ hash）、阶段提交（hash + 文件数/增删行 + 一句话）、状态（完成/暂停等待下一阶段 + 遗留项）；
+### 7.33 阶段反馈总结文件惯例（v0.22 成文，v0.23 修订适用时机）
+- **定位**：阶段反馈总结文件（`tasks/slice-NN-phaseM-feedback.md`，沿 slice-14 phase1–5 / slice-16 phase1–2 / slice-17 phase1 / slice-21 phase1 惯例；无 fallback 变体命名）用于**切片不是一口气做完**的场合——在暂停点移交状态，供下一会话/下一阶段接续。按完成节奏三选一：
+  1. 切片**全部阶段一次连续完成** → **不写**阶段反馈文件，成果直接在 closeout 总结（阶段粒度内容由 closeout 交付清单/代码地图承载）；
+  2. **一次连续完成了部分阶段（两个及以上）后暂停** → 写**一份**阶段反馈文件覆盖这批阶段，头部明确记录「完成了哪几个阶段」（如 Phase 2–3 / 共 4），并逐阶段给出提交 hash 与验收结果；
+  3. **单个阶段完成后暂停等待下一阶段** → 按阶段写 phaseM-feedback。
+- 结构（多阶段合并时按阶段分小节，各小节内容对应该阶段）：
+  1. 头部：日期、阶段范围（Phase M[-K] / 共 N + 一句话）、分支（基点 main @ hash）、各阶段提交（hash + 文件数/增删行 + 一句话）、状态（完成/暂停等待下一阶段 + 遗留项）；
   2. 成果定性表：tsc、jest（套件/用例数，含基线对照）、expo-doctor（对照预存基线失败）、真机/模拟器验收、（如已交付）APK 版本号；
   3. 范围落点表：文件 → 修补 → 解决的问题；
   4. 关键设计落点（后续阶段/切片的消费面）；
   5. 真机验收清单 + 装真机核对点（如适用）；
   6. 教训索引（指向 closeout 对应小节，不整段复制）。
-- 反馈文件只总结**该阶段**，不跨阶段；真机反馈修补若发生在阶段之间，在所属 UI/功能阶段的总结里记录演化（如 slice-21-phase1）。
-- 提交纪律：反馈文件必须纳入 git 提交（阶段提交，或收尾时 docs(sNN) 补充提交），不得只留在会话里；切片收尾时在 closeout §0 交付清单引用；收尾前若有阶段未写总结必须补齐。
-- 新增本节规则按 AGENTS 版本号递增惯例处理（本节即 v0.22）。
+- 真机反馈修补若发生在阶段之间，在所属 UI/功能阶段的总结里记录演化（如 slice-21-phase1）。
+- 提交纪律：反馈文件必须纳入 git 提交（阶段提交，或收尾时 docs(sNN) 补充提交），不得只留在会话里；写了的反馈文件在切片收尾时在 closeout §0 交付清单引用；收尾前按适用时机核对——该写的没写要补齐，「全部阶段一口气完成」的确认 closeout 已完整承载阶段粒度内容。
+- 版本：v0.22 成文；v0.23 按 2026-11-15 用户澄清修订适用时机（一口气全完成 → closeout 即可；一次完成多个阶段 → 一份反馈文件记录完成的阶段集合；阶段反馈本质是「未做完切片」的暂停移交）。
 
 ## 8. 当前切片
 tasks/slice-21.md（已完成阶段 1–2、真机反馈修补与 MuMu 验收：真机显示修补与防重发。阶段 1 UI 修补——flash.tsx useSafeAreaInsets 顶垫+底部手势条、渠道/频率/时区 chips 去 flex:1 改自适应宽（ReminderChannelFields/ReminderFormEditor/TzPicker）+ numberOfLines、plan.tsx agenda 视图今天空态卡「今日没有安排」+「＋ 快速安排」（AgendaRowEmptyToday 行插今天月页月名行后，CTA=/item/new）；阶段 2 防重发——NetworkTimerRegistry beginDeliver/endDeliver/isInFlight 原子占位 + BaseNetworkChannel.deliver 首个 await 前 claim/finally 释放 + NetworkDeliverStatus 扩展 'skipped'（不 send、不写 attempts）+ reconcile missed 循环 isInFlight 判重，封闭 slice-20 披露的迟到 timer × reconcile 双 POST 竞态；单测 +8（registry 占位语义/WebhookChannel 并发 skipped/scheduler 端到端 race），tsc 0 错、jest 71 套件/926 用例全过、expo-doctor 2 项预存基线失败无新增。真机反馈修补（plan.tsx 三处）——①viewTime 跨午夜滚动：回 App 前台（AppState active）/回页签（useFocusEffect）滚动 now 到当前时刻，同民用日不重置避免无谓重渲染，anchor 不动（修复 App 进程长存、页面不重挂时 todayKey 停在挂载日，「今天」判定/空态卡/回位全部停滞）；②agenda 定位 effect 补空今日降级：今日组行 600ms 未解析则回退月名行定位并清除目标（原注释声称「无今日组回退月名行」但代码无此路径，「今天」pill 与冷启动定位在空今日上双双失效）；③「今天」组头恒显示（用户第二轮反馈）：空今日时合成「今天」组头（key=header-<todayKey>、count 0、isToday 高亮与精修定位 ref 同真实组头）+ 空态卡挂组头下，header-<todayKey> 恒存在——定位与「有内容」走同一条 header 路径；④空态卡去按钮 + FAB 长按跳闪电录入（用户第三轮反馈）：空态卡移除「＋ 快速安排」按钮（右下角 FAB 已是常驻新建入口）仅留文案「今日没有安排」（§7.32 空态引导条款加 v0.21 注记），FAB 长按由 stale Alert「闪电录入 即将上线」（阶段 5b 占位，slice-21 遗留披露）改为 router.push('/flash') 切闪电录入 tab，短按仍新建 /item/new。MuMu 验收（release APK，2026-11-15）：flash 顶部不遮挡 ✓、空今日「今天 0」合成组头+空态卡 ✓（冷启动与「今天」pill 从 2027年2月回位均落今天组头顶，第二轮验收；第三轮验收：空态卡无按钮仅文案 ✓、长按 FAB 800ms 跳闪电录入页 dump 证实 ✓）、font_scale 1.3 频率/渠道/时区 chips 不折行（「系统通知」不再断行）✓、闪电本地降级解析「明天下午3点」+落库 ✓（测试条目已归档清理）；**webhook 回前台不双发的实机复验留待用户**（对照 receiver 日志时间戳）。设备事实补充：MuMu 时区 Asia/Shanghai 正确，getDeviceTzid（slice-11 改 expo-localization）无 UTC 伪影，「今日停 11-14」根因是 viewTime 固化非时区。closeout 见 tasks/slice-21-closeout.md。下一候选：slice-22 闪电录入卡片化 → slice-23 夜间模式 → slice-24 数据备份 JSON+WebDAV【提案先行】；变更B 网络渠道后台送达为插队候选，确认前不修改 src/notifications/ 实现文件；开工按 §7.1 逐切片确认）
