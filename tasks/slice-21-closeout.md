@@ -8,6 +8,8 @@
   - `1ee0e82` 阶段 2 网络渠道防重发（7 files, +269/-6，notifications 冻结区单独 commit）；
   - 真机反馈修补（plan.tsx 跨午夜滚动 + agenda 空今日降级定位，closeout/AGENTS §8 同笔提交；commit 信息含「切片 21 修补」，可从 git log 追溯）。
   - 真机反馈修补第 2 笔（plan.tsx「今天」组头恒显示——空今日合成组头+空态卡挂组头下；closeout/AGENTS 同步）。
+   - 真机反馈修补第 3 笔（空态卡去「＋ 快速安排」按钮 + FAB 长按跳闪电录入 tab）+ 版本号 0.21.0/versionCode 2（真机 APK，commit 外产物 F:\code\vibecoding\life-0.21.0-release.apk）。
+   - 阶段反馈总结：`tasks/slice-21-phase1-feedback.md`（沿 slice-14/16/17 phase-feedback 惯例）。
 - 无 schema 变更、无新依赖、无 native 配置改动。
 - 真机验收（MuMu，release APK @2026-11-15）：flash 顶部不遮挡 ✓、空今日「今天 0」合成组头+空态卡 ✓（第二轮验收：冷启动与「今天」pill 从 2027年2月回位均落今天组头顶）、font_scale 1.3 频率/渠道/时区 chips 不折行 ✓、闪电本地降级解析+落库 ✓（测试条目已归档清理）；第三轮验收（新 APK）：空态卡无「＋ 快速安排」按钮仅文案 ✓、长按 FAB 800ms 跳闪电录入页（dump 证实「⚡ 闪电添加」+输入框）✓；**webhook 回前台不双发实机复验留待用户**。
 
@@ -16,7 +18,7 @@
 - Windows 原生 bash（无 MSYS）；npm；jest preset=jest-expo。
 - `npx tsc --noEmit` 0 错；`npx jest --runInBand` 71 套件 / **926 用例全过**（基线 918 + 本切片新增 8）。
 - `npx expo-doctor` 16/18，2 项失败与 slice-20 基线完全相同（android/ CNG 同步提示、RN Directory 元数据缺 battery-optimization/widget-snapshot-store/@nozbe/simdjson + watermelondb 新架构未测），无新增问题。
-- git push 仍需代理：`git -c http.proxy=http://172.16.100.254:7893 -c http.version=HTTP/1.1 push`。
+- git push 代理事实更新（2026-11-15）：旧代理 172.16.100.254:7893 已连不上，**直连 `git push` 成功**；代理 flag 留作备用（直连失败时再试 `git -c http.proxy=http://172.16.100.254:7893 -c http.version=HTTP/1.1 push`）。
 - Android 真机构建需 `JAVA_HOME=D:\enviroment\java\jdk\oracle-jdk-17.0.10`。
 - MuMu 联调基建（承接）：webhook 接收端 node 脚本 0.0.0.0:18999 恒回 200（日志 C:\Users\Public\webhook-receiver-s20.log）+ `adb reverse tcp:18999 tcp:18999` + `adb reverse tcp:8081 tcp:8081`；MuMu=Android 15 127.0.0.1:16384 com.vibecoding.life；`adb shell settings put system font_scale 1.3` 模拟大字体。
 
