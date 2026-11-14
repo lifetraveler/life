@@ -138,7 +138,15 @@ interface AgendaRowItem {
   item: ItemWithRelations;
 }
 
-type AgendaRow = AgendaRowHeader | AgendaRowItem;
+/** 切片 21（AGENTS.md §7.32 空态引导）：agenda 月窗口中「今天」组缺席时的空态占位行 */
+interface AgendaRowEmptyToday {
+  kind: 'empty-today';
+  key: string;
+  /** 所属民用日键=todayKey（标签跟随逻辑与 item 行同构，无需特判） */
+  civilKey: string;
+}
+
+type AgendaRow = AgendaRowHeader | AgendaRowItem | AgendaRowEmptyToday;
 
 /** Agenda 卡片（任务卡：左侧 4px 分类色条 + Emoji + 标题 + 时间段；点击进详情） */
 function AgendaItemCard({
@@ -166,6 +174,22 @@ function AgendaItemCard({
         {timeLabel ? <Text style={styles.cardTime}>{timeLabel}</Text> : null}
       </View>
     </Pressable>
+  );
+}
+
+/** 切片 21（AGENTS.md §7.32 空态引导）：agenda「今日没有安排」空态卡，CTA 与 FAB 同路由 /item/new */
+function AgendaEmptyTodayCard({ onPress }: { onPress: () => void }) {
+  return (
+    <View style={styles.emptyTodayCard}>
+      <Text style={styles.emptyTodayText}>今日没有安排</Text>
+      <Pressable
+        style={({ pressed }) => [styles.emptyTodayButton, pressed && styles.iconPressed]}
+        onPress={onPress}
+        accessibilityLabel="快速安排"
+      >
+        <Text style={styles.emptyTodayButtonText}>＋ 快速安排</Text>
+      </Pressable>
+    </View>
   );
 }
 
@@ -523,6 +547,8 @@ export default function PlanScreen() {
       return [];
     }
     const result: AgendaRow[] = [];
+    // 切片 21：今天所在民用月（与 todayKey 同源：viewTime 固化，页面存续期间不漂移）
+    const todayParts = getZonedParts(viewTime.nowMs, viewTime.tzid);
     for (const page of agendaPages) {
       result.push({
         kind: 'header',
@@ -542,6 +568,15 @@ export default function PlanScreen() {
         nowMs: viewTime.nowMs,
         tzid: viewTime.tzid,
       });
+      // 切片 21（AGENTS.md §7.32 空态引导）：今天所在月页若「今天」组缺席
+      // （当天无安排/被筛选过滤），在月名行后插入空态卡，避免「今天」无声消失。
+      if (
+        page.year === todayParts.year &&
+        page.month === todayParts.month &&
+        !groups.some((group) => group.kind === 'day' && group.key === todayKey)
+      ) {
+        result.push({ kind: 'empty-today', key: 'empty-today', civilKey: todayKey });
+      }
       for (const group of groups) {
         result.push({
           kind: 'header',
@@ -957,9 +992,13 @@ export default function PlanScreen() {
           </View>
         );
       }
+      if (row.kind === 'empty-today') {
+        // 切片 21：今日无安排空态卡（CTA → /item/new，与 FAB 同路由）
+        return <AgendaEmptyTodayCard onPress={openNewItem} />;
+      }
       return <AgendaItemCard item={row.item} tzid={viewTime.tzid} onPress={openItemDetail} />;
     },
-    [openItemDetail, viewTime.tzid],
+    [openItemDetail, openNewItem, viewTime.tzid],
   );
 
   return (
@@ -1502,5 +1541,33 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     elevation: 4,
+  },
+  // 切片 21（AGENTS.md §7.32 空态引导）：agenda「今日没有安排」空态卡
+  emptyTodayCard: {
+    marginHorizontal: 12,
+    marginTop: 8,
+    paddingVertical: 28,
+    paddingHorizontal: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#DDDDDD',
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    gap: 14,
+  },
+  emptyTodayText: {
+    fontSize: 14,
+    color: '#666666',
+  },
+  emptyTodayButton: {
+    backgroundColor: '#111111',
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 24,
+  },
+  emptyTodayButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
   },
 });
