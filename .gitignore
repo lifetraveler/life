@@ -24,4 +24,5 @@ build/
 .tmp-accept/
 .tmp-session-log/
 modules/widget-snapshot-store/android/.gradle/
+modules/battery-optimization/android/.gradle/
 .tmp-shots/

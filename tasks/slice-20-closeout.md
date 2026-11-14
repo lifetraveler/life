@@ -51,7 +51,35 @@
 3. 验收 2/3 真机档未执行（用户改用 MuMu）；release APK 交付后可由用户真机日常使用覆盖确认。
 4. expo-doctor 2 项预存警告延续基线，未处理。
 
-## 后续切片候选
-1. **网络渠道后台送达可靠性变更 B（提案重估）**：前台服务 → 原生 AlarmManager 驱动投递或 Headless 唤醒；须携带本 closeout 遗留披露 1/2。
-2. 重复投递去重（in-flight 标记，src/notifications/ 冻结区，随切片 11/21）。
-3. release 签名与 ABI 拆分（目前 debug keystore + universal 103MB，个人使用无碍，正式分发前需自有 keystore）。
+## 后续切片候选（真机反馈排期 v1，2026-11-14 真机实测后追加——用户据此排程）
+
+来源：release APK 真机使用反馈 6 项；参考图（随本提交入库）：tasks/闪电录入界面，侵占提示栏.jpg、tasks/闪电录入对话里的卡片.jpg、tasks/闪电录入卡片点击预览编辑样式参考.jpg、tasks/提醒添加界面，真机高分辨率显示问题.png。顺序用户可调；每切片开工仍按 §7.1 立项确认。
+
+### slice-21 真机显示修补（小，3 项独立修复，建议最先）
+1. **闪电录入页顶部侵占系统状态栏**：src/app/(tabs)/flash.tsx 无 safe-area 处理（已证实）→ 补 useSafeAreaInsets().top 顶垫，对齐「计划」页固定显示范围；复核键盘避让与底部 insets。
+2. **提醒表单渠道 chips 高分屏截断**（「系统通/知」「Webh/ook」「Appris/e」折行）：src/ui/ReminderFormEditor.tsx 渠道 chips 复用 segment 的 flex:1 被挤 → 改 auto 宽 + minWidth + numberOfLines=1，行保留 flexWrap；顺带查频率/时区行同风险。
+3. **日程（Agenda）视图当天无数据**：仍定位到今天 + 空态卡「今日没有安排」+「快速安排」CTA（deep link life://quick-add，§7.18 落点约定不变）。
+验收：tsc/jest 全过 + MuMu（`adb shell settings put system font_scale 1.3` 模拟大字体）+ release APK 真机复测。
+
+### slice-22 闪电录入卡片化（中；立项先确认交互口径）
+- 成功反馈由文本「已添加xxx项目」改为会话流卡片（新消息类型 {kind:'card', itemId, 快照}；分类 chip+emoji / 标题 / 日期行 / 提醒行，样式对齐参考图 1）。
+- **卡片点击去向 = 口径决策点**：MVP 跳 item/[id] 详情页（编辑能力现成）vs 参考图 2 页内全量预览+快捷 chips（自建预览面板，体量中大）。
+- MVP 至少含卡片「推迟 15 分钟 / 1 小时」chips（仅含时间项显示；偏移落库 + 行内刷新 + 一句话反馈）；会话内纠正机制保留（§7.25）。
+- 不碰冻结区、无新依赖。
+
+### slice-23 夜间模式（中大）
+- 新增 src/ui/theme.ts light/dark token 集（背景/卡片/边框/主次文字/主色/危险色），useColorScheme() 驱动，StatusBar 跟随；覆盖 4 Tab / 详情 / 新建 / 闪电 / 设置页群 / 提醒表单 / 导入导出——散落十六进制色收敛为 token 是工作主体。
+- 小组件暗色为 stretch 可延后（react-native-android-widget 渲染侧，Android 12+）。
+- 不碰冻结区、无新依赖；验收 `adb shell cmd uimode night yes/no` 逐页核对 + 真机复测。
+
+### slice-24 数据备份 JSON 导出 + WebDAV（大；变更提案先行 §7.5）
+- 导出：全量 JSON（items/categories/tags/reminders/channel_presets/app_settings + schema 版本 + 时间戳），复用切片 8 expo-file-system + expo-sharing 基础设施。
+- 导入：结构校验（手写守卫，§7.24 纪律）→ 预览页（§7.28 惯例）→ 替换语义提案定夺（整库事务替换 vs 按 id upsert）；导入前本地快照兜底。
+- WebDAV：推荐自写 fetch 客户端（PROPFIND/GET/PUT/MKCOL 零新依赖，§7.3）；备选 webdav npm 包须提案陈述。凭据存 expo-secure-store（§7.24）。
+- UI：设置页「备份与恢复」入口。提案要素：影响范围 / 回滚方案 / 失败中断语义。
+
+### 变更B 网络渠道后台送达（插队候选，启动时机用户定）
+- 提案重估：前台服务救不了 RN JS 定时器（遗留披露 1）→ 原生 AlarmManager 驱动投递 vs Headless 唤醒两路线对比；重复投递 in-flight 修复（遗留披露 2）随本变更一并处理（src/notifications/ 冻结区需授权）。
+
+### 其他（延续）
+- release 签名与 ABI 拆分：现为 debug keystore + universal 103MB，正式分发前需自有 keystore。

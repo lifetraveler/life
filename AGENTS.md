@@ -255,7 +255,7 @@ schema 版本 5→6，新增/修改如下：
 
 
 ## 8. 当前切片
-tasks/slice-20.md（已完成阶段 1–3 与 MuMu 联调：网络渠道后台可靠性变更 A——电池优化白名单。manifest REQUEST_IGNORE_BATTERY_OPTIMIZATIONS + 本地模块 modules/battery-optimization（检测/官方弹窗/降级设置页）+ src/system/batteryOptimization.ts 三分支降级编排 + 设置页「后台运行保障」（状态卡 + 弹窗申请 + 1s 轮询刷新）+ 我的 Tab 入口；MuMu 实测确认白名单价值边界 = 进程存活 + 回前台秒级补发，「后台即时送达」受缓存冻结器与 RN host-pause 定时器停摆双重平台限制（验收 4 按 A 口径修订，用户确认）；🐛 回前台迟到补发 × reconcile 并发重复投递缺陷已披露（src/notifications/ 冻结区，留切片 11/21）；release APK 已交付并烟测（用户要求，commit 外产物）；closeout 见 tasks/slice-20-closeout.md。下一候选：真机反馈路线图 docs/roadmap.md v1（slice-21 真机显示修补：flash 顶部 safe-area/渠道 chips 高分屏截断/日程空态定位今天 → slice-22 闪电录入卡片化 → slice-23 夜间模式 → slice-24 数据备份 JSON+WebDAV【变更提案先行】；变更B 网络渠道后台送达为插队候选，提案须携带 closeout 遗留披露 1/2，确认前不修改 src/notifications/ 实现文件；开工仍按 §7.1 逐切片确认）
+tasks/slice-20.md（已完成阶段 1–3 与 MuMu 联调：网络渠道后台可靠性变更 A——电池优化白名单。manifest REQUEST_IGNORE_BATTERY_OPTIMIZATIONS + 本地模块 modules/battery-optimization（检测/官方弹窗/降级设置页）+ src/system/batteryOptimization.ts 三分支降级编排 + 设置页「后台运行保障」（状态卡 + 弹窗申请 + 1s 轮询刷新）+ 我的 Tab 入口；MuMu 实测确认白名单价值边界 = 进程存活 + 回前台秒级补发，「后台即时送达」受缓存冻结器与 RN host-pause 定时器停摆双重平台限制（验收 4 按 A 口径修订，用户确认）；🐛 回前台迟到补发 × reconcile 并发重复投递缺陷已披露（src/notifications/ 冻结区，留切片 11/21）；release APK 已交付并烟测（用户要求，commit 外产物）；closeout 见 tasks/slice-20-closeout.md。下一候选：真机反馈排期 v1 见 tasks/slice-20-closeout.md「后续切片候选（真机反馈排期 v1）」（slice-21 真机显示修补 → slice-22 闪电录入卡片化 → slice-23 夜间模式 → slice-24 数据备份 JSON+WebDAV【提案先行】；变更B 网络渠道后台送达为插队候选，确认前不修改 src/notifications/ 实现文件；开工按 §7.1 逐切片确认）
 
 
 
