@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.20
+版本：v0.21
 
 ## 1. 项目概览
 
@@ -253,9 +253,15 @@ schema 版本 5→6，新增/修改如下：
 - **UI 引导**：在“我的 -> 设置”页面增加“后台运行权限”入口，展示当前白名单状态，并提供一键跳转系统设置或直接唤起系统弹窗的能力。
 - **约束**：本切片仅解决“系统由于省电策略杀进程”的问题，不引入 WorkManager 或前台服务（Foreground Service），不改变“App 进程存活则保证送达”的核心边界。
 
+### 7.32 界面体验修补（v0.21）
+- **Safe Area**：所有通过 Tab 挂载的页面（特别是 `flash.tsx` 聊天页），顶部必须使用 `useSafeAreaInsets()` 增加 padding，避免被系统状态栏遮挡。
+- **高分屏响应**：包含横向多选项的 Chip 容器（如提醒渠道），必须使用 `flexWrap` 和自适应宽度，禁止强行使用 `flex: 1` 导致文字折行或截断。
+- **空态引导**：日程视图（Agenda）在“今天”无数据时，必须展示空态卡与“快速安排”按钮，并打通 deep link 跳转。
+  （v0.21 注记，切片 21 修补：按钮移除——右下角 FAB 已是常驻新建入口，空态卡仅保留文案提示；FAB 长按跳转闪电录入 tab，短按仍新建条目 /item/new）
+- **网络渠道防重发**：在并发补发和 reconcile 时，必须增加 in-flight 状态防重，避免同一 occurrenceKey 发生双发。
 
 ## 8. 当前切片
-tasks/slice-20.md（已完成阶段 1–3 与 MuMu 联调：网络渠道后台可靠性变更 A——电池优化白名单。manifest REQUEST_IGNORE_BATTERY_OPTIMIZATIONS + 本地模块 modules/battery-optimization（检测/官方弹窗/降级设置页）+ src/system/batteryOptimization.ts 三分支降级编排 + 设置页「后台运行保障」（状态卡 + 弹窗申请 + 1s 轮询刷新）+ 我的 Tab 入口；MuMu 实测确认白名单价值边界 = 进程存活 + 回前台秒级补发，「后台即时送达」受缓存冻结器与 RN host-pause 定时器停摆双重平台限制（验收 4 按 A 口径修订，用户确认）；🐛 回前台迟到补发 × reconcile 并发重复投递缺陷已披露（src/notifications/ 冻结区，留切片 11/21）；release APK 已交付并烟测（用户要求，commit 外产物）；closeout 见 tasks/slice-20-closeout.md。下一候选：真机反馈排期 v1 见 tasks/slice-20-closeout.md「后续切片候选（真机反馈排期 v1）」（slice-21 真机显示修补 → slice-22 闪电录入卡片化 → slice-23 夜间模式 → slice-24 数据备份 JSON+WebDAV【提案先行】；变更B 网络渠道后台送达为插队候选，确认前不修改 src/notifications/ 实现文件；开工按 §7.1 逐切片确认）
+tasks/slice-21.md（已完成阶段 1–2、真机反馈修补与 MuMu 验收：真机显示修补与防重发。阶段 1 UI 修补——flash.tsx useSafeAreaInsets 顶垫+底部手势条、渠道/频率/时区 chips 去 flex:1 改自适应宽（ReminderChannelFields/ReminderFormEditor/TzPicker）+ numberOfLines、plan.tsx agenda 视图今天空态卡「今日没有安排」+「＋ 快速安排」（AgendaRowEmptyToday 行插今天月页月名行后，CTA=/item/new）；阶段 2 防重发——NetworkTimerRegistry beginDeliver/endDeliver/isInFlight 原子占位 + BaseNetworkChannel.deliver 首个 await 前 claim/finally 释放 + NetworkDeliverStatus 扩展 'skipped'（不 send、不写 attempts）+ reconcile missed 循环 isInFlight 判重，封闭 slice-20 披露的迟到 timer × reconcile 双 POST 竞态；单测 +8（registry 占位语义/WebhookChannel 并发 skipped/scheduler 端到端 race），tsc 0 错、jest 71 套件/926 用例全过、expo-doctor 2 项预存基线失败无新增。真机反馈修补（plan.tsx 三处）——①viewTime 跨午夜滚动：回 App 前台（AppState active）/回页签（useFocusEffect）滚动 now 到当前时刻，同民用日不重置避免无谓重渲染，anchor 不动（修复 App 进程长存、页面不重挂时 todayKey 停在挂载日，「今天」判定/空态卡/回位全部停滞）；②agenda 定位 effect 补空今日降级：今日组行 600ms 未解析则回退月名行定位并清除目标（原注释声称「无今日组回退月名行」但代码无此路径，「今天」pill 与冷启动定位在空今日上双双失效）；③「今天」组头恒显示（用户第二轮反馈）：空今日时合成「今天」组头（key=header-<todayKey>、count 0、isToday 高亮与精修定位 ref 同真实组头）+ 空态卡挂组头下，header-<todayKey> 恒存在——定位与「有内容」走同一条 header 路径；④空态卡去按钮 + FAB 长按跳闪电录入（用户第三轮反馈）：空态卡移除「＋ 快速安排」按钮（右下角 FAB 已是常驻新建入口）仅留文案「今日没有安排」（§7.32 空态引导条款加 v0.21 注记），FAB 长按由 stale Alert「闪电录入 即将上线」（阶段 5b 占位，slice-21 遗留披露）改为 router.push('/flash') 切闪电录入 tab，短按仍新建 /item/new。MuMu 验收（release APK，2026-11-15）：flash 顶部不遮挡 ✓、空今日「今天 0」合成组头+空态卡 ✓（冷启动与「今天」pill 从 2027年2月回位均落今天组头顶，第二轮验收；第三轮验收：空态卡无按钮仅文案 ✓、长按 FAB 800ms 跳闪电录入页 dump 证实 ✓）、font_scale 1.3 频率/渠道/时区 chips 不折行（「系统通知」不再断行）✓、闪电本地降级解析「明天下午3点」+落库 ✓（测试条目已归档清理）；**webhook 回前台不双发的实机复验留待用户**（对照 receiver 日志时间戳）。设备事实补充：MuMu 时区 Asia/Shanghai 正确，getDeviceTzid（slice-11 改 expo-localization）无 UTC 伪影，「今日停 11-14」根因是 viewTime 固化非时区。closeout 见 tasks/slice-21-closeout.md。下一候选：slice-22 闪电录入卡片化 → slice-23 夜间模式 → slice-24 数据备份 JSON+WebDAV【提案先行】；变更B 网络渠道后台送达为插队候选，确认前不修改 src/notifications/ 实现文件；开工按 §7.1 逐切片确认）
 
 
 

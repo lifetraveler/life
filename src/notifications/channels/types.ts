@@ -51,10 +51,13 @@ export function scopeReminderToChannel(
 }
 
 /**
- * 渠道投递结果：'ok' = 远端确认接收（2xx），'failed' = 投递失败。
- * 失败详情由实现以 console.warn 记录，deliver 本身绝不抛出（吞错返回）。
+ * 渠道投递结果：'ok' = 远端确认接收（2xx），'failed' = 投递失败，
+ * 'skipped' = 切片 21 防重发：同（渠道 × occurrenceKey）投递已在进行中
+ * （registry.beginDeliver 拒绝），本次调用放弃——不发起 send、不写 attempts
+ * （结果由并发持有方记录）。失败详情由实现以 console.warn 记录，deliver
+ * 本身绝不抛出（吞错返回）。
  */
-export type NetworkDeliverStatus = 'ok' | 'failed';
+export type NetworkDeliverStatus = 'ok' | 'failed' | 'skipped';
 
 /**
  * 提醒渠道统一接口（提案 §2.4 确认稿）。

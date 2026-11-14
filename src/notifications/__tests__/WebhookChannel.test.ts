@@ -280,3 +280,59 @@ describe('WebhookChannel 载荷适配（切片 17 阶段 1，AGENTS.md §7.27）
     expect(modernUrl).toBe('https://hook.example/modern');
   });
 });
+
+describe('WebhookChannel 并发防重发（切片 21，AGENTS.md §7.32）', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    registry = new NetworkTimerRegistry({ now: () => TEST_NOW, onFire: () => undefined });
+  });
+
+  afterEach(() => {
+    registry.clearTimers();
+  });
+
+  it('deliver 并发：第二路调用返回 skipped，不重复 send、不写 attempts', async () => {
+    const repository = stubRepositoryWith(testItem('iW', '标题丙'));
+    const channel = new WebhookChannel(makeDeps(repository));
+    const reminder = testReminder('rW', 'iW', 'webhook', 'https://hook.example/race');
+    // deferred fetch：首路投递挂起，制造「投递仍在进行」窗口。
+    let resolveFetch!: (response: Response) => void;
+    fetchMock.mockImplementation(
+      () => new Promise<Response>((resolve) => { resolveFetch = resolve; }),
+    );
+
+    // 首路 deliver 不等待：推进微任务直到 fetch 已发起（in-flight 占位已生效）。
+    const first = channel.deliver(reminder, 'once:rW:race', TEST_NOW);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(registry.isInFlight('webhook', 'once:rW:race')).toBe(true);
+
+    // 第二路并发 deliver：beginDeliver 拒绝 → skipped；不 send、不写 attempts。
+    const second = await channel.deliver(reminder, 'once:rW:race', TEST_NOW);
+    expect(second).toBe('skipped');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(registry.attemptStatus('webhook', 'once:rW:race')).toBeNull();
+
+    // 首路完成：attempt 由持有方落账，占位释放。
+    resolveFetch({ ok: true, status: 200 } as Response);
+    expect(await first).toBe('ok');
+    expect(registry.attemptStatus('webhook', 'once:rW:race')).toBe('ok');
+    expect(registry.isInFlight('webhook', 'once:rW:race')).toBe(false);
+  });
+
+  it('deliver 失败路径经 finally 释放占位：同 occurrenceKey 后续可重试', async () => {
+    const repository = stubRepositoryWith(testItem('iW', '标题丙'));
+    const channel = new WebhookChannel(makeDeps(repository));
+    const reminder = testReminder('rW', 'iW', 'webhook', 'https://hook.example/retry');
+    fetchMock.mockRejectedValueOnce(new TypeError('network down'));
+
+    expect(await channel.deliver(reminder, 'once:rW:retry', TEST_NOW)).toBe('failed');
+    expect(registry.isInFlight('webhook', 'once:rW:retry')).toBe(false);
+    expect(registry.attemptStatus('webhook', 'once:rW:retry')).toBe('failed');
+
+    // 占位已释放：重试同一 occurrenceKey 允许再次投递（at-least-once 边界不变）。
+    fetchMock.mockResolvedValue({ ok: true, status: 200 } as Response);
+    expect(await channel.deliver(reminder, 'once:rW:retry', TEST_NOW)).toBe('ok');
+    expect(registry.attemptStatus('webhook', 'once:rW:retry')).toBe('ok');
+  });
+});

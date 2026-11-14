@@ -118,7 +118,10 @@ export default function ReminderChannelFields({
                 onPatch({ channels: toggleReminderChannel(values.channels, option.value), channelPresetId: null })
               }
             >
-              <Text style={[styles.segmentText, selected && styles.segmentTextSelected]}>
+              <Text
+                style={[styles.segmentText, selected && styles.segmentTextSelected]}
+                numberOfLines={1}
+              >
                 {option.label}
               </Text>
             </Pressable>
@@ -189,11 +192,16 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   segment: {
-    flex: 1,
+    // 切片 21（AGENTS.md §7.32）：自适应宽度，禁止 flex:1 导致大字体下折行/截断；
+    // 行容器 fieldRow 已有 flexWrap 兜底换行。
+    flexGrow: 0,
+    flexShrink: 1,
+    minWidth: 64,
     borderWidth: 1,
     borderColor: '#d0d0d0',
     borderRadius: 6,
     paddingVertical: 8,
+    paddingHorizontal: 12,
     alignItems: 'center',
     backgroundColor: '#fff',
   },

@@ -7,6 +7,9 @@
  * - deliver 绝不抛出：item 失活、配置缺失、网络失败、非 2xx 一律记 'failed'
  *   并 console.warn，让 reconcile 的补发机会继续可用。
  * - attempts 记录（recordAttempt）用于 reconcile 抑制已成功 occurrence 的重复补发。
+ * - 切片 21（AGENTS.md §7.32）：deliver 入口以 registry.beginDeliver 原子占位防
+ *   并发双发（迟到 timer × reconcile missed 竞态窗口），finally 释放；后到方
+ *   返回 'skipped'。
  */
 import { describeError } from './shared';
 import type { Item } from '../../domain/item';
@@ -45,12 +48,25 @@ export abstract class BaseNetworkChannel implements NetworkReminderChannel {
     this.deps.registry.cancelByReminder(reminderId);
   }
 
-  /** 到点投递（定时器触发与 reconcile missed 补发共用入口）；吞错返回状态。 */
+  /**
+   * 到点投递（定时器触发与 reconcile missed 补发共用入口）；吞错返回状态。
+   * 切片 21 防重发（AGENTS.md §7.32）：进入方法体、任何 await 之前先向 registry
+   * 原子占位（beginDeliver）——迟到 timer 与 reconcile missed 并发时，后到方拿不到
+   * 占位即返回 'skipped'，不重复 send、不写 attempts（结果由并发持有方记录）。
+   * 占位生命周期 = 本次 deliver 调用：finally 中无条件释放，抛错路径也保证
+   * 后续 reconcile 可重试（attempts 已记 'failed'，at-least-once 语义不变）。
+   */
   async deliver(
     reminder: ScopedReminder,
     occurrenceKey: string,
     fireAt: number,
   ): Promise<NetworkDeliverStatus> {
+    if (!this.deps.registry.beginDeliver(this.channel, occurrenceKey)) {
+      console.warn(
+        `[ReminderChannel:${this.channel}] deliver skipped for ${occurrenceKey}: already in-flight`,
+      );
+      return 'skipped';
+    }
     try {
       const item = await this.deps.repository.getItem(reminder.itemId);
       if (!item || item.status !== 'active') {
@@ -73,6 +89,8 @@ export abstract class BaseNetworkChannel implements NetworkReminderChannel {
       );
       this.deps.registry.recordAttempt(this.channel, occurrenceKey, 'failed');
       return 'failed';
+    } finally {
+      this.deps.registry.endDeliver(this.channel, occurrenceKey);
     }
   }
 

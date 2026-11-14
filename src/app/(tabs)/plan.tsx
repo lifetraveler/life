@@ -45,8 +45,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert,
   Animated,
+  AppState,
   Easing,
   FlatList,
   PanResponder,
@@ -62,7 +62,7 @@ import type {
   NativeSyntheticEvent,
   ViewToken,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
 import { itemRepository } from '../../data';
@@ -138,7 +138,15 @@ interface AgendaRowItem {
   item: ItemWithRelations;
 }
 
-type AgendaRow = AgendaRowHeader | AgendaRowItem;
+/** 切片 21（AGENTS.md §7.32 空态引导）：agenda 月窗口中「今天」组缺席时的空态占位行（挂合成「今天」组头下） */
+interface AgendaRowEmptyToday {
+  kind: 'empty-today';
+  key: string;
+  /** 所属民用日键=todayKey（标签跟随逻辑与 item 行同构，无需特判） */
+  civilKey: string;
+}
+
+type AgendaRow = AgendaRowHeader | AgendaRowItem | AgendaRowEmptyToday;
 
 /** Agenda 卡片（任务卡：左侧 4px 分类色条 + Emoji + 标题 + 时间段；点击进详情） */
 function AgendaItemCard({
@@ -169,6 +177,17 @@ function AgendaItemCard({
   );
 }
 
+/** 切片 21（AGENTS.md §7.32 空态引导）：agenda「今日没有安排」空态卡。
+ * v0.21 注记（用户 2026-11-15 拍板）：快速安排按钮移除——右下角 FAB 已是常驻新建入口
+ * （短按 → /item/new、长按 → 闪电录入 tab），卡片仅保留文案提示。 */
+function AgendaEmptyTodayCard() {
+  return (
+    <View style={styles.emptyTodayCard}>
+      <Text style={styles.emptyTodayText}>今日没有安排</Text>
+    </View>
+  );
+}
+
 export default function PlanScreen() {
   const router = useRouter();
   const { height: windowHeight } = useWindowDimensions();
@@ -192,11 +211,42 @@ export default function PlanScreen() {
     return { year: parts.year, month: parts.month };
   });
 
-  // 视图时间坐标：挂载时固化（today.tsx 同款模式）——页面存续期间「今天」不漂移。
-  const [viewTime] = useState(() => {
+  // 视图时间坐标：挂载时固化（today.tsx 同款模式）；活跃使用期间不漂移。
+  // 切片 21 真机反馈：App 进程长存且本页不重挂时，原「永久固化」会让 todayKey
+  // 停在挂载那天的民用日（回前台已过午夜，「今天」仍指昨天）——回 App 前台或
+  // 切回本页签时滚动到当前时刻；同一民用日不重置，避免无谓重渲染。
+  const [viewTime, setViewTime] = useState(() => {
     const tzid = getDeviceTzid();
     return { tzid, nowMs: Date.now() };
   });
+
+  /** 滚动视图时间坐标：仅民用日（或时区）变化才 setState；anchor 不动。 */
+  const rollViewTimeToNow = useCallback((): void => {
+    setViewTime((prev) => {
+      const tzid = getDeviceTzid();
+      const nowMs = Date.now();
+      if (
+        prev.tzid === tzid &&
+        formatLocalDate(getZonedParts(prev.nowMs, prev.tzid)) ===
+          formatLocalDate(getZonedParts(nowMs, tzid))
+      ) {
+        return prev;
+      }
+      return { tzid, nowMs };
+    });
+  }, []);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (status) => {
+      if (status === 'active') {
+        rollViewTimeToNow();
+      }
+    });
+    return () => subscription.remove();
+  }, [rollViewTimeToNow]);
+
+  // 应用活跃期间跨午夜后切回本页签，也要把「今天」滚过来
+  useFocusEffect(rollViewTimeToNow);
 
   /** 年月标签（阶段 5c 任务 0；阶段 5e 前移供月窗口行复用）：今年只显「11月」，非今年显「2027年1月」。 */
   const monthLabelOf = useCallback(
@@ -208,7 +258,8 @@ export default function PlanScreen() {
   );
 
   // 阶段 5b 锚点：week/day 用 anchorMs（民用日锚点），month 用 anchorMonth（民用月锚点）。
-  // 「今天」pill / 周条横滑 / 顶栏 ‹ › 都只改锚点；viewTime 保持固化供回位与「今天」判定。
+  // 「今天」pill / 周条横滑 / 顶栏 ‹ › 都只改锚点；viewTime 在活跃使用期间保持固化
+  // 供回位与「今天」判定（仅回前台/回页签跨午夜时滚动，见上方 rollViewTimeToNow）。
   const [anchorMs, setAnchorMs] = useState(() => viewTime.nowMs);
   const [anchorMonth, setAnchorMonth] = useState<CivilMonth>(() => {
     const parts = getZonedParts(viewTime.nowMs, viewTime.tzid);
@@ -365,10 +416,10 @@ export default function PlanScreen() {
     router.push('/item/new');
   }, [router]);
 
-  /** FAB 长按：闪电录入占位（切片 15 上线前的提示，阶段 5b 拍板）。 */
-  const showFlashPlaceholder = useCallback((): void => {
-    Alert.alert('闪电录入', '即将上线');
-  }, []);
+  /** FAB 长按：切到闪电录入 tab（切片 15 已上线；用户 2026-11-15 拍板，替换阶段 5b 占位提示）。 */
+  const openFlashTab = useCallback((): void => {
+    router.push('/flash');
+  }, [router]);
 
   const openItemDetail = useCallback(
     (itemId: string): void => {
@@ -523,6 +574,8 @@ export default function PlanScreen() {
       return [];
     }
     const result: AgendaRow[] = [];
+    // 切片 21：今天所在民用月（与 todayKey 同源：viewTime 固化，页面存续期间不漂移）
+    const todayParts = getZonedParts(viewTime.nowMs, viewTime.tzid);
     for (const page of agendaPages) {
       result.push({
         kind: 'header',
@@ -542,6 +595,25 @@ export default function PlanScreen() {
         nowMs: viewTime.nowMs,
         tzid: viewTime.tzid,
       });
+      // 切片 21（AGENTS.md §7.32 空态引导）：「今天」组头恒显示——今天所在月页
+      // 若「今天」组缺席（当天无安排/被筛选过滤），合成今天组头（count 0，isToday
+      // 高亮与精修定位 ref 同真实组头）+ 空态卡挂其下。header-<todayKey> 由此
+      // 恒存在，今天 pill/冷启动定位与「有内容」走同一条路径（真机反馈：定位
+      // 逻辑一致）。label '今天' 与 domain dayGroupLabel 的 today 分支文案一致。
+      if (
+        page.year === todayParts.year &&
+        page.month === todayParts.month &&
+        !groups.some((group) => group.kind === 'day' && group.key === todayKey)
+      ) {
+        result.push({
+          kind: 'header',
+          key: `header-${todayKey}`,
+          label: '今天',
+          isToday: true,
+          count: 0,
+        });
+        result.push({ kind: 'empty-today', key: 'empty-today', civilKey: todayKey });
+      }
       for (const group of groups) {
         result.push({
           kind: 'header',
@@ -593,7 +665,9 @@ export default function PlanScreen() {
       return { year: Number(yearPart), month: Number(monthPart) };
     };
     if (target.kind === 'day') {
-      // 今日组头定位（5f）：滚到 header-<todayKey> 行；无今日组（当天无安排）回退月名行。
+      // 今日组头定位（5f）：滚到 header-<todayKey> 行。切片 21 修补 2 起「今天」
+      // 组头恒显示（空今日合成组头），目标行最终必存在；下方 600ms 降级仅覆盖
+      // rows 未到位的窗口（observer 未推送）。
       // 定位目标统一降级为月定位（今天组行用 scrollToIndex，Fabric 首帧常未测量，
       // 失败走 FlatList onScrollToIndexFailed 的 400ms 重试兜底）。
       const rowIndex = agendaRows.findIndex(
@@ -629,9 +703,29 @@ export default function PlanScreen() {
         }, 120);
         return () => clearTimeout(timer);
       }
-      // 首帧 agendaRows 可能为空（observer 未推送）——不清目标，等 rows 到位后本
-      // effect 随 agendaRows 依赖重跑再定位（冷启动实测必须保留）。
-      return undefined;
+      // 首帧 agendaRows 可能尚未含今日组（observer 未推送）——不清目标，等 rows
+      // 到位后本 effect 随 agendaRows 依赖重跑再定位（冷启动实测必须保留）。
+      // 切片 21 真机反馈：600ms 内 items 到位则本 effect 先重跑走上方今日组定位
+      // （timer 随 cleanup 取消）；仍未解析则降级为月名行定位并清除目标。正常路径
+      // 下「今天」组头恒存在（空今日合成），此降级只兜 rows 迟到的极端窗口。
+      // 月名行恒存在于 agendaRows（4 页固定追加），offset 不依赖行测量。
+      const timer = setTimeout(() => {
+        if (agendaJumpTargetRef.current !== target) {
+          return;
+        }
+        const month = parseMonth(target.civilKey);
+        const index = agendaPages.findIndex(
+          (page) => page.year === month.year && page.month === month.month,
+        );
+        if (index >= 0) {
+          listRef.current?.scrollToOffset({
+            offset: index * AGENDA_MONTH_HEADER_BLOCK,
+            animated: false,
+          });
+        }
+        agendaJumpTargetRef.current = null;
+      }, 600);
+      return () => clearTimeout(timer);
     }
     // 走到这里 target.kind 必为 'month'（'day' 分支已全部 return）
     const month: CivilMonth = target.month;
@@ -957,6 +1051,10 @@ export default function PlanScreen() {
           </View>
         );
       }
+      if (row.kind === 'empty-today') {
+        // 切片 21：今日无安排空态卡（v0.21 注记：按钮移除，仅文案提示）
+        return <AgendaEmptyTodayCard />;
+      }
       return <AgendaItemCard item={row.item} tzid={viewTime.tzid} onPress={openItemDetail} />;
     },
     [openItemDetail, viewTime.tzid],
@@ -1203,11 +1301,11 @@ export default function PlanScreen() {
         />
       )}
 
-      {/* FAB：新建条目 → 全屏新建页（阶段 5）；长按=闪电录入占位提示（切片 15 上线，阶段 5b） */}
+      {/* FAB：短按新建条目 → 全屏新建页（阶段 5）；长按=切闪电录入 tab（用户 2026-11-15 拍板，替换占位提示） */}
       <Pressable
         style={styles.fab}
         onPress={openNewItem}
-        onLongPress={showFlashPlaceholder}
+        onLongPress={openFlashTab}
         delayLongPress={400}
         hitSlop={4}
       >
@@ -1502,5 +1600,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     elevation: 4,
+  },
+  // 切片 21（AGENTS.md §7.32 空态引导）：agenda「今日没有安排」空态卡
+  emptyTodayCard: {
+    marginHorizontal: 12,
+    marginTop: 8,
+    paddingVertical: 28,
+    paddingHorizontal: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#DDDDDD',
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+  },
+  emptyTodayText: {
+    fontSize: 14,
+    color: '#666666',
   },
 });

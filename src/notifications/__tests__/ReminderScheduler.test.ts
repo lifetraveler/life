@@ -916,6 +916,52 @@ describe('WatermelonReminderScheduler（mock expo-notifications）', () => {
       expect(repository.firedMarks).toEqual([{ id: 'rW', occurrenceKey: key }]);
     });
 
+    it('切片 21 防重发：迟到 timer 投递进行中（in-flight），并发 reconcile 不对同一 occurrence 双发', async () => {
+      jest.useFakeTimers();
+      const fireAt = Date.UTC(2025, 5, 15, 9, 0);
+      const key = `once:rW:${fireAt}`;
+      repository.items.set('iW', activeItem('iW', '标题丙'));
+      repository.reminders.set(
+        'rW',
+        onceReminder('rW', 'iW', { year: 2025, month: 6, day: 15, hour: 9, minute: 0 }, 'webhook', 'https://hook.example/race'),
+      );
+      // deferred fetch：手动控制首路投递的完成时机，制造「投递仍在进行」窗口。
+      // （in-flight 占位与 attempts 落账细节由 WebhookChannel/networkTimers 单测覆盖，
+      //  此处只断言端到端可观察行为：双发 = fetch 被调两次。）
+      let resolveFetch!: (response: Response) => void;
+      fetchMock.mockImplementation(
+        () => new Promise<Response>((resolve) => { resolveFetch = resolve; }),
+      );
+      const scheduler = makeChannelScheduler(repository);
+
+      // 1. 挂载未来 timer（30 天窗口内）。
+      await scheduler.scheduleForReminder('rW');
+      expect(scheduler.getNetworkArmedKeys()).toEqual([networkTimerKey('webhook', key)]);
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      // 2. 时钟越过 fireAt：迟到 timer 醒来，fetch 挂起 → in-flight 窗口开启。
+      nowMs = fireAt;
+      jest.advanceTimersByTime(fireAt - FIXED_NOW);
+      await flushAsync();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      // 3. 并发 reconcile：该 occurrence 已 missed，但投递仍在进行 → 跳过不双发
+      //    （旧实现此处会再次 deliver，造成同一 occurrenceKey 双 POST）。
+      const result = await scheduler.reconcile();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(result.missed.map((o) => o.occurrenceKey)).toEqual([key]);
+      expect(repository.firedMarks).toEqual([{ id: 'rW', occurrenceKey: key }]);
+
+      // 4. 迟到 timer 的投递完成（attempt 'ok' 落账、占位释放）。
+      resolveFetch({ ok: true, status: 200 } as Response);
+      await flushAsync();
+
+      // 5. 下一轮 reconcile：游标已推进 + attempt 'ok'，不再补发。
+      const second = await scheduler.reconcile();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(second.missed).toEqual([]);
+    });
+
     it('补发失败（非 2xx）后游标仍推进：下一轮 reconcile 不再补发（每轮至多一次机会）', async () => {
       const fireAt = Date.UTC(2025, 5, 9, 9, 0);
       repository.items.set('iW', activeItem('iW', '标题丙'));

@@ -163,7 +163,10 @@ export default function ReminderForm({
               style={[styles.segment, selected && styles.segmentSelected]}
               onPress={() => patch({ frequency: option.value })}
             >
-              <Text style={[styles.segmentText, selected && styles.segmentTextSelected]}>
+              <Text
+                style={[styles.segmentText, selected && styles.segmentTextSelected]}
+                numberOfLines={1}
+              >
                 {option.label}
               </Text>
             </Pressable>
@@ -305,11 +308,15 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   segment: {
-    flex: 1,
+    // 切片 21（AGENTS.md §7.32）：与渠道 chips 统一自适应宽度，行容器已有 flexWrap。
+    flexGrow: 0,
+    flexShrink: 1,
+    minWidth: 64,
     borderWidth: 1,
     borderColor: '#d0d0d0',
     borderRadius: 6,
     paddingVertical: 8,
+    paddingHorizontal: 12,
     alignItems: 'center',
     backgroundColor: '#fff',
   },

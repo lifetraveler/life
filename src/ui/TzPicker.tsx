@@ -25,7 +25,10 @@ export default function TzPicker({ value, onChange }: TzPickerProps) {
               style={[styles.option, selected && styles.optionSelected]}
               onPress={() => onChange(option.value)}
             >
-              <Text style={[styles.optionText, selected && styles.optionTextSelected]}>
+              <Text
+                style={[styles.optionText, selected && styles.optionTextSelected]}
+                numberOfLines={1}
+              >
                 {option.label}
               </Text>
             </Pressable>
@@ -48,9 +51,13 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     gap: 8,
+    flexWrap: 'wrap',
   },
   option: {
-    flex: 1,
+    // 切片 21（AGENTS.md §7.32）：自适应宽度，大字体下不折行（行容器补 flexWrap 兜底）。
+    flexGrow: 0,
+    flexShrink: 1,
+    minWidth: 88,
     borderWidth: 1,
     borderColor: '#d0d0d0',
     borderRadius: 6,

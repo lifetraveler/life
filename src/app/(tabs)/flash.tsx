@@ -10,6 +10,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import FlashEditModal from '../../ui/FlashEditModal';
 import FlashPreviewCard from '../../ui/FlashPreviewCard';
@@ -42,6 +43,8 @@ export default function FlashScreen() {
   const [input, setInput] = useState('');
   const [editVisible, setEditVisible] = useState(false);
   const deviceTzid = getDeviceTzid();
+  // 切片 21（AGENTS.md §7.32）：Tab 页顶部必须让出系统状态栏；底部让出手势条。
+  const insets = useSafeAreaInsets();
 
   const handleSend = (): void => {
     const text = input;
@@ -60,7 +63,10 @@ export default function FlashScreen() {
   const hasDraft = currentDraft !== null;
 
   return (
-    <KeyboardAvoidingView style={styles.flex} behavior="padding">
+    <KeyboardAvoidingView
+      style={[styles.flex, { paddingTop: insets.top }]}
+      behavior="padding"
+    >
       <FlatList
         style={styles.list}
         data={chat.messages}
@@ -111,7 +117,7 @@ export default function FlashScreen() {
         </View>
       ) : null}
 
-      <View style={styles.inputRow}>
+      <View style={[styles.inputRow, { paddingBottom: 12 + insets.bottom }]}>
         <TextInput
           style={styles.input}
           value={input}
