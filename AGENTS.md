@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.20
+版本：v0.21
 
 ## 1. 项目概览
 
@@ -253,6 +253,11 @@ schema 版本 5→6，新增/修改如下：
 - **UI 引导**：在“我的 -> 设置”页面增加“后台运行权限”入口，展示当前白名单状态，并提供一键跳转系统设置或直接唤起系统弹窗的能力。
 - **约束**：本切片仅解决“系统由于省电策略杀进程”的问题，不引入 WorkManager 或前台服务（Foreground Service），不改变“App 进程存活则保证送达”的核心边界。
 
+### 7.32 界面体验修补（v0.21）
+- **Safe Area**：所有通过 Tab 挂载的页面（特别是 `flash.tsx` 聊天页），顶部必须使用 `useSafeAreaInsets()` 增加 padding，避免被系统状态栏遮挡。
+- **高分屏响应**：包含横向多选项的 Chip 容器（如提醒渠道），必须使用 `flexWrap` 和自适应宽度，禁止强行使用 `flex: 1` 导致文字折行或截断。
+- **空态引导**：日程视图（Agenda）在“今天”无数据时，必须展示空态卡与“快速安排”按钮，并打通 deep link 跳转。
+- **网络渠道防重发**：在并发补发和 reconcile 时，必须增加 in-flight 状态防重，避免同一 occurrenceKey 发生双发。
 
 ## 8. 当前切片
 tasks/slice-20.md（已完成阶段 1–3 与 MuMu 联调：网络渠道后台可靠性变更 A——电池优化白名单。manifest REQUEST_IGNORE_BATTERY_OPTIMIZATIONS + 本地模块 modules/battery-optimization（检测/官方弹窗/降级设置页）+ src/system/batteryOptimization.ts 三分支降级编排 + 设置页「后台运行保障」（状态卡 + 弹窗申请 + 1s 轮询刷新）+ 我的 Tab 入口；MuMu 实测确认白名单价值边界 = 进程存活 + 回前台秒级补发，「后台即时送达」受缓存冻结器与 RN host-pause 定时器停摆双重平台限制（验收 4 按 A 口径修订，用户确认）；🐛 回前台迟到补发 × reconcile 并发重复投递缺陷已披露（src/notifications/ 冻结区，留切片 11/21）；release APK 已交付并烟测（用户要求，commit 外产物）；closeout 见 tasks/slice-20-closeout.md。下一候选：真机反馈排期 v1 见 tasks/slice-20-closeout.md「后续切片候选（真机反馈排期 v1）」（slice-21 真机显示修补 → slice-22 闪电录入卡片化 → slice-23 夜间模式 → slice-24 数据备份 JSON+WebDAV【提案先行】；变更B 网络渠道后台送达为插队候选，确认前不修改 src/notifications/ 实现文件；开工按 §7.1 逐切片确认）
