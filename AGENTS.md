@@ -260,7 +260,7 @@ schema 版本 5→6，新增/修改如下：
 - **网络渠道防重发**：在并发补发和 reconcile 时，必须增加 in-flight 状态防重，避免同一 occurrenceKey 发生双发。
 
 ## 8. 当前切片
-tasks/slice-20.md（已完成阶段 1–3 与 MuMu 联调：网络渠道后台可靠性变更 A——电池优化白名单。manifest REQUEST_IGNORE_BATTERY_OPTIMIZATIONS + 本地模块 modules/battery-optimization（检测/官方弹窗/降级设置页）+ src/system/batteryOptimization.ts 三分支降级编排 + 设置页「后台运行保障」（状态卡 + 弹窗申请 + 1s 轮询刷新）+ 我的 Tab 入口；MuMu 实测确认白名单价值边界 = 进程存活 + 回前台秒级补发，「后台即时送达」受缓存冻结器与 RN host-pause 定时器停摆双重平台限制（验收 4 按 A 口径修订，用户确认）；🐛 回前台迟到补发 × reconcile 并发重复投递缺陷已披露（src/notifications/ 冻结区，留切片 11/21）；release APK 已交付并烟测（用户要求，commit 外产物）；closeout 见 tasks/slice-20-closeout.md。下一候选：真机反馈排期 v1 见 tasks/slice-20-closeout.md「后续切片候选（真机反馈排期 v1）」（slice-21 真机显示修补 → slice-22 闪电录入卡片化 → slice-23 夜间模式 → slice-24 数据备份 JSON+WebDAV【提案先行】；变更B 网络渠道后台送达为插队候选，确认前不修改 src/notifications/ 实现文件；开工按 §7.1 逐切片确认）
+tasks/slice-21.md（已完成阶段 1–2 与收尾：真机显示修补与防重发。阶段 1 UI 修补——flash.tsx useSafeAreaInsets 顶垫+底部手势条、渠道/频率/时区 chips 去 flex:1 改自适应宽（ReminderChannelFields/ReminderFormEditor/TzPicker）+ numberOfLines、plan.tsx agenda 视图今天空态卡「今日没有安排」+「＋ 快速安排」（AgendaRowEmptyToday 行插今天月页月名行后，CTA=/item/new）；阶段 2 防重发——NetworkTimerRegistry beginDeliver/endDeliver/isInFlight 原子占位 + BaseNetworkChannel.deliver 首个 await 前 claim/finally 释放 + NetworkDeliverStatus 扩展 'skipped'（不 send、不写 attempts）+ reconcile missed 循环 isInFlight 判重，封闭 slice-20 披露的迟到 timer × reconcile 双 POST 竞态；单测 +8（registry 占位语义/WebhookChannel 并发 skipped/scheduler 端到端 race），tsc 0 错、jest 71 套件/926 用例全过、expo-doctor 2 项预存基线失败无新增；closeout 见 tasks/slice-21-closeout.md。**阶段 3 真机/MuMu 验收未执行**（无设备连接）：flash 顶部不遮挡、font_scale 1.3 chips、agenda 空态卡、webhook 回前台不双发留待用户按任务卡手动步骤验收。下一候选：slice-22 闪电录入卡片化 → slice-23 夜间模式 → slice-24 数据备份 JSON+WebDAV【提案先行】；变更B 网络渠道后台送达为插队候选，确认前不修改 src/notifications/ 实现文件；开工按 §7.1 逐切片确认）
 
 
 
