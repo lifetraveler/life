@@ -571,8 +571,10 @@ export class WatermelonReminderScheduler implements ReminderScheduler {
     // —— missed 判定：对全部 enabled reminder 生效（含被预算跳过者）；
     // 去重靠 markReminderFired 推进游标（§4.19，游标按 reminder 共享一次推进）。
     // 网络渠道的 missed occurrence 按渠道独立补发：本进程内该渠道已确认投递
-    // （attempt 'ok'）则跳过防双发；否则先撤掉该渠道可能仍在挂起的定时器再
-    // deliver——补发与定时器到点互斥（at-least-once 边界见 notifications.md v0.16）。
+    // （attempt 'ok'）则跳过防双发；投递仍在进行中（in-flight，切片 21 防重发）
+    // 也跳过——迟到 timer 与本循环并发时，后到的一方由 beginDeliver 占位拦截。
+    // 两者皆否时先撤掉该渠道可能仍在挂起的定时器再 deliver——补发与定时器到点
+    // 互斥（at-least-once 边界见 notifications.md v0.16）。
     const missed: Occurrence[] = [];
     for (const entry of ordered) {
       const reminderMissed = computeMissed(
@@ -589,6 +591,12 @@ export class WatermelonReminderScheduler implements ReminderScheduler {
           const channel = this.networkChannelFor(scoped);
           for (const occurrence of reminderMissed) {
             if (this.registry.attemptStatus(channelId, occurrence.occurrenceKey) === 'ok') {
+              continue;
+            }
+            if (this.registry.isInFlight(channelId, occurrence.occurrenceKey)) {
+              // 切片 21：并发投递进行中（如回前台迟到 timer 的 send 尚未返回），
+              // 本轮不重复补发；结果由并发持有方 recordAttempt，下一轮 reconcile
+              // 依 attempts 判定。
               continue;
             }
             this.registry.cancel(channelId, occurrence.occurrenceKey);

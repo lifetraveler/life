@@ -215,3 +215,103 @@ describe('NetworkTimerRegistry（切片 16 阶段 2 / 切片 18 复合键）', (
     expect(registry.attemptStatus('apprise', 'kX')).toBe('failed');
   });
 });
+
+describe('NetworkTimerRegistry in-flight 防重发标记（切片 21，AGENTS.md §7.32）', () => {
+  let nowMs: number;
+  let fires: string[];
+
+  function makeRegistry(): NetworkTimerRegistry {
+    const deps: NetworkTimerRegistryDeps = {
+      now: () => nowMs,
+      onFire: (channelId, occurrenceKey) => {
+        fires.push(networkTimerKey(channelId, occurrenceKey));
+      },
+    };
+    return new NetworkTimerRegistry(deps);
+  }
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    nowMs = TEST_NOW;
+    fires = [];
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('beginDeliver 原子占位：首占成功，重复占位被拒；endDeliver 释放后可再占', () => {
+    const registry = makeRegistry();
+    expect(registry.isInFlight('webhook', 'k1')).toBe(false);
+
+    expect(registry.beginDeliver('webhook', 'k1')).toBe(true);
+    expect(registry.isInFlight('webhook', 'k1')).toBe(true);
+    // 占位期间的第二路调用（迟到 timer × reconcile 并发的后到方）被拒。
+    expect(registry.beginDeliver('webhook', 'k1')).toBe(false);
+    expect(registry.isInFlight('webhook', 'k1')).toBe(true);
+
+    registry.endDeliver('webhook', 'k1');
+    expect(registry.isInFlight('webhook', 'k1')).toBe(false);
+    // 释放后允许重新占位（重试语义）。
+    expect(registry.beginDeliver('webhook', 'k1')).toBe(true);
+    registry.endDeliver('webhook', 'k1');
+  });
+
+  it('in-flight 按复合键隔离：同 occurrenceKey 不同渠道互不干扰', () => {
+    const registry = makeRegistry();
+    expect(registry.beginDeliver('webhook', 'k1')).toBe(true);
+    // 渠道独立占位（多渠道同 occurrence 各投各的）。
+    expect(registry.beginDeliver('apprise', 'k1')).toBe(true);
+    expect(registry.isInFlight('webhook', 'k1')).toBe(true);
+    expect(registry.isInFlight('apprise', 'k1')).toBe(true);
+    expect(registry.beginDeliver('webhook', 'k1')).toBe(false);
+    expect(registry.beginDeliver('apprise', 'k1')).toBe(false);
+
+    registry.endDeliver('webhook', 'k1');
+    expect(registry.isInFlight('webhook', 'k1')).toBe(false);
+    expect(registry.isInFlight('apprise', 'k1')).toBe(true);
+    registry.endDeliver('apprise', 'k1');
+  });
+
+  it('cancel / cancelByReminder / clearTimers / pruneExcept 均不清 in-flight（投递仍在进行）', () => {
+    const registry = makeRegistry();
+    registry.replace('webhook', 'k1', entryFor('webhook', 'r1', TEST_NOW + 100));
+    registry.replace('webhook', 'k2', entryFor('webhook', 'r2', TEST_NOW + 100));
+    expect(registry.beginDeliver('webhook', 'k1')).toBe(true);
+    expect(registry.beginDeliver('webhook', 'k2')).toBe(true);
+
+    registry.cancel('webhook', 'k1');
+    registry.cancelByReminder('r2');
+    registry.clearTimers();
+    registry.pruneExcept(new Set());
+
+    expect(registry.isInFlight('webhook', 'k1')).toBe(true);
+    expect(registry.isInFlight('webhook', 'k2')).toBe(true);
+    // 占位仍由持有方负责释放：endDeliver 幂等生效。
+    registry.endDeliver('webhook', 'k1');
+    registry.endDeliver('webhook', 'k2');
+    expect(registry.isInFlight('webhook', 'k1')).toBe(false);
+    expect(registry.isInFlight('webhook', 'k2')).toBe(false);
+  });
+
+  it('endDeliver 对未占位复合键幂等（no-op 不抛错）', () => {
+    const registry = makeRegistry();
+    expect(() => registry.endDeliver('webhook', 'kNever')).not.toThrow();
+    expect(registry.isInFlight('webhook', 'kNever')).toBe(false);
+    // 重复释放同样安全（finally 语义下的双释放防御）。
+    registry.beginDeliver('webhook', 'kOnce');
+    registry.endDeliver('webhook', 'kOnce');
+    registry.endDeliver('webhook', 'kOnce');
+    expect(registry.isInFlight('webhook', 'kOnce')).toBe(false);
+  });
+
+  it('in-flight 与 attempts 独立：占位不影响 attemptStatus 判定', () => {
+    const registry = makeRegistry();
+    registry.beginDeliver('webhook', 'k1');
+    expect(registry.attemptStatus('webhook', 'k1')).toBeNull();
+    registry.recordAttempt('webhook', 'k1', 'ok');
+    expect(registry.attemptStatus('webhook', 'k1')).toBe('ok');
+    expect(registry.isInFlight('webhook', 'k1')).toBe(true);
+    registry.endDeliver('webhook', 'k1');
+  });
+});

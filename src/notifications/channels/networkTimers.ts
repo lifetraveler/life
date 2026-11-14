@@ -15,6 +15,12 @@
  * - attempts 记录按复合键记录最近一次投递结果，随进程生命周期存在，
  *   clearTimers / cancel 不清除（reconcile 靠它抑制已成功 occurrence 的重复补发，
  *   且按渠道独立判定——webhook 成功不抑制 apprise 的补发）。
+ * - 切片 21（AGENTS.md §7.32 网络渠道防重发）：in-flight 标记按复合键记录
+ *   「投递进行中」状态（beginDeliver 原子占位 / endDeliver 释放 / isInFlight 查询），
+ *   生命周期=单次 deliver 调用（第一个 await 之前 claim，finally 里 release）。
+ *   迟到 timer 补发与启动 reconcile 的 missed 补发并发时，后到方被 beginDeliver
+ *   拒绝（返回 false），堵住「recordAttempt 在 send 完成之后」留下的竞态窗口；
+ *   clearTimers / cancel 不清除 in-flight（投递仍在跑，由 finally 自释放）。
  */
 import type { ReminderChannelId } from './types';
 import type { ScopedReminder } from './types';
@@ -63,6 +69,8 @@ export class NetworkTimerRegistry {
   private readonly timers = new Map<string, ArmedTimer>();
   /** 键为复合键（attempts 保留原始 occurrenceKey 无必要：渠道维度参与判定）。 */
   private readonly attempts = new Map<string, NetworkAttemptStatus>();
+  /** 键为复合键。投递进行中标记（切片 21 防重发）：生命周期=单次 deliver 调用。 */
+  private readonly inFlight = new Set<string>();
   private readonly now: () => number;
   private readonly onFire: (
     channelId: ReminderChannelId,
@@ -150,6 +158,30 @@ export class NetworkTimerRegistry {
   /** 查询投递结果；未投递过（含进程重启后）返回 null。 */
   attemptStatus(channelId: ReminderChannelId, occurrenceKey: string): NetworkAttemptStatus | null {
     return this.attempts.get(networkTimerKey(channelId, occurrenceKey)) ?? null;
+  }
+
+  /**
+   * 投递占位（切片 21 防重发）：复合键未被占位时登记并返回 true（本调用方获得投递权）；
+   * 已被占位（并发方投递进行中）返回 false，调用方必须放弃本次投递。
+   * 原子性由 JS 单线程事件循环保证——claim 与任何 await 之间无让出点即无竞态。
+   */
+  beginDeliver(channelId: ReminderChannelId, occurrenceKey: string): boolean {
+    const key = networkTimerKey(channelId, occurrenceKey);
+    if (this.inFlight.has(key)) {
+      return false;
+    }
+    this.inFlight.add(key);
+    return true;
+  }
+
+  /** 释放投递占位（deliver 的 finally 中调用）；未占位时为幂等 no-op。 */
+  endDeliver(channelId: ReminderChannelId, occurrenceKey: string): void {
+    this.inFlight.delete(networkTimerKey(channelId, occurrenceKey));
+  }
+
+  /** 查询投递是否进行中（reconcile missed 判重与测试断言用）。 */
+  isInFlight(channelId: ReminderChannelId, occurrenceKey: string): boolean {
+    return this.inFlight.has(networkTimerKey(channelId, occurrenceKey));
   }
 
   /** 当前挂起的复合键集合（调试/断言用；形如 `webhook|recurrence:v1|...`）。 */
