@@ -207,3 +207,45 @@ describe('isChatMessageList', () => {
     expect(isChatMessageList('聊天记录')).toBe(false);
   });
 });
+
+describe('isParsedItemDraft：澄清与渠道字段（切片 23 §7.35）', () => {
+  it('三字段全合法 → 通过并原值返回（渠道数组拷贝）', () => {
+    const channels = ['alarm'];
+    const input = validDraft({
+      needsClarification: true,
+      clarificationPrompt: '你要在什么时间提醒你吃药？',
+      reminderChannels: channels,
+    });
+    const value = isParsedItemDraft(input);
+    expect(value).not.toBeNull();
+    if (value === null) return;
+    expect(value.needsClarification).toBe(true);
+    expect(value.clarificationPrompt).toBe('你要在什么时间提醒你吃药？');
+    expect(value.reminderChannels).toEqual(['alarm']);
+    // 渠道数组是浅拷贝：外部改原数组不影响草稿。
+    channels.push('污染');
+    expect(value.reminderChannels).toEqual(['alarm']);
+  });
+
+  it('键缺省（旧版响应）→ 通过：三新字段均为可选（ai.md v0.19 对 v0.17 缺键规则的偏离）', () => {
+    expect(isParsedItemDraft(validDraft({}))).not.toBeNull();
+  });
+
+  it('非法值整体拒绝：needsClarification 非布尔 / clarificationPrompt 非字符串 / 渠道形状', () => {
+    expect(isParsedItemDraft({ ...validDraft({}), needsClarification: 'yes' })).toBeNull();
+    expect(isParsedItemDraft({ ...validDraft({}), clarificationPrompt: 123 })).toBeNull();
+    expect(isParsedItemDraft({ ...validDraft({}), reminderChannels: [] })).toBeNull();
+    expect(isParsedItemDraft({ ...validDraft({}), reminderChannels: ['bogus'] })).toBeNull();
+    // expo 家族互斥（§7.30）：system-notification 与 alarm 不得同现
+    expect(
+      isParsedItemDraft({ ...validDraft({}), reminderChannels: ['system-notification', 'alarm'] }),
+    ).toBeNull();
+  });
+
+  it('非 expo 互斥组合合法：webhook/apprise 同现', () => {
+    const value = isParsedItemDraft({ ...validDraft({}), reminderChannels: ['webhook', 'apprise'] });
+    expect(value).not.toBeNull();
+    if (value === null) return;
+    expect(value.reminderChannels).toEqual(['webhook', 'apprise']);
+  });
+});

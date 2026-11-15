@@ -23,6 +23,13 @@
  *   editIntent.ts 头注）：有草稿改草稿（预览卡自动刷新），无草稿改最近一张
  *   结果卡（updateItemTime + once 联动 + 原地刷新）；意图命中但无法应用时
  *   给引导文案，不再落到原解析流程产生垃圾新事项。
+ *
+ * 切片 23 阶段 2/3（AGENTS.md §7.35，ai.md v0.19）：
+ * - history 契约回正：草稿编辑成功路径的 assistant 文本回写编辑后草稿的 JSON
+ *   （切片 15 格式），note 只留在消息流；
+ * - 主动澄清轮（needsClarification=true）不出预览卡：清空待确认卡片状态，
+ *   clarificationPrompt 作为普通 AI 文本消息追加，草稿保留在 draftRef 供
+ *   下一轮续答经 merge 补全后自然出卡；澄清待补轮不被编辑窄规则劫持。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -80,6 +87,10 @@ const EDIT_FALLBACK_NOTE =
 /** 编辑窄规则：目标（草稿/结果卡）无具体时间或为全天时的引导文案。 */
 const EDIT_UNTIMED_NOTE =
   '该条目没有具体时间（或为全天），暂时不支持这样修改；可在详情页设置时间。';
+
+/** 澄清轮反问兜底（远端声明澄清但未给反问文案时使用，正常解析路径不会触发）。 */
+const CLARIFICATION_FALLBACK_NOTE =
+  '信息还不完整，请补充缺失的内容（例如具体时间）。';
 
 /**
  * 编辑/推迟后刷新卡片提醒快照：被顺延的 once 提醒若正是卡片快照里那条，
@@ -211,24 +222,41 @@ export function useFlashChat() {
     [],
   );
 
-  /** 追加一轮编辑对话到 history（供远端解析上下文连贯）。 */
-  const appendEditHistory = useCallback((input: string, note: string): void => {
-    historyRef.current = [
-      ...historyRef.current,
-      { role: 'user', text: input },
-      { role: 'assistant', text: note },
-    ];
-  }, []);
+  /**
+   * 追加一轮编辑对话到 history（供远端解析上下文连贯）。
+   * 切片 23 阶段 2：草稿编辑成功路径必须回写「编辑后草稿的 JSON」——切片 15
+   * 约定 history 中 assistant 文本 = 草稿 JSON；纯文本 note 只留在消息流层，
+   * 否则远端模型会读到与当前草稿不符的旧状态（buildHistoryBriefing 也取不到
+   * 最新草稿）。
+   */
+  const appendEditHistory = useCallback(
+    (input: string, note: string, draftJson?: string): void => {
+      historyRef.current = [
+        ...historyRef.current,
+        { role: 'user', text: input },
+        { role: 'assistant', text: draftJson ?? note },
+      ];
+    },
+    [],
+  );
 
   /**
    * 编辑窄规则——草稿分支：把「改成X点」落到当前草稿（预览卡自动刷新），
    * 提醒在保存时按新 startAt 重算，无需额外联动。
+   * 切片 23 阶段 3：澄清待补轮（needsClarification=true）不拦截——用户续答
+   *（哪怕措辞是“改成下午2点”）必须走解析 + merge 补全，否则窄规则会按
+   * 今天日期错改草稿、丢失澄清上下文。
    * 返回 true 表示本轮已被编辑路径处理（send 不再走解析流程）。
    */
   const applyEditToDraft = useCallback(
     (input: string, tzid: string): boolean => {
       const current = draftRef.current;
-      if (current === null || current.allDay || !matchesEditIntent(input)) {
+      if (
+        current === null ||
+        current.allDay ||
+        current.needsClarification === true ||
+        !matchesEditIntent(input)
+      ) {
         return false;
       }
       const request = parseEditTimeRequest(input);
@@ -248,7 +276,9 @@ export function useFlashChat() {
       draftRef.current = next;
       setDraft(next);
       const note = `已改为 ${formatItemTime(newStart, tzid)}（请核对卡片）`;
-      appendEditHistory(input, note);
+      // 切片 23 阶段 2：history 回写编辑后的草稿 JSON（切片 15 格式），
+      // note 只作消息流展示。
+      appendEditHistory(input, note, JSON.stringify(next));
       push('assistant', note);
       return true;
     },
@@ -344,6 +374,22 @@ export function useFlashChat() {
         });
         historyRef.current = [...historyRef.current, ...result.historyAppend];
         draftRef.current = result.draft;
+        if (result.draft.needsClarification === true) {
+          // 切片 23 阶段 3（§7.35 主动澄清）：澄清轮不出预览卡——待确认卡片
+          // 状态清空，反问文案作为普通 AI 文本消息追加；草稿保留在 draftRef，
+          // 下一轮用户续答经 runFlashTurn（previousDraft）+ merge 补全后自然
+          // 出卡。historyAppend 已含本轮草稿 JSON（远端续答上下文）。
+          setDraft(null);
+          push(
+            'assistant',
+            result.draft.clarificationPrompt ?? CLARIFICATION_FALLBACK_NOTE,
+          );
+          if (result.degraded) {
+            // 降级说明不丢（§7.25 验收 5）：本地解析轮的反问也要能看出没走远端。
+            push('assistant', result.assistantNote);
+          }
+          return;
+        }
         setDraft(result.draft);
         push('assistant', result.assistantNote);
       } catch (error) {

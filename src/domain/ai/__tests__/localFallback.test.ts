@@ -325,11 +325,14 @@ describe('LocalFallbackProvider：延迟提醒（切片 19 §7.30）', () => {
     expect(d.startAt).toBe(at(2026, 11, 10, 15, 0));
   });
 
-  it('负例：3天后提醒我复诊 → 天单位不支持，被日期槽认领为 start，不产 delay', async () => {
+  it('负例：3天后提醒我复诊 → 天单位不支持，被日期槽认领为 start，不产 delay；切片 23 起意图短语“提醒我”出标题且缺时刻触发澄清', async () => {
     const d = await parse('3天后提醒我复诊');
     expect(d.reminderDelayMinutes).toBeNull();
     expect(d.startAt).toBe(at(2026, 11, 13, 0, 0));
-    expect(d.title).toBe('提醒我复诊');
+    // 切片 23（§7.35）：意图短语认领后标题为“复诊”；仅日期无时刻 → 主动澄清。
+    expect(d.title).toBe('复诊');
+    expect(d.needsClarification).toBe(true);
+    expect(d.clarificationPrompt).toBe('你要在什么时间提醒你复诊？');
   });
 
   it('负例：等10分钟提醒我（无“后”）不产 delay', async () => {
@@ -384,5 +387,117 @@ describe('LocalFallbackProvider：误判防护', () => {
     expect(d.type).not.toBe('task');
     const d2 = await parse('垃圾还是分类的好');
     expect(d2.type).not.toBe('task');
+  });
+});
+
+describe('LocalFallbackProvider：强提醒渠道与主动澄清（切片 23 §7.35）', () => {
+  it('验收 2：明天上午8点叫我 → alarm 渠道 + 标题兜底起床 + task + 时间完整不澄清', async () => {
+    const d = await parse('明天上午8点叫我');
+    expect(d.startAt).toBe(at(2026, 11, 11, 8, 0));
+    expect(d.allDay).toBe(false);
+    expect(d.reminderChannels).toEqual(['alarm']);
+    expect(d.title).toBe('起床'); // 认领后无剩余文本 → 强提醒兜底标题（决策③）
+    expect(d.type).toBe('task');
+    expect(d.reminderOffsetMinutes).toBeNull();
+    expect(d.reminderDelayMinutes).toBeNull();
+    expect(d.needsClarification).toBeUndefined();
+    expect(d.clarificationPrompt).toBeUndefined();
+  });
+
+  it('验收 3：提醒我吃药 → needsClarification + 精确文案「你要在什么时间提醒你吃药？」', async () => {
+    const d = await parse('提醒我吃药');
+    expect(d.needsClarification).toBe(true);
+    expect(d.clarificationPrompt).toBe('你要在什么时间提醒你吃药？');
+    expect(d.title).toBe('吃药');
+    expect(d.startAt).toBeNull();
+    // “提醒”是普通提醒意图，不构成强提醒场景 → 无渠道推荐。
+    expect(d.reminderChannels).toBeUndefined();
+    expect(d.type).toBe('task');
+  });
+
+  it('叫我起床 → alarm + 澄清「你要在什么时间叫你起床？」', async () => {
+    const d = await parse('叫我起床');
+    expect(d.needsClarification).toBe(true);
+    expect(d.clarificationPrompt).toBe('你要在什么时间叫你起床？');
+    expect(d.reminderChannels).toEqual(['alarm']);
+    expect(d.title).toBe('起床');
+  });
+
+  it('设个闹钟 → 强提醒词命中 → alarm + 澄清「你要在什么时间设个闹钟？」', async () => {
+    const d = await parse('设个闹钟');
+    expect(d.needsClarification).toBe(true);
+    expect(d.clarificationPrompt).toBe('你要在什么时间设个闹钟？');
+    expect(d.reminderChannels).toEqual(['alarm']);
+    expect(d.title).toBe('设个闹钟');
+  });
+
+  it('半小时后叫我起床 → delay 30 + alarm 渠道（延迟槽认领“叫我”，剩余“起床”仍判强提醒）', async () => {
+    const d = await parse('半小时后叫我起床');
+    expect(d.reminderDelayMinutes).toBe(30);
+    expect(d.reminderChannels).toEqual(['alarm']);
+    expect(d.title).toBe('起床');
+    // 延迟已表达 → 不澄清。
+    expect(d.needsClarification).toBeUndefined();
+  });
+
+  it('提前10分钟叫我起床 → offset 10 + alarm 渠道', async () => {
+    const d = await parse('提前10分钟叫我起床');
+    expect(d.reminderOffsetMinutes).toBe(10);
+    expect(d.reminderChannels).toEqual(['alarm']);
+    expect(d.title).toBe('起床');
+    expect(d.needsClarification).toBeUndefined();
+  });
+
+  it('明天下午3点提醒我吃药 → 时间完整：不澄清、无渠道推荐', async () => {
+    const d = await parse('明天下午3点提醒我吃药');
+    expect(d.startAt).toBe(at(2026, 11, 11, 15, 0));
+    expect(d.needsClarification).toBeUndefined();
+    expect(d.clarificationPrompt).toBeUndefined();
+    expect(d.reminderChannels).toBeUndefined();
+    expect(d.title).toBe('吃药');
+  });
+
+  it('每天8点提醒我吃药 → 重复规则完整：不澄清', async () => {
+    const d = await parse('每天8点提醒我吃药');
+    expect(d.recurrence).toEqual({ frequency: 'daily', localTime: { hour: 8, minute: 0 } });
+    expect(d.needsClarification).toBeUndefined();
+    expect(d.reminderChannels).toBeUndefined();
+  });
+
+  it('明早8点喊我起床 → 喊我构成强提醒 → alarm 渠道', async () => {
+    const d = await parse('明早8点喊我起床');
+    expect(d.startAt).toBe(at(2026, 11, 11, 8, 0));
+    expect(d.reminderChannels).toEqual(['alarm']);
+    expect(d.title).toBe('起床');
+  });
+
+  it('明早叫醒我交报告（仅日期无时刻）→ 澄清 + alarm', async () => {
+    const d = await parse('明早叫醒我交报告');
+    expect(d.needsClarification).toBe(true);
+    expect(d.clarificationPrompt).toBe('你要在什么时间叫你交报告？');
+    expect(d.reminderChannels).toEqual(['alarm']);
+    expect(d.title).toBe('交报告');
+  });
+
+  it('下午5点叫外卖 → 不带“我”的“叫”不构成意图：无渠道、不澄清、标题保留', async () => {
+    const d = await parse('下午5点叫外卖');
+    expect(d.startAt).toBe(at(2026, 11, 10, 17, 0));
+    expect(d.reminderChannels).toBeUndefined();
+    expect(d.needsClarification).toBeUndefined();
+    expect(d.title).toBe('叫外卖');
+  });
+
+  it('买个闹钟送人 → 名词性“闹钟”命中（已知边界）：仍判 alarm 并澄清', async () => {
+    const d = await parse('买个闹钟送人');
+    expect(d.reminderChannels).toEqual(['alarm']);
+    expect(d.needsClarification).toBe(true);
+    expect(d.clarificationPrompt).toBe('你要在什么时间买个闹钟送人？');
+  });
+
+  it('普通待办无强提醒词 → 不产渠道也不澄清', async () => {
+    const d = await parse('明天买牛奶');
+    expect(d.reminderChannels).toBeUndefined();
+    expect(d.needsClarification).toBeUndefined();
+    expect(d.title).toBe('买牛奶');
   });
 });

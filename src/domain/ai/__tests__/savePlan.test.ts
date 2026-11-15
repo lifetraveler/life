@@ -349,4 +349,117 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
     expect(plan.reminderPlan?.frequency).toBe('daily');
     expect(plan.reminderNotice).toBeNull();
   });
+
+  // —— 切片 23（AGENTS.md §7.35 / ai.md v0.19）：强提醒渠道推荐落库 ——
+
+  it('切片 23：draft 显式 alarm 渠道 + startAt → 在 startAt 时刻建 once 提醒（闹钟语义：8点叫就8点响）', () => {
+    const plan = buildFlashSavePlan(
+      baseDraft({ reminderChannels: ['alarm'] }),
+      'Asia/Shanghai',
+      NOW,
+    );
+    expect(plan.reminderPlan).toEqual({
+      frequency: 'once',
+      localTimeHour: 0,
+      localTimeMinute: 0,
+      onceAt: { year: 2026, month: 11, day: 11, hour: 15, minute: 0 },
+      channels: ['alarm'],
+      channelConfigs: {},
+      tzid: 'Asia/Shanghai',
+      startAt: new Date('2026-11-11T15:00:00+08:00').getTime(),
+      enabled: true,
+    });
+    expect(plan.reminderNotice).toBeNull();
+  });
+
+  it('切片 23：draft 显式渠道优先于 defaultChannels（强提醒语义不被全局偏好覆盖）', () => {
+    const plan = buildFlashSavePlan(
+      baseDraft({ reminderChannels: ['alarm'] }),
+      'Asia/Shanghai',
+      NOW,
+      ['system-notification'],
+    );
+    expect(plan.reminderPlan?.channels).toEqual(['alarm']);
+    expect(plan.reminderNotice).toBeNull();
+  });
+
+  it('切片 23：draft 未携带渠道 → defaultChannels 照旧生效（普通提醒路径回归）', () => {
+    const plan = buildFlashSavePlan(
+      baseDraft({ startAt: null, endAt: null, reminderDelayMinutes: 10 }),
+      'Asia/Shanghai',
+      NOW,
+      ['system-notification', 'webhook'],
+      [
+        { id: 'p1', name: '默认', type: 'webhook', configJson: 'https://hook.example/def', isDefault: true, createdAt: 1 },
+      ],
+    );
+    expect(plan.reminderPlan?.channels).toEqual(['system-notification', 'webhook']);
+    expect(plan.reminderNotice).toBeNull();
+  });
+
+  it('切片 23：显式渠道 + 提前量 → 提前量锚定触发时刻，渠道用显式渠道（提前10分钟叫我起床）', () => {
+    const plan = buildFlashSavePlan(
+      baseDraft({ reminderChannels: ['alarm'], reminderOffsetMinutes: 10 }),
+      'Asia/Shanghai',
+      NOW,
+    );
+    expect(plan.reminderPlan?.frequency).toBe('once');
+    expect(plan.reminderPlan?.startAt).toBe(new Date('2026-11-11T14:50:00+08:00').getTime());
+    expect(plan.reminderPlan?.onceAt).toEqual({ year: 2026, month: 11, day: 11, hour: 14, minute: 50 });
+    expect(plan.reminderPlan?.channels).toEqual(['alarm']);
+    expect(plan.reminderNotice).toBeNull();
+  });
+
+  it('切片 23：显式渠道 + 延迟提醒 → delay 落库且渠道用显式渠道', () => {
+    const plan = buildFlashSavePlan(
+      baseDraft({ reminderChannels: ['alarm'], startAt: null, endAt: null, reminderDelayMinutes: 30 }),
+      'Asia/Shanghai',
+      NOW,
+    );
+    expect(plan.reminderPlan?.frequency).toBe('once');
+    expect(plan.reminderPlan?.startAt).toBe(NOW + 30 * 60000);
+    expect(plan.reminderPlan?.channels).toEqual(['alarm']);
+    expect(plan.reminderNotice).toBeNull();
+  });
+
+  it('切片 23：显式渠道 + startAt null → 不建提醒并披露（需设定时间才能创建强提醒）', () => {
+    const plan = buildFlashSavePlan(
+      baseDraft({ reminderChannels: ['alarm'], startAt: null, endAt: null }),
+      'Asia/Shanghai',
+      NOW,
+    );
+    expect(plan.reminderPlan).toBeNull();
+    expect(plan.reminderNotice).toBe('需设定时间才能创建强提醒');
+  });
+
+  it('切片 23：显式渠道 + allDay → 不建提醒并披露（全天 00:00 响铃属误伤）', () => {
+    const plan = buildFlashSavePlan(
+      baseDraft({
+        reminderChannels: ['alarm'],
+        startAt: new Date('2026-11-11T00:00:00+08:00').getTime(),
+        endAt: null,
+        allDay: true,
+      }),
+      'Asia/Shanghai',
+      NOW,
+    );
+    expect(plan.reminderPlan).toBeNull();
+    expect(plan.reminderNotice).toBe('全天条目暂不创建强提醒（未表达具体时刻）');
+  });
+
+  it('切片 23：重复规则 + 显式渠道 → 重复计划仍优先，渠道被显式渠道覆盖（每天8点叫我起床）', () => {
+    const plan = buildFlashSavePlan(
+      baseDraft({
+        startAt: null,
+        endAt: null,
+        recurrence: { frequency: 'daily', localTime: { hour: 8, minute: 0 } },
+        reminderChannels: ['alarm'],
+      }),
+      'Asia/Shanghai',
+      NOW,
+    );
+    expect(plan.reminderPlan?.frequency).toBe('daily');
+    expect(plan.reminderPlan?.channels).toEqual(['alarm']);
+    expect(plan.reminderNotice).toBeNull();
+  });
 });

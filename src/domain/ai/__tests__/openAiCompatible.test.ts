@@ -428,4 +428,115 @@ describe('isRemoteDraftWire / wireToParsedItemDraft（v0.16 民用 wire）', () 
     const { reminderDelayMinutes: _d, ...noDelay } = validWire;
     expect(isRemoteDraftWire(noDelay)).toBeNull();
   });
+
+  it('澄清/渠道字段（切片 23 §7.35）：合法值透传，null/false/空串归一 undefined', () => {
+    const clarifying = isRemoteDraftWire(
+      patchWire({
+        needsClarification: true,
+        clarificationPrompt: '你要在什么时间提醒你开会？',
+        reminderChannels: ['alarm'],
+      }),
+    );
+    expect(clarifying).not.toBeNull();
+    const draft = wireToParsedItemDraft(clarifying as NonNullable<typeof clarifying>, CONTEXT);
+    expect(draft.needsClarification).toBe(true);
+    expect(draft.clarificationPrompt).toBe('你要在什么时间提醒你开会？');
+    expect(draft.reminderChannels).toEqual(['alarm']);
+
+    // null → 归一 undefined（未表达，落库走 defaultChannels）
+    const nulled = isRemoteDraftWire(
+      patchWire({ needsClarification: null, clarificationPrompt: null, reminderChannels: null }),
+    );
+    expect(nulled).not.toBeNull();
+    const nulledDraft = wireToParsedItemDraft(nulled as NonNullable<typeof nulled>, CONTEXT);
+    expect(nulledDraft.needsClarification).toBeUndefined();
+    expect(nulledDraft.clarificationPrompt).toBeUndefined();
+    expect(nulledDraft.reminderChannels).toBeUndefined();
+
+    // false / 空串 → 归一 undefined（澄清信号只在 true 时表达）
+    const falsy = isRemoteDraftWire(patchWire({ needsClarification: false, clarificationPrompt: '' }));
+    expect(falsy).not.toBeNull();
+    const falsyDraft = wireToParsedItemDraft(falsy as NonNullable<typeof falsy>, CONTEXT);
+    expect(falsyDraft.needsClarification).toBeUndefined();
+    expect(falsyDraft.clarificationPrompt).toBeUndefined();
+  });
+
+  it('澄清/渠道字段键缺省（旧版 12 键 wire）→ 通过（ai.md v0.19 对 v0.16 缺键规则的偏离）', () => {
+    // validWire 即旧版形状：不含三新字段。
+    expect(isRemoteDraftWire(validWire)).not.toBeNull();
+  });
+
+  it('澄清/渠道字段非法值整体拒绝（值出现即从严）', () => {
+    expect(isRemoteDraftWire(patchWire({ needsClarification: 'yes' }))).toBeNull();
+    expect(isRemoteDraftWire(patchWire({ clarificationPrompt: 123 }))).toBeNull();
+    expect(isRemoteDraftWire(patchWire({ reminderChannels: [] }))).toBeNull();
+    expect(isRemoteDraftWire(patchWire({ reminderChannels: ['bogus'] }))).toBeNull();
+    expect(isRemoteDraftWire(patchWire({ reminderChannels: ['system-notification', 'alarm'] }))).toBeNull();
+    // 非互斥网络渠道组合通过
+    expect(isRemoteDraftWire(patchWire({ reminderChannels: ['webhook', 'apprise'] }))).not.toBeNull();
+  });
+});
+
+describe('buildHistoryBriefing 注入 system 消息（切片 23 阶段 2）', () => {
+  // 与 prompt.test.ts 同基准：民用换算后 2026-11-11 15:00 Asia/Shanghai。
+  const BRIEF_START = new Date('2026-11-11T15:00:00+08:00').getTime();
+
+  it('history 含草稿 JSON → system content 附带摘要块（民用时间，无毫秒泄漏）', async () => {
+    const { fetchImpl, calls } = makeFetch(() => okEnvelope(validWireJson));
+    const provider = makeProvider(fetchImpl);
+    await provider.parse('改成7点半', {
+      now: NOW,
+      tzid: TZID,
+      history: [
+        { role: 'user', text: '明天下午3点开会' },
+        {
+          role: 'assistant',
+          text: JSON.stringify({
+            title: '开会',
+            content: '',
+            type: 'event',
+            startAt: BRIEF_START,
+            endAt: null,
+            allDay: false,
+          }),
+        },
+      ],
+    });
+    const body = JSON.parse(calls[0].init?.body as string) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const system = body.messages[0]?.content ?? '';
+    expect(body.messages[0]?.role).toBe('system');
+    expect(system).toContain('上一张卡片草稿摘要（修改时以此为准，禁止新建条目）：');
+    expect(system).toContain('- 标题：开会');
+    expect(system).toContain('- 时间：2026-11-11 15:00（时区 Asia/Shanghai）');
+    expect(system).not.toContain(String(BRIEF_START));
+    // history 消息本体原样透传（user/assistant 顺序保持，草稿 JSON 不被替换）。
+    expect(body.messages[1]).toEqual({ role: 'user', content: '明天下午3点开会' });
+    expect(body.messages[2]?.role).toBe('assistant');
+    expect(body.messages[body.messages.length - 1]).toEqual({
+      role: 'user',
+      content: '改成7点半',
+    });
+  });
+
+  it('history 无草稿（assistant 为 note 文本）→ 不附摘要块，单轮行为不变', async () => {
+    const { fetchImpl, calls } = makeFetch(() => okEnvelope(validWireJson));
+    const provider = makeProvider(fetchImpl);
+    await provider.parse('改成明天', {
+      now: NOW,
+      tzid: TZID,
+      history: [
+        { role: 'user', text: '提醒我开会' },
+        { role: 'assistant', text: '已改为 2026-11-11 15:00' },
+      ],
+    });
+    const body = JSON.parse(calls[0].init?.body as string) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const system = body.messages[0]?.content ?? '';
+    // 静态 prompt 指令节本身含「上一张卡片草稿摘要」字样，须以完整渲染块头判定。
+    expect(system).not.toContain('上一张卡片草稿摘要（修改时以此为准，禁止新建条目）：');
+    expect(system).toContain('当前时间：');
+  });
 });

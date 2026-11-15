@@ -23,11 +23,12 @@
  */
 
 import { AiParseError } from './errors';
-import { isRecurrenceRule } from './guard';
+import { isRecurrenceRule, isReminderChannelArray } from './guard';
 import { nextOccurrenceInstant } from './localFallback';
-import { AI_SYSTEM_PROMPT, buildNowFacts } from './prompt';
+import { AI_SYSTEM_PROMPT, buildHistoryBriefing, buildNowFacts } from './prompt';
 import { daysInMonth, getZonedParts, resolveCivilTimeToInstant } from '../recurrence/civilTime';
 import type { RecurrenceRule } from '../recurrence/types';
+import type { ReminderChannel } from '../reminder';
 import type { AiParseContext, AiParser, ChatMessage, ParsedItemDraft } from './types';
 
 export interface OpenAiCompatibleConfig {
@@ -106,6 +107,16 @@ export interface RemoteDraftWire {
    * null=未表达。与 reminderOffsetMinutes（“提前X分钟”）语义独立、可同时出现。
    */
   reminderDelayMinutes: number | null;
+  /**
+   * 渠道推荐（切片 23 / ai.md v0.19）：强提醒场景 → ['alarm']；普通提醒/未表达 →
+   * null 或缺省（落库渠道走用户 defaultChannels，禁止自填 system-notification）。
+   * expo 家族互斥（system-notification 与 alarm 不同现）。
+   */
+  reminderChannels?: ReminderChannel[] | null;
+  /** 主动澄清：缺关键信息需要反问 → true；false/null/缺省=不澄清。 */
+  needsClarification?: boolean | null;
+  /** needsClarification=true 时的单句反问文本；null/缺省=无。 */
+  clarificationPrompt?: string | null;
 }
 
 const WIRE_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -179,6 +190,32 @@ export function isRemoteDraftWire(value: unknown): RemoteDraftWire | null {
   ) {
     return null;
   }
+  // 切片 23（§7.35 / ai.md v0.19）：澄清与渠道推荐三字段——键可缺省/null（建议性
+  // 信息不炸整体解析，对 v0.16「缺键整体拒绝」的刻意偏离，理由见 ai.md v0.19），
+  // 值出现即从严：boolean / string / 非空合法渠道数组（元素 ∈ REMINDER_CHANNELS
+  // 且 expo 家族互斥）。校验复用 guard.isReminderChannelArray，与本地守卫同源。
+  const needsClarification = v.needsClarification;
+  if (
+    needsClarification !== undefined &&
+    needsClarification !== null &&
+    typeof needsClarification !== 'boolean'
+  ) {
+    return null;
+  }
+  const clarificationPrompt = v.clarificationPrompt;
+  if (
+    clarificationPrompt !== undefined &&
+    clarificationPrompt !== null &&
+    typeof clarificationPrompt !== 'string'
+  ) {
+    return null;
+  }
+  let reminderChannels: ReminderChannel[] | undefined;
+  const reminderChannelsRaw = v.reminderChannels;
+  if (reminderChannelsRaw !== undefined && reminderChannelsRaw !== null) {
+    if (!isReminderChannelArray(reminderChannelsRaw)) return null;
+    reminderChannels = [...reminderChannelsRaw];
+  }
   return {
     title: v.title,
     content: v.content,
@@ -192,6 +229,9 @@ export function isRemoteDraftWire(value: unknown): RemoteDraftWire | null {
     recurrence: recurrence,
     reminderOffsetMinutes: v.reminderOffsetMinutes as RemoteDraftWire['reminderOffsetMinutes'],
     reminderDelayMinutes: v.reminderDelayMinutes as RemoteDraftWire['reminderDelayMinutes'],
+    needsClarification: needsClarification === null ? undefined : needsClarification,
+    clarificationPrompt: clarificationPrompt === null ? undefined : clarificationPrompt,
+    reminderChannels,
   };
 }
 
@@ -247,6 +287,20 @@ export function wireToParsedItemDraft(
     recurrence: recurrenceCopy,
     reminderOffsetMinutes: wire.reminderOffsetMinutes,
     reminderDelayMinutes: wire.reminderDelayMinutes,
+    // 切片 23（ai.md v0.19）：澄清/渠道字段映射——needsClarification 仅 true 落值
+    //（false 与 undefined 等价，统一归一为 undefined，信号不粘滞）；空反问文本视同
+    // 未澄清；渠道数组防御拷贝，缺省/null 归一为 undefined（普通提醒落库走默认渠道）。
+    needsClarification: wire.needsClarification === true ? true : undefined,
+    clarificationPrompt:
+      wire.clarificationPrompt !== undefined &&
+      wire.clarificationPrompt !== null &&
+      wire.clarificationPrompt.length > 0
+        ? wire.clarificationPrompt
+        : undefined,
+    reminderChannels:
+      wire.reminderChannels !== undefined && wire.reminderChannels !== null
+        ? [...wire.reminderChannels]
+        : undefined,
   };
 }
 
@@ -324,8 +378,16 @@ export class OpenAICompatibleProvider implements AiParser {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
+    // 切片 23 阶段 2：history 里最近一张草稿以民用时间摘要注入 system 消息
+    //（buildHistoryBriefing 本地换算 epoch），“改成/改为”编辑以此为准；
+    // 无草稿（history 为空或只有 note）时不拼接，单轮行为不变。
+    const briefing = buildHistoryBriefing(context.history, context.tzid);
+    const systemContent =
+      briefing === null
+        ? `${AI_SYSTEM_PROMPT}\n\n${buildNowFacts(context)}`
+        : `${AI_SYSTEM_PROMPT}\n\n${buildNowFacts(context)}\n\n${briefing}`;
     const messages: Array<{ role: string; content: string }> = [
-      { role: 'system', content: `${AI_SYSTEM_PROMPT}\n\n${buildNowFacts(context)}` },
+      { role: 'system', content: systemContent },
       ...context.history.map((h: ChatMessage) => ({ role: h.role, content: h.text })),
       { role: 'user', content: input },
     ];

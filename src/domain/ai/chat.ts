@@ -68,10 +68,28 @@ function fallbackTurn(
     history: [...deps.history],
   };
   const parsed = localFallback.parseSlots(trimmed, context);
-  const draft =
-    deps.previousDraft !== null
-      ? mergeDraftCorrection(deps.previousDraft, parsed.draft, parsed.expressed)
-      : parsed.draft;
+  let merged = parsed.draft;
+  if (deps.previousDraft !== null) {
+    merged = mergeDraftCorrection(deps.previousDraft, parsed.draft, parsed.expressed);
+    // 切片 23 验收反馈修补：降级纠正轮标题不被本轮剩余原文覆盖——本地槽位解析
+    // 没有 LLM 的标题提炼能力，“预约到XX医院”这类补充轮的剩余原文会被当成
+    // expressed 标题，把上一轮主题词（如「预约体检」）改写掉。标题沿用上一轮，
+    // 本轮原词并入 content 作补充说明（content 既有内容以「；」衔接保留）。
+    if (
+      parsed.expressed.has('title') &&
+      parsed.draft.title !== deps.previousDraft.title
+    ) {
+      merged = {
+        ...merged,
+        title: deps.previousDraft.title,
+        content:
+          merged.content && merged.content.length > 0
+            ? `${merged.content}；${trimmed}`
+            : trimmed,
+      };
+    }
+  }
+  const draft = deps.previousDraft !== null ? merged : parsed.draft;
   return {
     draft,
     assistantNote: note,

@@ -102,4 +102,17 @@ describe('LocalFallbackProvider.parseSlots：expressed 掩码（阶段 3）', ()
     expect(expressed.has('endAt')).toBe(true);
     expect(expressed.has('allDay')).toBe(true);
   });
+
+  it('强提醒句：expressed 含 reminderChannels（alarm 渠道是本轮表达的落库信号）', () => {
+    const { draft, expressed } = slots('明天上午8点叫我', 0);
+    expect(draft.reminderChannels).toEqual(['alarm']);
+    expect(expressed.has('reminderChannels')).toBe(true);
+  });
+
+  it('澄清信号只进 draft 不进 expressed（needsClarification 每轮不粘滞）', () => {
+    const { draft, expressed } = slots('提醒我吃药', 0);
+    expect(draft.needsClarification).toBe(true);
+    expect(draft.clarificationPrompt).toBe('你要在什么时间提醒你吃药？');
+    expect(expressed.has('reminderChannels')).toBe(false);
+  });
 });

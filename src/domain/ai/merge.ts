@@ -26,7 +26,8 @@ export type DraftField =
   | 'priority'
   | 'recurrence'
   | 'reminderOffsetMinutes'
-  | 'reminderDelayMinutes';
+  | 'reminderDelayMinutes'
+  | 'reminderChannels';
 
 export function mergeDraftCorrection(
   previous: ParsedItemDraft,
@@ -50,5 +51,19 @@ export function mergeDraftCorrection(
     reminderDelayMinutes: expressed.has('reminderDelayMinutes')
       ? next.reminderDelayMinutes
       : previous.reminderDelayMinutes,
+    // 渠道推荐按掩码合并（切片 23）：本轮表达（如“叫我起床”判出 alarm）→ 采用；
+    // 未表达 → 沿用上一轮，跨轮保留 alarm 推荐（澄清续答“明早7点”不丢渠道）。
+    reminderChannels: expressed.has('reminderChannels')
+      ? next.reminderChannels === undefined
+        ? undefined
+        : [...next.reminderChannels]
+      : previous.reminderChannels === undefined
+        ? undefined
+        : [...previous.reminderChannels],
+    // 澄清信号不粘滞（切片 23）：恒取新一轮——澄清轮（needsClarification=true +
+    // 反问文案）之后，用户的续答轮（如“明早7点”）解析结果不再声明澄清，
+    // 信号自动归位，出卡落库。
+    needsClarification: next.needsClarification === true ? true : undefined,
+    clarificationPrompt: next.clarificationPrompt,
   };
 }

@@ -7,6 +7,12 @@
  *   但 startAt/endAt 必须是有限数或 null，priority 必须是 0..3 整数或 null；
  *   reminderOffsetMinutes / reminderDelayMinutes（切片 19，§7.30）必须是 ≥1 整数
  *   或 null——键缺失（undefined）与非法值同样整体拒绝（draft 形状纪律）。
+ * - 切片 23（§7.35 / ai.md v0.19）：needsClarification 出现时必须是 boolean、
+ *   clarificationPrompt 出现时必须是 string、reminderChannels 出现时必须是
+ *   非空且元素合法（REMINDER_CHANNELS）并满足 expo 家族互斥（system-notification
+ *   与 alarm 不同现）的数组——三者与 offset/delay 的“键必填”纪律刻意不同：它们是
+ *   建议性/澄清性信息而非结构性字段，键缺省（旧版响应）合法、值出现即从严，
+ *   避免把整个解析炸成降级（ai.md v0.19 变更记录）。
  * - tags 数组元素必须是 string；
  * - recurrence 必须完整匹配 daily/weekly/monthly 三种形状之一（weekdays 1..7、
  *   dayOfMonth 1..31、localTime.hour 0..23、localTime.minute 0..59，均为整数）；
@@ -15,6 +21,8 @@
  */
 
 import type { LocalTime, RecurrenceRule } from '../recurrence/types';
+import { REMINDER_CHANNELS } from '../reminder';
+import type { ReminderChannel } from '../reminder';
 import type {
   ChatMessage,
   ParsedItemDraft,
@@ -79,6 +87,21 @@ function isTagArray(value: unknown): value is string[] {
 }
 
 /**
+ * 渠道数组校验（切片 23 / ai.md v0.19）：非空、元素 ∈ REMINDER_CHANNELS、
+ * expo 家族互斥（system-notification 与 alarm 不同现，与 Repository 写路径
+ * normalizeReminderChannelFields 的约束一致）。校验通过返回 true，调用方
+ * 自行拷贝数组（守卫不产出引用）。
+ */
+export function isReminderChannelArray(value: unknown): value is ReminderChannel[] {
+  if (!Array.isArray(value) || value.length === 0) return false;
+  if (!value.every((c) => REMINDER_CHANNELS.includes(c as ReminderChannel))) return false;
+  const hasSystem = value.includes('system-notification');
+  const hasAlarm = value.includes('alarm');
+  if (hasSystem && hasAlarm) return false;
+  return true;
+}
+
+/**
  * 严格校验 AI 返回的候选对象。返回 null 表示校验失败（调用方抛 schema-mismatch）。
  */
 export function isParsedItemDraft(value: unknown): ParsedItemDraft | null {
@@ -130,6 +153,23 @@ export function isParsedItemDraft(value: unknown): ParsedItemDraft | null {
     return null;
   }
 
+  // 切片 23（§7.35 / ai.md v0.19）：澄清与渠道推荐三字段——键可缺省（旧版响应
+  // 向前兼容，非结构性字段不炸整体解析），值出现即从严（见文件头注释）。
+  const needsClarification = value.needsClarification;
+  if (needsClarification !== undefined && typeof needsClarification !== 'boolean') {
+    return null;
+  }
+  const clarificationPrompt = value.clarificationPrompt;
+  if (clarificationPrompt !== undefined && typeof clarificationPrompt !== 'string') {
+    return null;
+  }
+  const reminderChannelsRaw = value.reminderChannels;
+  let reminderChannels: ReminderChannel[] | undefined;
+  if (reminderChannelsRaw !== undefined) {
+    if (!isReminderChannelArray(reminderChannelsRaw)) return null;
+    reminderChannels = [...reminderChannelsRaw];
+  }
+
   return {
     title,
     content,
@@ -143,6 +183,9 @@ export function isParsedItemDraft(value: unknown): ParsedItemDraft | null {
     recurrence: recurrenceRaw === null ? null : (recurrenceRaw as RecurrenceRule),
     reminderOffsetMinutes,
     reminderDelayMinutes,
+    needsClarification,
+    clarificationPrompt,
+    reminderChannels,
   };
 }
 

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -68,6 +68,30 @@ export default function FlashScreen() {
   const currentDraft = chat.draft;
   const hasDraft = currentDraft !== null;
 
+  // 切片 23 验收反馈修补（2026-11-15 MuMu）：非倒置 FlatList 不自动跟随新内容——
+  // 长历史下追加消息（及预览卡出现压缩列表视口）会把列表尾部裁出屏外，
+  // 视觉上像被卡片区"盖住"。
+  // 修补二轮：滚动挂在 onContentSizeChange（新内容布局完成后回调），effect 仅
+  // 负责视口压缩（预览卡出现/消失，contentSize 不变）的场景。
+  // 修补三轮：①animated 滚动会与窗口化挂载竞速（滚途中新 item 陆续挂载、
+  // 内容底边持续下移，动画停在半截）→ 改 animated:false 瞬时跳底，窗口化
+  // 每次重测量都会再次跳，最终收敛；②onScroll 跟踪是否接近底部，仅近底或
+  // 用户刚发送时才跟随——避免正在上翻历史时被窗口化 remeasure 硬拽回底部。
+  const listRef = useRef<FlatList<FlashChatMessage> | null>(null);
+  const nearBottomRef = useRef(true);
+  const lastMessage = chat.messages[chat.messages.length - 1];
+  const lastIsUserSent = lastMessage?.role === 'user';
+  const scrollToBottom = useCallback((force: boolean) => {
+    if (chat.messages.length === 0) return;
+    if (!force && !nearBottomRef.current) return;
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToEnd({ animated: false });
+    });
+  }, [chat.messages]);
+  useEffect(() => {
+    scrollToBottom(lastIsUserSent);
+  }, [scrollToBottom, lastIsUserSent, hasDraft]);
+
   // 切片 22 阶段 2（AGENTS.md §7.34）：结果卡片消息走 FlashResultCard；
   // cardPayload 属性窄化不进闭包，先捕获到局部 const 再用于 onPress。
   // 卡片直接作为 FlatList 单元渲染（不包 row wrapper：row 主轴按内容测宽
@@ -97,6 +121,14 @@ export default function FlashScreen() {
       behavior="padding"
     >
       <FlatList
+        ref={listRef}
+        onContentSizeChange={() => scrollToBottom(false)}
+        onScroll={(e) => {
+          const { contentSize, contentOffset, layoutMeasurement } = e.nativeEvent;
+          nearBottomRef.current =
+            contentOffset.y + layoutMeasurement.height >= contentSize.height - 120;
+        }}
+        scrollEventThrottle={100}
         style={styles.list}
         data={chat.messages}
         keyExtractor={(message) => String(message.id)}

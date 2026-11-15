@@ -154,3 +154,77 @@ Reminder 模型中没有落库位置：data-model.md §4.1 冻结
   不涉及 schema、migration、Repository 签名。可选字段而非判别联合：ChatMessage 既有
   构造点（runFlashTurn historyAppend 等）缺省即 'text'，零改动。
 - 迁移方案：无库迁移。消息为内存 UI 状态，无持久化兼容问题。
+
+## 澄清与渠道推荐（v0.19，切片 23 阶段 1，方案经用户确认）
+- `ParsedItemDraft` 扩展三个可选字段（undefined = 未表达）：
+  - `reminderChannels?: ReminderChannel[]`：解析层识别出的**强提醒渠道推荐**。元素
+    ∈ ReminderChannel 四值，且 `"system-notification"` 与 `"alarm"` 不得同现
+    （expo 家族互斥，AGENTS.md §7.30）。语义澄清：**普通提醒不携带该字段**（远端
+    模型未提及渠道时填 `null`；本地解析未命中强提醒词表时不设键），落库渠道照旧
+    走 `app_settings` 的 defaultChannels（§7.30 不变，禁止远端每句自填
+    `['system-notification']` 踩掉用户默认渠道）；仅强提醒场景（起床/叫我/叫醒/
+    吃药/抢购等，远端按语义判断、本地按关键词表）才填 `['alarm']`；用户明示渠道
+    时按用户。落库优先级：draft 显式渠道 > defaultChannels > 单系统通知。
+  - `needsClarification?: boolean`：true = 输入缺关键属性（缺具体时刻，且无提前量/
+    延迟/重复规则兜底），不应急于落库，Chat 侧展示澄清反问并允许用户直接回复补充；
+    false/undefined = 正常出卡。带完整时刻的叫醒类输入（如「明天上午8点叫我起床」）
+    默认事由就是起床，不反问。
+  - `clarificationPrompt?: string`：澄清反问文案（单句，复用用户原词，只问缺失的
+    那一个属性，如「你要在什么时间提醒你吃药？」）。
+- wire 三键可缺省（对 v0.16「缺键整体拒绝」的刻意偏离）：`RemoteDraftWire` 新增
+  `reminderChannels?: ReminderChannel[] | null` / `needsClarification?: boolean | null` /
+  `clarificationPrompt?: string | null`。键缺省 = 旧版模型响应，照常通过；值出现即
+  从严校验（形状偏差仍整体拒绝）。偏离理由：澄清与渠道推荐是建议性信息，缺键不应
+  把整个解析炸成 schema-mismatch 降级。此偏离仅限本节三字段，reminderOffsetMinutes /
+  reminderDelayMinutes 的「缺键整体拒绝」纪律不变。
+- 落库语义（savePlan）：`reminderChannels` 已表达且无提前量/延迟/重复规则时，在
+  startAt 时刻创建 once 提醒并使用推荐渠道（闹钟语义：8点叫就8点响，不需要提前量）；
+  allDay 或无时间不建并披露；有提前量/延迟/重复规则时锚点规则不变，仅渠道取推荐渠道。
+- 影响范围：src/domain/ai/types.ts、guard.ts、openAiCompatible.ts、prompt.ts（字段行 +
+  强提醒/澄清/多轮续答三节指令）、localFallback.ts（强提醒词表 + 意图短语槽 + 澄清
+  判定）、merge.ts（reminderChannels 掩码合并；澄清信号恒取新一轮）、savePlan.ts
+  （强提醒 once 分支 + 渠道优先级）；不涉及 schema、migration、Repository 签名；
+  Chat/UI 侧消费（澄清消息、渠道标识）在阶段 3。
+- 迁移方案：无库迁移。三字段均为可选：旧 wire（12 键）与含三键或 null 值的新 wire
+  均可通过守卫；本地解析对不含意图词的输入行为不变。
+## 主动澄清扩展至预约/预订/安排类（v0.19 验收反馈修补，切片 23，2026-11-16）
+- 触发范围（仅远端 AI_SYSTEM_PROMPT 主动澄清节；本地降级层澄清保持强提醒 scope 不变）：
+  预约、预订、挂号、订票、订酒店、订餐厅等「要落实一个未来时点安排」的动作动词，缺
+  关键时间（完全没提时间，或只有「下周/周末/近期」这类模糊说法）→ needsClarification=true，
+  反问先问具体时间，可顺带问自然相伴的一个细节（哪家医院/机构、常规还是专项），仍是单句。
+- 时间已明确的预约/安排类输入直接出卡（禁止为细节反问）；机构/医院/地点名称一律
+  写入 content（补充说明），title 只保留动作主题词（如「预约体检」，不把医院/机构/
+  地名写进标题）；澄清续答轮与已有卡片后的补充轮同样——title 沿用上一轮主题词，
+  补充细节写入 content。FlashPreviewCard 与保存后结果卡 FlashResultCard 均新增
+  「内容」行（content 非空时显示，numberOfLines=2），补充细节在卡片上直接可见。
+- 防误伤边界：纯想法/记录/感叹不是预约动作不澄清；type=note 且无安排意图一律不反问；
+  只有明确的预约/预订/挂号/订类动词触发。MuMu 实测（v0.23.0/versionCode 9，全远端
+  路径）：预约体检→澄清「你想预约哪一天、去哪家医院体检？」→补时间出卡（title 预约
+  体检/17日全天）→补医院→卡片 title 不变、「内容：西安交通大学第二附属医院」直接
+  可见 ✓；灵感输入不反问 ✓、强提醒澄清与带时刻叫醒直接出卡回归 ✓。
+- 本地降级层（chat.ts fallbackTurn）：纠正合并轮若本轮 expressed 标题与上一轮不同，
+  标题沿用上一轮主题词、本轮原词并入 content（「；」衔接既有 content）——本地槽位
+  解析没有标题提炼能力，剩余原文当标题会把「预约体检」改写成原词（用户截图实证）。
+  标题未表达的纠正轮（如「改成后天」）行为不变。
+## v0.19 阶段 2/3 落点记录（切片 23，2026-11-15）
+
+上文「Chat/UI 侧消费（澄清消息、渠道标识）在阶段 3」的落点与本阶段远端上下文编辑的实现记录：
+
+- 远端上下文编辑：新增 `buildHistoryBriefing(history, tzid)`（prompt.ts）——从 history
+  末尾向前取最近一条 assistant 草稿 JSON（note 文本跳过），渲染「上一张卡片草稿摘要
+  （修改时以此为准，禁止新建条目）：」块（标题/民用时间/重复/分类/标签/优先级/渠道
+  推荐/澄清注记），由 OpenAICompatibleProvider.parse 拼入 system 消息。民用时间经
+  getZonedParts 本地换算，摘要块绝不携带毫秒 epoch；Prompt 同步升级：编辑意图以摘要
+  块民用日期为基准、其余字段照抄、禁止由毫秒反算日期。
+- history 契约回正（useFlashChat.appendEditHistory）：草稿编辑成功路径的 assistant
+  文本回写编辑后草稿的 JSON（切片 15 格式），纯文本 note 只留消息流；失败/引导路径
+  仍写 note。澄清轮 historyAppend 不变（assistant=草稿 JSON）。
+- Chat 澄清消费（useFlashChat.send）：解析结果 `needsClarification === true` 时不设
+  待确认草稿（不出预览卡），clarificationPrompt（缺省兜底通用文案）作为普通 AI 文本
+  消息追加，degraded 时补降级说明；草稿保留供下一轮续答经 merge 补全后自然出卡。
+  澄清待补轮不被「改成X点」编辑窄规则劫持（needsClarification=true 时窄规则不拦截）。
+- 结果卡片快照渠道（阶段 3）：FlashCardReminderSnapshot 新增 `channels:
+  ReminderChannel[]`（恒携带、防御拷贝）；FlashPreviewCard 新增 describeDraftChannelLine
+  （alarm → ⏰ 闹钟 / system-notification → 🔔 通知 / 网络渠道按标签列出 / 未表达不渲染）、
+  FlashResultCard 提醒行改 describeCardReminderLine（图标 + 「渠道 · 规则摘要」，
+  规则摘要保留）。展示为纯 UI 消费，不改变 wire 契约与落库语义。

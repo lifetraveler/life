@@ -46,6 +46,18 @@
  *   数量缺一不可（n 与 半 至少一者），结果 <1 分钟无效；
  *   前置字符“前”封锁（“提前30分钟以后提醒”不是延迟——两个槽都不匹配，留标题）；
  * - 分类与优先级关键词只判定槽位，不裁剪标题（“讨论项目”不会被剪成“讨论”）。
+ * - 强提醒/意图槽（切片 23 §7.35 / ai.md v0.19）：强提醒词（叫我/叫醒/喊我/唤醒/
+ *   起床/响铃/闹钟，最小关键词集，吃药/抢购等交远端语义判断）只判定不裁剪——命中
+ *   即产出 reminderChannels ['alarm']（闹钟语义）；意图短语（提醒我/叫我/喊我/唤醒我，
+ *   必须带“我”）认领出标题（“提醒我吃药”→标题“吃药”），裸“叫”不带“我”不认领
+ *   （“叫外卖”不受影响）；意图命中 → type task。
+ * - 主动澄清（needsClarification / clarificationPrompt）：意图/强提醒命中且完全没有
+ *   可锚定时刻（无单点时刻、无区间、无 offset/delay/recurrence，startAt 为空或仅
+ *   allDay）→ needsClarification=true + 单句反问（验收 3：“提醒我吃药”→
+ *   “你要在什么时间提醒你吃药？”）；有任何时刻即直接出卡不反问。澄清信号每轮
+ *   独立（merge.ts 不粘滞），续答轮自动归位出卡。
+ * - 意图/强提醒槽跑在延迟/提前/重复/日期/区间/单点时刻之后（span 互斥防重复消费：
+ *   “10分钟后叫我起床”延迟槽认领“10分钟后叫我”，剩“起床”仍判 alarm）。
  *
  * 已知局限（如实披露，不做静默猜测）：农历、“每隔一天”、周一+N号 这类过指定
  * 输入（周几槽先命中，N号 留在标题）等不在白名单内；LocalFallback 只承诺任务卡
@@ -67,6 +79,7 @@ import {
 import type { RecurrenceRule } from '../recurrence/types';
 import { AiParseError } from './errors';
 import type { DraftField } from './merge';
+import type { ReminderChannel } from '../reminder';
 import type {
   AiParseContext,
   AiParser,
@@ -570,6 +583,24 @@ const TASK_WORDS_RE =
 const TAG_RE = /#([^\s#，,。.；;！!？?：:]+)/gu;
 
 // ---------------------------------------------------------------------------
+// 强提醒与意图（切片 23 §7.35 / ai.md v0.19）
+// ---------------------------------------------------------------------------
+
+/**
+ * 强提醒词（只判定，不裁剪标题）：命中 → reminderChannels ['alarm']。
+ * 最小关键词集（任务卡 + 用户确认）：叫我/叫醒/喊我/唤醒/起床/响铃/闹钟；
+ * 吃药/抢购/开会等场景交远端 Prompt 语义判断（本地白名单纪律，不开放语义理解）。
+ * 代价（如实披露）：“买个闹钟送人”这类名词性用法也会命中——本地降级层的已知边界。
+ */
+const STRONG_ALARM_RE = /(起床|叫我|叫醒|喊我|唤醒|响铃|闹钟)/u;
+
+/**
+ * 意图短语（认领出标题）：提醒/叫醒/叫/喊/唤醒 + “我”，必须是朝向“我”的提醒指令，
+ * 不属于标题内容词。裸“叫”不带“我”绝不匹配（“叫外卖”“叫车”不受影响）。
+ */
+const REMINDER_INTENT_RE = /(提醒|叫醒|叫|喊|唤醒)我/u;
+
+// ---------------------------------------------------------------------------
 // next occurrence（重复草稿的 startAt）
 // ---------------------------------------------------------------------------
 
@@ -916,6 +947,57 @@ export class LocalFallbackProvider implements AiParser {
       }
     }
 
+    // --- 强提醒 / 意图短语（切片 23 §7.35 / ai.md v0.19）---
+    // 跑在延迟/提前/重复/日期/区间/单点时刻之后：span 互斥保证这些槽已认领的
+    // “叫X”片段（如“10分钟后叫我”）不会被意图短语重复消费，剩余文本里的
+    // “起床/响铃/闹钟”等强提醒词仍能判出 alarm 渠道。
+    // 意图短语：认领出标题（“提醒我吃药”→“吃药”），记录首个命中词供反问文案选型。
+    let reminderIntentHit = false;
+    let firstIntentWord: '提醒' | '叫醒' | '叫' | '喊' | '唤醒' | null = null;
+    {
+      const intentRegex = new RegExp(
+        REMINDER_INTENT_RE.source,
+        REMINDER_INTENT_RE.flags.includes('g')
+          ? REMINDER_INTENT_RE.flags
+          : `${REMINDER_INTENT_RE.flags}g`,
+      );
+      let m: RegExpExecArray | null;
+      while ((m = intentRegex.exec(trimmed)) !== null) {
+        const start = m.index;
+        const end = start + m[0].length;
+        if (overlaps(start, end, claimed)) continue;
+        const w = m[1];
+        if (firstIntentWord === null && (w === '提醒' || w === '叫醒' || w === '叫' || w === '喊' || w === '唤醒')) {
+          firstIntentWord = w;
+        }
+        claim(claimed, titleSpans, { start, end }, true);
+        reminderIntentHit = true;
+      }
+    }
+    // 强提醒词：只判定不裁剪（“起床/响铃/闹钟”是内容词，必须留在标题里）。
+    // 被延迟/提前槽整段认领的“叫我”不再计入；剩余未认领文本命中即判 alarm。
+    let strongAlarmHit = false;
+    {
+      const alarmRegex = new RegExp(
+        STRONG_ALARM_RE.source,
+        STRONG_ALARM_RE.flags.includes('g')
+          ? STRONG_ALARM_RE.flags
+          : `${STRONG_ALARM_RE.flags}g`,
+      );
+      let m: RegExpExecArray | null;
+      while ((m = alarmRegex.exec(trimmed)) !== null) {
+        if (overlaps(m.index, m.index + m[0].length, claimed)) continue;
+        strongAlarmHit = true;
+        break;
+      }
+    }
+    // 意图短语为叫醒类（叫X我/喊我/唤醒我）同样构成强提醒场景——“明天上午8点叫我”
+    // 没有未被认领的强提醒词（叫我已被意图槽认领），但仍应推荐 alarm 渠道（决策③）；
+    // “提醒我…”是普通提醒，不构成强提醒场景（渠道走 defaultChannels）。
+    if (reminderIntentHit && firstIntentWord !== null && firstIntentWord !== '提醒') {
+      strongAlarmHit = true;
+    }
+
     // --- 组装 startAt / endAt / allDay / recurrence ---
     if (recurrenceCore !== null) {
       expressed.add('recurrence');
@@ -991,7 +1073,11 @@ export class LocalFallbackProvider implements AiParser {
     let type: ParsedItemType = 'note';
     const isEvent = EVENT_WORDS_RE.test(trimmed) || startCt !== null;
     const isTask =
-      TASK_WORDS_RE.test(trimmed) || reminderOffsetMinutes !== null || reminderDelayMinutes !== null;
+      TASK_WORDS_RE.test(trimmed) ||
+      reminderOffsetMinutes !== null ||
+      reminderDelayMinutes !== null ||
+      reminderIntentHit ||
+      strongAlarmHit;
     if (isEvent) {
       type = 'event';
     } else if (isTask) {
@@ -1003,6 +1089,53 @@ export class LocalFallbackProvider implements AiParser {
 
     const built = buildTitle(trimmed, titleSpans);
     if (built.expressed) expressed.add('title');
+
+    // --- 强提醒渠道推荐与主动澄清（切片 23 §7.35 / ai.md v0.19）---
+    // 渠道：强提醒场景命中 → ['alarm']（闹钟语义：几点叫就几点响）；普通意图
+    // （提醒我…）不出渠道——落库渠道走用户全局默认渠道 defaultChannels（§7.30）。
+    let reminderChannels: ReminderChannel[] | undefined;
+    if (strongAlarmHit) {
+      reminderChannels = ['alarm'];
+      expressed.add('reminderChannels');
+    }
+    // 标题兜底：强提醒命中但标题被裁空（如“明天上午8点叫我”全部被槽位认领）→
+    // 默认事由“起床”直接出卡（用户确认决策③），不再复读整句输入。“提醒我…”
+    // 这类无事由可默认的输入保持既有兜底（原句）。
+    if (!built.expressed && strongAlarmHit) {
+      built.title = '起床';
+      built.expressed = true;
+      expressed.add('title');
+    }
+    // 主动澄清：意图/强提醒命中但完全没有可锚定时刻（无单点时刻、无区间、
+    // 无 offset/delay/recurrence，startAt 为空或仅 allDay 的纯日期）→ 反问；
+    // 有任何时刻即直接出卡不反问（决策③：“明天上午8点叫我”不反问）。
+    const clarifyEligible =
+      (reminderIntentHit || strongAlarmHit) &&
+      startCt === null &&
+      singleCt === null &&
+      reminderOffsetMinutes === null &&
+      reminderDelayMinutes === null &&
+      recurrence === null &&
+      (startAt === null || allDay);
+    let needsClarification: boolean | undefined;
+    let clarificationPrompt: string | undefined;
+    if (clarifyEligible) {
+      needsClarification = true;
+      // 反问文案选型（验收 3 精确文案）：“提醒我…”→“提醒你${对象}？”；
+      // 叫醒类→“叫你${对象}？”（标题兜底仍含意图词时对象置空/换默认，避免复读）；
+      // 仅强提醒词命中（响铃/闹钟，无“我”字样）→“${标题}？”。
+      const intentWord = firstIntentWord;
+      if (intentWord === '提醒') {
+        const objectText = built.title.includes('提醒') ? '' : built.title;
+        clarificationPrompt = `你要在什么时间提醒你${objectText}？`;
+      } else if (intentWord !== null) {
+        const degenerate = built.title.length === 0 || built.title.includes(intentWord);
+        const objectText = degenerate ? '起床' : built.title;
+        clarificationPrompt = `你要在什么时间叫你${objectText}？`;
+      } else {
+        clarificationPrompt = `你要在什么时间${built.title}？`;
+      }
+    }
 
     return {
       draft: {
@@ -1018,6 +1151,9 @@ export class LocalFallbackProvider implements AiParser {
         recurrence,
         reminderOffsetMinutes,
         reminderDelayMinutes,
+        reminderChannels,
+        needsClarification,
+        clarificationPrompt,
       },
       expressed,
     };

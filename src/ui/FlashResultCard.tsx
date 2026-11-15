@@ -3,8 +3,9 @@
  *
  * 保存成功后的 assistant 消息呈现（kind:'card'，载荷 FlashCardPayload 结构化
  * 快照）：左侧分类色条（含 Emoji 分类行）+ 粗体标题 + 📅 日期行（含具体时间）
- * + 🔔 提醒行（formatReminderRuleSummary 现算文案，once 显示绝对触发时刻，
- * 阶段 3 推迟后可见联动变化）。
+ * + 📝 内容行（content 非空才显示，v0.19 验收反馈修补：机构/医院等细节在卡片
+ * 直接可见）+ 提醒行（describeCardReminderLine 现算文案，切片 23 起按渠道展示
+ * ⏰ 闹钟 / 🔔 通知标识；once 显示绝对触发时刻，阶段 3 推迟后可见联动变化）。
  *
  * 纪律：
  * - 纯展示组件：点击只发 onPress（导航到 /item/[id] 留在 flash.tsx 屏幕层，
@@ -19,13 +20,17 @@
 
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import type { FlashCardPayload } from '../domain/ai/types';
+import type {
+  FlashCardPayload,
+  FlashCardReminderSnapshot,
+} from '../domain/ai/types';
 import { getZonedParts } from '../domain/recurrence/civilTime';
 import {
   formatAgendaTimeRange,
   formatReminderRuleSummary,
   WEEKDAY_LABELS,
 } from './timeFormat';
+import { REMINDER_CHANNEL_LABELS } from './reminderForm';
 
 /** 分类色缺失时的回退灰（Category.color null 的 UI 回退语义，取预置 other 色值）。 */
 const FALLBACK_CATEGORY_COLOR = '#9E9E9E';
@@ -56,6 +61,30 @@ export function describeCardTimeLine(payload: FlashCardPayload, tzid: string): s
   return range === null ? date : `${date} | ${range}`;
 }
 
+/**
+ * 提醒行渠道标识（切片 23 阶段 3 / §7.35，任务卡验收 2/4）：含 alarm →
+ * '⏰' + '闹钟 · 规则摘要'；含 system-notification → '🔔' + '通知 · 规则摘要'；
+ * 网络渠道 → '🔔' + 渠道标签。规则摘要（formatReminderRuleSummary）保留，
+ * 渠道只是行首标识。reminder null → null（整行不渲染）。
+ */
+export function describeCardReminderLine(
+  reminder: FlashCardReminderSnapshot | null,
+): { icon: string; text: string } | null {
+  if (reminder === null) return null;
+  const summary = formatReminderRuleSummary(reminder);
+  if (reminder.channels.includes('alarm')) {
+    return { icon: '⏰', text: `闹钟 · ${summary}` };
+  }
+  if (reminder.channels.includes('system-notification')) {
+    return { icon: '🔔', text: `通知 · ${summary}` };
+  }
+  const labels =
+    reminder.channels.length > 0
+      ? reminder.channels.map((channel) => REMINDER_CHANNEL_LABELS[channel]).join('、')
+      : '通知';
+  return { icon: '🔔', text: `${labels} · ${summary}` };
+}
+
 interface FlashResultCardProps {
   payload: FlashCardPayload;
   tzid: string;
@@ -75,8 +104,7 @@ export default function FlashResultCard({
   onPostpone,
 }: FlashResultCardProps) {
   const timeLine = describeCardTimeLine(payload, tzid);
-  const reminderSummary =
-    payload.reminder === null ? null : formatReminderRuleSummary(payload.reminder);
+  const reminderLine = describeCardReminderLine(payload.reminder);
   const categoryColor = payload.category?.color ?? FALLBACK_CATEGORY_COLOR;
   const showPostponeChips = payload.startAt !== null && !payload.allDay;
   return (
@@ -102,11 +130,20 @@ export default function FlashResultCard({
             </Text>
           </View>
         ) : null}
-        {reminderSummary !== null ? (
+        {/* v0.19 验收反馈修补（切片 23）：内容补充说明行（机构/医院等细节），非空才显示。 */}
+        {payload.content.trim().length > 0 ? (
           <View style={styles.metaRow}>
-            <Text style={styles.metaIcon}>🔔</Text>
+            <Text style={styles.metaIcon}>📝</Text>
+            <Text style={styles.metaText} numberOfLines={2}>
+              {payload.content}
+            </Text>
+          </View>
+        ) : null}
+        {reminderLine !== null ? (
+          <View style={styles.metaRow}>
+            <Text style={styles.metaIcon}>{reminderLine.icon}</Text>
             <Text style={styles.metaText} numberOfLines={1}>
-              {reminderSummary}
+              {reminderLine.text}
             </Text>
           </View>
         ) : null}

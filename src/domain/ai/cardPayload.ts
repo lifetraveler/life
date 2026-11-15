@@ -36,6 +36,7 @@ export function buildFlashCardPayload(
   return {
     itemId: created.id,
     title: created.title,
+    content: created.content,
     type: created.type,
     startAt: timePatch.startAt,
     endAt: timePatch.endAt,
@@ -61,6 +62,7 @@ export function buildFlashCardPayload(
             dayOfMonth: reminder.dayOfMonth,
             onceAt: reminder.onceAt === null ? null : { ...reminder.onceAt },
             tzid: reminder.tzid,
+            channels: [...reminder.channels],
           },
   };
 }
