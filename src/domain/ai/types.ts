@@ -9,15 +9,71 @@
  */
 
 import type { RecurrenceRule } from '../recurrence/types';
+import type { ItemType } from '../item';
+import type { OnceCivilTime, ReminderFrequency } from '../reminder';
 
 export type ChatRole = 'user' | 'assistant';
 
 /**
+ * 结果卡片分类快照（切片 22，AGENTS.md §7.34）。
+ * 展示所需的最小子集：色条颜色 + Emoji 图标 + 名称；null 沿 Category 契约语义
+ * （color null → UI 回退灰；emoji null → 不显示图标）。
+ */
+export interface FlashCardCategorySnapshot {
+  id: string;
+  name: string;
+  color: string | null;
+  emoji: string | null;
+}
+
+/**
+ * 结果卡片提醒快照（切片 22）：formatReminderRuleSummary 的 Pick 形状超集，
+ * 额外携带 id 与 onceAt（阶段 3 快捷推迟须联动顺延 once 提醒的 onceAt，§7.34）。
+ */
+export interface FlashCardReminderSnapshot {
+  id: string;
+  frequency: ReminderFrequency;
+  localTimeHour: number;
+  localTimeMinute: number;
+  weekdays: number[];
+  dayOfMonth: number;
+  /** 仅 frequency='once' 非空（民用时间，once 触发时刻唯一来源）。 */
+  onceAt: OnceCivilTime | null;
+  tzid: string;
+}
+
+/**
+ * 闪电录入保存成功后的结果卡片载荷（切片 22，AGENTS.md §7.34）。
+ * 结构化快照而非文案：卡片 UI 由 src/ui/FlashResultCard.tsx 现算展示文案，
+ * 阶段 3 快捷推迟只更新 startAt / onceAt 即可原地上刷新。
+ */
+export interface FlashCardPayload {
+  /** 点击卡片主体跳转 /item/[id]。 */
+  itemId: string;
+  title: string;
+  type: ItemType;
+  /** 保存链落库后的最终时间（含切片 19 delay 锚定），取 plan.timePatch 而非 createItem 原始返回。 */
+  startAt: number | null;
+  endAt: number | null;
+  allDay: boolean;
+  /** categoryId 未命中分类列表时为 null → 色条回退灰、不渲染分类行。 */
+  category: FlashCardCategorySnapshot | null;
+  /** 保存链未创建提醒（reminderPlan null）时为 null → 卡片不渲染提醒行。 */
+  reminder: FlashCardReminderSnapshot | null;
+}
+
+/**
  * 对话消息（docs/contracts/ai.md 引用但未定义形状，v0.15.1 变更记录约定实现侧形状）。
+ * 切片 22 扩展（ai.md v0.18 变更记录）：kind/cardPayload 为可选字段而非判别联合，
+ * 既有构造点（runFlashTurn historyAppend 等）缺省即 'text'，零改动。
  */
 export interface ChatMessage {
   role: ChatRole;
   text: string;
+  /** 消息呈现形态：'text' 纯文本（缺省）；'card' 结果卡片（cardPayload 必有）。 */
+  kind?: 'text' | 'card';
+  /** kind='card' 时的展示载荷；仅保存成功后的 assistant 消息携带，不进入 LLM history。 */
+  cardPayload?: FlashCardPayload;
 }
 
 /** AI 解析上下文：now/tzid 必须由调用方显式传入，Provider 内部禁止读系统时钟/时区。 */

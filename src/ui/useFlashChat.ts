@@ -9,19 +9,24 @@
  * createItem → updateItemTime → addTagToItem×N → createReminder（重复规则，
  * tzid 白名单校验在 savePlan）→ reminderScheduler.reconcile（失败不阻断）。
  * 计划页列表由响应式订阅自动刷新（验收 9），本页无需额外通知。
+ *
+ * 切片 22 阶段 1（AGENTS.md §7.34）：保存成功后的 AI 回复从纯文本改为结果卡片
+ * 消息（kind:'card' + cardPayload 快照，buildFlashCardPayload 组装）；
+ * 提醒未自动落库的说明（reminderNotice）仍以纯文本消息补充。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { itemRepository } from '../data';
 import { SecureAiConfigStore } from '../data/SecureAiConfigStore';
+import { buildFlashCardPayload } from '../domain/ai/cardPayload';
 import { runFlashTurn } from '../domain/ai/chat';
 import type { AiConfig } from '../domain/ai/configStore';
 import { buildFlashSavePlan } from '../domain/ai/savePlan';
-import type { ChatMessage, ParsedItemDraft } from '../domain/ai/types';
+import type { ChatMessage, FlashCardPayload, ParsedItemDraft } from '../domain/ai/types';
 import type { Category } from '../domain/category';
 import type { ChannelPreset } from '../domain/channelPreset';
-import type { ReminderChannel } from '../domain/reminder';
+import type { Reminder, ReminderChannel } from '../domain/reminder';
 import { reminderScheduler } from '../notifications';
 import { getDeviceTzid } from './timeFormat';
 
@@ -29,13 +34,19 @@ export interface FlashChatMessage {
   id: number;
   role: 'user' | 'assistant';
   text: string;
+  /** 呈现形态（切片 22）：'text' 纯文本；'card' 结果卡片（cardPayload 必有）。 */
+  kind: 'text' | 'card';
+  cardPayload?: FlashCardPayload;
 }
 
 export interface ConfirmSaveResult {
   ok: boolean;
   /** 提醒未自动落库时的说明（一次性提醒/时区白名单外）。 */
   notice: string | null;
-  /** 已追加到消息流的用户可读结果文本。 */
+  /**
+   * 保存结果的汇总文本（切片 22 起消息流呈现为结果卡片消息 + 可选纯文本
+   * 说明；message 仍含完整文案供调用方/测试使用）。
+   */
   message: string;
 }
 
@@ -50,6 +61,8 @@ export function useFlashChat() {
   const configRef = useRef<AiConfig | null>(null);
   const storeRef = useRef<SecureAiConfigStore | null>(null);
   const nextIdRef = useRef(1);
+  // 切片 22：分类列表镜像（confirmSave 组装卡片分类快照用，避免异步 setState 时机问题）。
+  const categoriesRef = useRef<Category[]>([]);
 
   useEffect(() => {
     if (storeRef.current === null) {
@@ -67,7 +80,10 @@ export function useFlashChat() {
     itemRepository
       .getCategories()
       .then((loaded) => {
-        if (!cancelled) setCategories(loaded);
+        if (!cancelled) {
+          categoriesRef.current = loaded;
+          setCategories(loaded);
+        }
       })
       .catch((error: unknown) => {
         console.warn('[slice-15] 读取分类失败', error);
@@ -78,7 +94,16 @@ export function useFlashChat() {
   }, []);
 
   const push = useCallback((role: 'user' | 'assistant', text: string): void => {
-    setMessages((prev) => [...prev, { id: nextIdRef.current, role, text }]);
+    setMessages((prev) => [...prev, { id: nextIdRef.current, role, text, kind: 'text' }]);
+    nextIdRef.current += 1;
+  }, []);
+
+  /** 追加结果卡片消息（切片 22 阶段 1，AGENTS.md §7.34）。 */
+  const pushCard = useCallback((text: string, cardPayload: FlashCardPayload): void => {
+    setMessages((prev) => [
+      ...prev,
+      { id: nextIdRef.current, role: 'assistant', text, kind: 'card', cardPayload },
+    ]);
     nextIdRef.current += 1;
   }, []);
 
@@ -154,8 +179,9 @@ export function useFlashChat() {
       for (const name of plan.tagNames) {
         await itemRepository.addTagToItem(created.id, name);
       }
+      let createdReminder: Reminder | null = null;
       if (plan.reminderPlan !== null) {
-        await itemRepository.createReminder({
+        createdReminder = await itemRepository.createReminder({
           ...plan.reminderPlan,
           itemId: created.id,
         });
@@ -168,13 +194,31 @@ export function useFlashChat() {
       draftRef.current = null;
       setDraft(null);
       historyRef.current = [];
-      const message =
-        plan.reminderNotice !== null
-          ? `已添加《${created.title}》。${plan.reminderNotice}`
-          : `已添加《${created.title}》`;
-      push('assistant', message);
+      // 切片 22 阶段 1（AGENTS.md §7.34）：保存成功后的 AI 回复改为结果卡片消息
+      //（替代原「已添加《xx》」纯文本）；提醒未自动落库的说明（reminderNotice）
+      // 仍追加一条纯文本消息，Alert 提示行为不变。
+      const message = `已添加《${created.title}》`;
+      // 分类快照水合：优先用挂载时镜像；镜像为空时兜底重读（失败不阻断，回退无分类）。
+      let cardCategories = categoriesRef.current;
+      if (cardCategories.length === 0) {
+        try {
+          cardCategories = await itemRepository.getCategories();
+          categoriesRef.current = cardCategories;
+        } catch (error) {
+          console.warn('[slice-22] 卡片分类快照读取失败，回退无分类', error);
+          cardCategories = [];
+        }
+      }
+      pushCard(
+        message,
+        buildFlashCardPayload(created, plan.timePatch, createdReminder, cardCategories),
+      );
+      if (plan.reminderNotice !== null) {
+        push('assistant', plan.reminderNotice);
+      }
       return { ok: true, notice: plan.reminderNotice, message };
     } catch (error) {
+      // 保存链失败维持纯文本失败提示，不出卡片（切片 22 方案确认）。
       console.warn('[slice-15] 保存失败', error);
       const message = `保存失败：${
         error instanceof Error ? error.message : String(error)
@@ -184,7 +228,7 @@ export function useFlashChat() {
     } finally {
       setBusy(false);
     }
-  }, [busy, push]);
+  }, [busy, push, pushCard]);
 
   return { messages, draft, busy, categories, send, applyEdit, confirmSave };
 }

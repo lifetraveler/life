@@ -139,3 +139,18 @@ Reminder 模型中没有落库位置：data-model.md §4.1 冻结
   先于提前槽扫描、命中整段认领）；不涉及 schema、migration、Repository 签名。
 - 迁移方案：无库迁移。旧 wire 缺 reminderDelayMinutes 键会被守卫整体拒绝
   （schema-mismatch → 降级本地解析），模型响应即弃即换（v0.16 先例）。
+
+## 变更记录（v0.18，切片 22 阶段 1，方案经用户当场确认）
+- 按 v0.15.1 留言「如后续需要扩展在此契约补充」：`ChatMessage` 实现侧形状扩展可选字段
+  `kind?: 'text' | 'card'` 与 `cardPayload?: FlashCardPayload`（形状见
+  src/domain/ai/types.ts；FlashCardCategorySnapshot / FlashCardReminderSnapshot /
+  FlashCardPayload 结构化快照）——闪电录入保存成功后的 AI 回复改为结果卡片消息
+  （AGENTS.md §7.34），卡片 UI 由 src/ui/FlashResultCard.tsx 现算展示文案。
+- 原因：tasks/slice-22.md 阶段 1 要求 ChatMessage 支持携带 cardPayload；载荷存结构化
+  快照而非文案，阶段 3 快捷推迟只更新 startAt / onceAt 即可原地刷新。卡片消息仅入
+  渲染流（保存成功后 historyRef 已清空），不进入 LLM history。
+- 影响范围：src/domain/ai/types.ts、cardPayload.ts（新）、__tests__/cardPayload.test.ts（新）、
+  src/ui/useFlashChat.ts、src/ui/FlashResultCard.tsx（新）、src/app/(tabs)/flash.tsx；
+  不涉及 schema、migration、Repository 签名。可选字段而非判别联合：ChatMessage 既有
+  构造点（runFlashTurn historyAppend 等）缺省即 'text'，零改动。
+- 迁移方案：无库迁移。消息为内存 UI 状态，无持久化兼容问题。
