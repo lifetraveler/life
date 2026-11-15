@@ -25,7 +25,7 @@
 - 开发机 Windows 11；模拟器 MuMu（`adb -s 127.0.0.1:16384`，Android 15，com.vibecoding.life，密度 320 → 450×800dp，font_scale 1.0，时区 Asia/Shanghai 正确，getDeviceTzid（slice-11 改 expo-localization）无 UTC 伪影）。
 - release 构建：`cmd /c "set JAVA_HOME=D:\enviroment\java\jdk\oracle-jdk-17.0.10&& gradlew.bat assembleRelease --console=plain"`（workdir `android/`，必须 `gradlew.bat`，POSIX `./gradlew` 会 cygpath 127）；装机 `adb install -r` → force-stop → monkey LAUNCHER 冷启动。
 - a11y 驱动：`uiautomator dump` → pull → `grep -o 'text="…"'` + `paste` 提取（python -c 管道在本环境段错误 exit 139 不可用）；`adb shell input text` 直接过中文（见教训 5）。
-- **origin 网络不可达**：`git fetch`/`git push` 报 `Recv failure: Connection was reset`（github.com/lifetraveler/life.git）——本切片 push/merge 收尾未完成，见遗留披露 5。
+- **origin 网络曾不可达**：收尾时 `git fetch`/`git push` 报 `Recv failure: Connection was reset`（github.com/lifetraveler/life.git），网络恢复后已补完 push/merge，见遗留披露 5。
 
 ## 2. 数据库/构建事实
 
@@ -71,9 +71,11 @@
 
 1. **真机清单 3/4/5 留用户手验**：allDay 卡「全天」无 chips、无时间待办无日期行无 chips、保存链失败纯文本不出卡——三者均有单测覆盖，真机未逐一驱动。
 2. **once 提醒实际触发留观察**：MuMu 库现存两条测试条目「开周会」（11-16 07:20 与 11-16 14:50 once 提醒，兼作触发验证素材）；通知触发属既有链路（本切片未改 `src/notifications/`），前台/后台送达表现不在本切片验收范围。
-3. **创建流「7点半」半点解析仍是已知限制**（localFallback 只认整点）；「明天上午8点叫我起床」无提醒/渠道建议与询问交互——问题 1 将紧随本切片立「闪电录入解析澄清与渠道建议」切片提案（含 ai.md 契约变更）。
+3. **问题 1（用户验收反馈 2026-11-15，计入本 closeout）——「明天上午8点叫我起床」只建立事项、无提醒**：降级解析层只认显式「提前X分钟提醒」，无提醒渠道建议与询问交互。用户期望：这类场景推荐用闹钟渠道，闪电添加可由 AI 判断哪种提醒方式更合适，并主动询问用户（例：「我将添加 8 点的闹钟，你是否还需要其他提醒方式？」）。不在本切片修复；紧随本切片立「闪电录入解析澄清与渠道建议」切片提案（AI 判断提醒方式建议 + 询问交互 + 远端路径编辑意图；含 ai.md 契约变更，用户已确认排期）。
+   - 附：问题 2（紧随其后的「修改成7点半」被建成新事项而非改上一条）已在本切片阶段 3 修复（editIntent 编辑窄规则，MuMu 实测通过，见 §3 阶段 3）。
+   - 另：创建流「7点半」半点解析仍是已知限制（localFallback 只认整点），将并入上述提案评估。
 4. **编辑窄规则仅降级层语义**：远端 AI Key 路径（AiParser 远端实现）不经此规则；编辑意图在远端路径的表现待后续切片/提示词工作覆盖。
-5. **push/merge 收尾未完成**：origin（github.com/lifetraveler/life.git）网络不可达（Connection was reset）。分支 task/slice-22 已全部本地提交；网络恢复后按 §7.9 顺序补：`git push -u origin task/slice-22` → 切 main `git merge --no-ff task/slice-22` → `git push origin main`。
+5. **push/merge 收尾已完成（本文档补记时修正）**：closeout 提交时网络尚不可达（`Recv failure: Connection was reset`），后恢复并已按 §7.9 补齐——`git push -u origin task/slice-22` → 切 main `git merge --no-ff task/slice-22`（merge commit `7a47187`）→ `git push origin main`（076d291..7a47187）。分支 task/slice-22 按惯例保留追溯。
 6. **版本号在 Phase 3 后未升**：0.22.0 / versionCode 3 覆盖安装（开发验证包不逐阶段升版本号）；如需区分构建可后续升 versionCode 4。
 
 ## 6. 后续切片候选（承接 slice-21 排期，加问题 1 插队）
