@@ -21,7 +21,7 @@
 ### 阶段 3：UI 澄清状态与渠道展示适配（2026-11-15 完成，commit 见反馈文件）
 - **澄清交互**：在 `src/ui/useFlashChat.ts` 与 `flash.tsx` 中，如果返回 `needsClarification`，不展示预览卡片，而是展示一条 AI 消息（例如：“你要定明天8点的闹钟吗？”），并提示用户继续输入。✅ send() 澄清分支：setDraft(null) 不出卡、clarificationPrompt 兜底文案、degraded 补降级说明；澄清待补轮不被「改成X点」窄规则劫持；flash.tsx 零改动（普通文本气泡已可渲染，经 hook 测试验证）。
 - **渠道展示**：修改 `FlashPreviewCard.tsx` 和 `FlashResultCard.tsx`，如果包含 `alarm` 渠道，显示一个“⏰ 闹钟”的标识；如果是普通通知，显示“🔔 通知”。✅ FlashCardReminderSnapshot 加 channels 字段（cardPayload 防御拷贝）；describeDraftChannelLine / describeCardReminderLine 纯函数（alarm→⏰、system-notification→🔔、网络渠道按标签列出）。
-- 真机验收。（待真机后补结果）
+- 真机验收。（✅ MuMu 0.23.0/v4 实测通过 2026-11-15：验收 2/3/4 全过且为远端路径实测（设备已配置 Key），响铃留观察——见 tasks/slice-23-phase2-3-feedback.md §5a）
 
 ## 验收标准
 1. tsc 零错误；jest 全过（单测覆盖本地正则对“叫我起床”的 alarm 判断、Prompt 包含上下文）。
