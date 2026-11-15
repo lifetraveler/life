@@ -159,6 +159,80 @@ describe('runFlashTurn（阶段 3 编排）', () => {
     expect(result.draft.title).toBe('买菜');
   });
 
+  it('降级补充轮：标题沿用上一轮主题词，本轮原词并入 content（验收反馈修补）', async () => {
+    const history: ChatMessage[] = [
+      { role: 'user', text: '我要预约我的体检' },
+      { role: 'assistant', text: JSON.stringify({ title: '预约体检' }) },
+      { role: 'user', text: '明天上午的体检' },
+      { role: 'assistant', text: JSON.stringify({ title: '预约体检' }) },
+    ];
+    const previousDraft: ParsedItemDraft = {
+      title: '预约体检',
+      content: '',
+      type: 'task',
+      startAt: new Date('2026-11-12T00:00:00+08:00').getTime(),
+      endAt: null,
+      allDay: true,
+      categoryId: null,
+      tags: [],
+      priority: null,
+      recurrence: null,
+      reminderOffsetMinutes: null,
+      reminderDelayMinutes: null,
+    };
+    const result = await runFlashTurn('预约到西安交通大学第二附属医院', {
+      config,
+      now: NOW,
+      tzid: TZID,
+      history,
+      previousDraft,
+      fetchImpl: (async () =>
+        new Response('boom', { status: 500 })) as unknown as typeof fetch,
+    });
+    expect(result.degraded).toBe(true);
+    // 标题不被本轮剩余原文覆盖，本轮原词进 content 作补充说明。
+    expect(result.draft.title).toBe('预约体检');
+    expect(result.draft.content).toBe('预约到西安交通大学第二附属医院');
+    // 时间/分类等未表达字段沿用上一轮（合并语义不变）。
+    expect(result.draft.startAt).toBe(
+      new Date('2026-11-12T00:00:00+08:00').getTime(),
+    );
+    expect(result.draft.allDay).toBe(true);
+    // history 追加的是调整后的草稿（下一轮 briefing 连续性）。
+    expect(result.historyAppend?.[1]?.text).toContain('预约体检');
+    expect(result.historyAppend?.[1]?.text).toContain('西安交通大学第二附属医院');
+  });
+
+  it('降级纠正轮标题未表达时行为不变（改成后天回归）', async () => {
+    const history: ChatMessage[] = [{ role: 'user', text: '明天上午10点交材料' }];
+    const previousDraft: ParsedItemDraft = {
+      title: '交材料',
+      content: '旧补充',
+      type: 'task',
+      startAt: new Date('2026-11-11T10:00:00+08:00').getTime(),
+      endAt: null,
+      allDay: false,
+      categoryId: null,
+      tags: [],
+      priority: null,
+      recurrence: null,
+      reminderOffsetMinutes: null,
+      reminderDelayMinutes: null,
+    };
+    const result = await runFlashTurn('改成后天', {
+      config,
+      now: NOW,
+      tzid: TZID,
+      history,
+      previousDraft,
+      fetchImpl: (async () =>
+        new Response('boom', { status: 500 })) as unknown as typeof fetch,
+    });
+    expect(result.draft.title).toBe('交材料');
+    // 标题未表达 → 不触发 content 并入，既有 content 保留。
+    expect(result.draft.content).toBe('旧补充');
+  });
+
   it('空输入拒绝执行', async () => {
     await expect(
       runFlashTurn('   ', {

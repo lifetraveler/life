@@ -89,6 +89,11 @@ export default function FlashPreviewCard({
         </Text>
       </View>
       <Text style={styles.rowText}>时间：{timeText}</Text>
+      {draft.content.trim().length > 0 ? (
+        <Text style={styles.rowText} numberOfLines={2}>
+          内容：{draft.content}
+        </Text>
+      ) : null}
       {category !== null ? <Text style={styles.rowText}>分类：{category.name}</Text> : null}
       {draft.priority !== null && draft.priority >= 1 ? (
         <Text style={styles.rowText}>优先级：{PRIORITY_LABELS[draft.priority]}</Text>

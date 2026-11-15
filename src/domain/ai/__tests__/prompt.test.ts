@@ -104,18 +104,24 @@ describe('AI_SYSTEM_PROMPT：澄清与渠道推荐（切片 23 §7.35）', () =>
     expect(P).toContain('但仍是单句，不要列问题清单');
   });
 
-  it('澄清节扩展：预约类有时间直接出卡、细节并入 title/content、防误伤边界', () => {
+  it('澄清节扩展：预约类有时间直接出卡、细节写入 content、防误伤边界', () => {
     expect(P).toContain('时间已明确（说了具体日期/时刻）：needsClarification=false 直接出卡');
     expect(P).toContain('禁止再为细节反问');
-    expect(P).toContain('机构/医院/类型等细节并入 title（如 title「仁济医院常规体检」，让卡片一眼可读）或 content/tags');
+    // 机构/医院/地点写入 content，标题保留主题词（验收反馈修补 v2）。
+    expect(P).toContain('机构/医院/地点名称一律写入 content（补充说明）');
+    expect(P).toContain('title 只保留动作主题词');
+    expect(P).toContain('不要把医院/机构/地名写进标题');
     // 防误伤：note/纯想法/感叹不反问。
     expect(P).toContain('“体检很重要”“记一下体检报告指标”）不是预约动作，不澄清');
     expect(P).toContain('type 为 note 且用户没表达安排意图时一律不反问');
     expect(P).toContain('只有明确的预约/预订/挂号/订类动词才触发上一条');
   });
 
-  it('澄清续答：补全细节并入 title/content（验收反馈修补）', () => {
-    expect(P).toContain('补全里出现的机构/医院/类型等细节并入 title（让卡片一眼可读）或 content/tags');
+  it('澄清续答与补充轮：细节写入 content、标题沿用主题词（验收反馈修补）', () => {
+    expect(P).toContain('补全里出现的机构/医院/地点等细节写入 content');
+    expect(P).toContain('title 沿用上一轮主题词（不要改写标题）');
+    expect(P).toContain('已有卡片后用户只是补充细节');
+    expect(P).toContain('title 沿用摘要中的标题主题词');
   });
 
   it('“多轮上下文（history）与澄清续答”一节存在：assistant=上一轮草稿 JSON + 续答合并 + 摘要块编辑指令', () => {
