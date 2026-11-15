@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -68,6 +68,15 @@ export default function FlashScreen() {
   const currentDraft = chat.draft;
   const hasDraft = currentDraft !== null;
 
+  // 切片 23 验收反馈修补（2026-11-15 MuMu）：非倒置 FlatList 不自动跟随新内容——
+  // 长历史下追加消息（及预览卡出现压缩列表视口）会把列表尾部裁出屏外，
+  // 视觉上像被卡片区"盖住"。消息数变化或预览卡出现/消失时滚到最底。
+  const listRef = useRef<FlatList<FlashChatMessage> | null>(null);
+  useEffect(() => {
+    if (chat.messages.length === 0) return;
+    listRef.current?.scrollToEnd({ animated: true });
+  }, [chat.messages.length, hasDraft, chat.messages]);
+
   // 切片 22 阶段 2（AGENTS.md §7.34）：结果卡片消息走 FlashResultCard；
   // cardPayload 属性窄化不进闭包，先捕获到局部 const 再用于 onPress。
   // 卡片直接作为 FlatList 单元渲染（不包 row wrapper：row 主轴按内容测宽
@@ -97,6 +106,7 @@ export default function FlashScreen() {
       behavior="padding"
     >
       <FlatList
+        ref={listRef}
         style={styles.list}
         data={chat.messages}
         keyExtractor={(message) => String(message.id)}
