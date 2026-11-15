@@ -70,17 +70,17 @@ export default function FlashScreen() {
 
   // 切片 22 阶段 2（AGENTS.md §7.34）：结果卡片消息走 FlashResultCard；
   // cardPayload 属性窄化不进闭包，先捕获到局部 const 再用于 onPress。
+  // 卡片直接作为 FlatList 单元渲染（不包 row wrapper：row 主轴按内容测宽
+  // 会把内部 flex:1 的 body 塌缩成 0 宽——13:50 MuMu 复现，见反馈文件教训）。
   const renderMessage = ({ item }: { item: FlashChatMessage }) => {
     if (item.kind === 'card' && item.cardPayload !== undefined) {
       const payload = item.cardPayload;
       return (
-        <View style={styles.cardRow}>
-          <FlashResultCard
-            payload={payload}
-            tzid={deviceTzid}
-            onPress={() => router.push(`/item/${payload.itemId}`)}
-          />
-        </View>
+        <FlashResultCard
+          payload={payload}
+          tzid={deviceTzid}
+          onPress={() => router.push(`/item/${payload.itemId}`)}
+        />
       );
     }
     return <MessageRow message={item} />;
@@ -211,9 +211,6 @@ const styles = StyleSheet.create({
     color: '#999999',
   },
   row: {
-    flexDirection: 'row',
-  },
-  cardRow: {
     flexDirection: 'row',
   },
   rowUser: {
