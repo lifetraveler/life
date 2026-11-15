@@ -21,7 +21,7 @@
 | `npx jest --runInBand` | 72 套件 / 932 用例全过（基线 71 / 926，+1 套件 +6 用例 = cardPayload.test.ts） |
 | `npx expo-doctor` | 16/18 过；2 项失败 = 预存基线（app config 非 CNG 同步检查、React Native Directory 元数据检查），对照 slice-21 无新增 |
 | APK 版本号 | 0.22.0 / versionCode 3（release 包，commit `4f710f0`；MuMu 127.0.0.1:16384 已装并冷启动 ✓） |
-| 真机/模拟器验收 | MuMu 验收进行中（用户人工核对「保存出卡 + 点卡跳详情」等清单；Phase 4 正式验收待做） |
+| 真机/模拟器验收 | MuMu 0.22.0/versionCode 3：保存出卡+点卡跳详情已实测通过（含塌缩缺陷修复复验 61cc489）；清单 3/4/5 与 Phase 4 正式验收待做 |
 
 ## 范围落点表
 
@@ -51,6 +51,14 @@
 5. 保存链失败 → 仍纯文本「保存失败：…」不出卡；
 6. （Phase 3 后）+15分钟 → 卡片 09:15、提醒 08:50→09:05、详情页 startAt/onceAt 已改（任务卡 §6）。
 
+### 本阶段 MuMu 实测记录（2026-11-15，0.22.0/versionCode 3，a11y dump + 截图驱动）
+
+- ✅ 清单 1/2 已先行核对：输入「明天下午3点开周会 提前10分钟提醒 #工作」→ 确认添加 → 聊天流出卡（左侧工作色条、💼 工作、粗体标题、📅 11月16日周一 | 15:00、🔔 单次 11-16 14:50（Asia/Shanghai）、+15分钟/+1小时 占位 chips）；点卡主体跳 `/item/[id]`，详情页「开始：2026-11-16 15:00」「单次 11-16 14:50（Asia/Shanghai）」一致。测试条目「开周会」暂留 MuMu 库中（可兼作 11-16 14:50 once 提醒触发验证素材，不需要时详情页删除）。
+- ❌→✅ 缺陷修复：首版卡片在聊天流中塌缩为 ~55px×280px 竖条（仅分类色条，正文零宽不进 a11y 树），见教训 2；修复后复验通过（提交 61cc489）。
+- 驱动方法沉淀：`adb shell input text` 直接过 UTF-8 中文（MuMu 验证），**空格需写 `%s`**（字面空格截断参数；MuMu 对 `%s` 亦不转换、按字面入库，本轮靠本地降级解析的容错通过——正式验收手输中文为宜）。
+
 ## 教训索引
 
-- 待切片收尾汇总至 `tasks/slice-22-closeout.md`。本阶段踩坑 1 条：Reminder.startAt 为 `number` 非可空（once 提醒以 fireInstant 落库，savePlan 语义），测试夹具初版写 `null` 触发 TS2322，改 `new Date('2026-11-16T08:50:00+08:00').getTime()`。
+- 待切片收尾汇总至 `tasks/slice-22-closeout.md`。本阶段踩坑 2 条：
+  1. Reminder.startAt 为 `number` 非可空（once 提醒以 fireInstant 落库，savePlan 语义），测试夹具初版写 `null` 触发 TS2322，改 `new Date('2026-11-16T08:50:00+08:00').getTime()`。
+  2. **row 容器内 flex:1 塌缩**：renderMessage 曾把 FlashResultCard 包进 `flexDirection:'row'` 的 cardRow wrapper——row 主轴按内容测宽，卡内 `flex:1`（flexBasis 0%）的 body 在内容尺寸容器中贡献 0 宽，整卡塌缩只剩 4px 色条；FlashPreviewCard 一直正常是因为其父容器为默认 column（交叉轴拉伸）。修复=卡片直接作 FlatList 单元渲染，不包 row wrapper（61cc489）。推论：凡 maxWidth 卡片放进聊天流列表，根布局不要套水平方向容器。
