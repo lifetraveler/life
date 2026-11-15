@@ -19,7 +19,7 @@
 | 切片 25 | **认真模式** | 中 | 修改标题/内容前给选项确认（agent 式交互），默认模式按预设直接处理。范围：app_settings 迁移（v12）+ wire 选项字段 + useFlashChat 守卫 + Chat 选项交互 + 设置页开关。需先出任务卡（slice-23 closeout §6 候选 1，用户提出、归属已定） |
 | 切片 26 | **AI 透明度** | 中偏小 | A. 提示词查看界面（读 AI_SYSTEM_PROMPT 静态串，轻）；B. AI 回答可选显示 token 消耗/缓存命中率/大致价格（openAiCompatible usage 管道 + 设置开关 + app_settings 迁移——B 涉及 AiParser.parse 返回值扩展，ai.md 契约正常演进需成文）。两子项打包（slice-23 closeout §6 候选 2）；与 25 同域（flash/设置页），迁移列可同批设计 |
 | 切片 27 | **系统日历 live 直读显示**（方案 C） | 中偏大（≈1 切片） | Toki 式直读：设置页日历多选（app_settings v12 `display_calendar_ids_json`）+ SystemCalendarReader 扩 color/source + live hook + 四视图合并渲染（只读徽标）+ 与已导入项重叠去重（§5 规则）+ 平台 gating + ui.md/repository.md 契约新增节。**前置：用户回答调研报告 §9 的 4 个开放问题**；写回（D1）如立项走独立变更提案 + 独立切片（须改 §7.15 / repository.md:142 冻结语义） |
-| 切片 28 | **数据备份导入 + WebDAV** | 大（提案先行 §7.5） | 语义与范围见 §3 澄清记录；导出已存在（切片 12），本切片主体是导入 + WebDAV + 备份语义定夺 |
+| 切片 28 | **数据备份/同步：配置 + 日程（WebDAV）** | 大（设计讨论先行，提案 §7.5） | 范围澄清见 §3：配置（app_settings/分类/标签）与日程相关数据（items/reminders/channel_presets）都同步；形态（备份恢复 vs 双向同步）与冲突策略待专项讨论，讨论结论落提案再开工。导出已存在（切片 12），主体是导入 + WebDAV |
 | 插队 | **变更 B：网络渠道后台送达** | 大（变更提案） | 提案重估：前台服务救不了 RN JS 定时器（slice-20 遗留披露 1）→ 原生 AlarmManager 驱动投递 vs Headless 唤醒两路线对比。重复投递 in-flight 缺陷已在切片 21 修复关闭，变更 B 剩后台送达本体。启动时机用户定；提案确认前禁改 `src/notifications/`（§7.17 闸门） |
 
 排序理由：25/26 同在闪电录入/AI 域（useFlashChat、app_settings、设置页），连续做上下文温热、迁移列同批；live 直读用户感知价值最高但有 4 问待决策，排在 26 之后等决策不阻塞进度；备份体量最大且提案先行，压后。变更 B 时刻可插队。
@@ -28,7 +28,8 @@
 
 - **已有记录——数据导出**：切片 12 已交付**单向导出**（`src/domain/export.ts` `serializeExportData` + 设置页「导出 JSON」：items + tags 名称数组 + reminders 摘要，version=1）。**导入从未做过**——slice-12 closeout 明载：决策 D 取舍（tags 只含名称数组、Reminder 剔调度内部字段），重导入不能仅凭该 JSON 还原 id 关联。
 - **已有记录——WebDAV**：slice-20 排期 v1「slice-24 数据备份 JSON 导出 + WebDAV（大；变更提案先行 §7.5）」顺延至今（slice-21/22/23 closeout §6 → AGENTS §8 ④）。记录语义 = **备份/恢复（一次性快照，单向）**：全量 JSON（items/categories/tags/reminders/channel_presets/app_settings + schema 版本 + 时间戳）、导入结构校验 + 预览页 + 替换语义定夺（整库事务替换 vs 按 id upsert）+ 导入前本地快照兜底；WebDAV 自写 fetch 客户端（PROPFIND/GET/PUT/MKCOL 零新依赖），凭据存 expo-secure-store。
-- **无记录（本次补录）——「WebDAV 双向同步」**：持续双向同步（多设备/云端，变更合流与冲突处理）从未立项；slice-8/slice-9 任务卡的「不实现双向同步」是 ICS/系统日历语境，与此无关。**备份切片（建议编号 28）提案必须显式澄清范围**：一次性备份恢复 vs 数据/配置双向同步是两种形态（后者需变更追踪、冲突策略、幂等合并，体量显著更大），立项时由用户定夺；无论选哪种，「配置导入导出」应明确 app_settings/分类/标签等配置项是否与业务数据同等参与。
+- **无记录（本次补录）——「WebDAV 双向同步」**：持续双向同步（多设备/云端，变更合流与冲突处理）从未立项；slice-8/slice-9 任务卡的「不实现双向同步」是 ICS/系统日历语境，与此无关。
+- **用户 2026-11-16 范围澄清（补录）**：WebDAV 同步需**同时支持两类内容**——①**配置**的同步（app_settings 及分类/标签等设置项）；②**日程相关**的同步（items/reminders/channel_presets 等业务数据）。**具体设计待专项讨论**：一次性备份恢复 vs 持续双向同步、冲突策略、同步粒度与触发时机等均未定，建议切片 28 立项前先开设计讨论，结论落成提案（§7.5 提案先行）再开工。
 
 ## 4. 无归属遗留（散落披露汇总，L 编号便于引用）
 
