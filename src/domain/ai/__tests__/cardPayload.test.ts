@@ -72,6 +72,7 @@ describe('buildFlashCardPayload（切片 22 阶段 1）', () => {
     expect(payload).toEqual({
       itemId: 'item-1',
       title: '开周会',
+      content: '',
       type: 'event',
       startAt: TIME_PATCH.startAt,
       endAt: null,
@@ -89,6 +90,12 @@ describe('buildFlashCardPayload（切片 22 阶段 1）', () => {
         channels: ['system-notification'],
       },
     });
+  });
+
+  it('content 快照透传（v0.19 验收反馈修补：结果卡内容行展示补充说明）', () => {
+    const created = baseItem({ content: '预约到西安交通大学第二附属医院' });
+    const payload = buildFlashCardPayload(created, TIME_PATCH, null, CATEGORIES);
+    expect(payload.content).toBe('预约到西安交通大学第二附属医院');
   });
 
   it('载荷 startAt/allDay 取 timePatch（落库终值），忽略 created 上的原始时间字段', () => {

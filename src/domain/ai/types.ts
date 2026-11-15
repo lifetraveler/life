@@ -56,6 +56,8 @@ export interface FlashCardPayload {
   /** 点击卡片主体跳转 /item/[id]。 */
   itemId: string;
   title: string;
+  /** 内容补充说明快照（v0.19 验收反馈修补：机构/医院等细节存 content，结果卡非空时显示内容行）。 */
+  content: string;
   type: ItemType;
   /** 保存链落库后的最终时间（含切片 19 delay 锚定），取 plan.timePatch 而非 createItem 原始返回。 */
   startAt: number | null;

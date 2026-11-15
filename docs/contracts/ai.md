@@ -195,8 +195,8 @@ Reminder 模型中没有落库位置：data-model.md §4.1 冻结
 - 时间已明确的预约/安排类输入直接出卡（禁止为细节反问）；机构/医院/地点名称一律
   写入 content（补充说明），title 只保留动作主题词（如「预约体检」，不把医院/机构/
   地名写进标题）；澄清续答轮与已有卡片后的补充轮同样——title 沿用上一轮主题词，
-  补充细节写入 content。FlashPreviewCard 新增「内容」行（content 非空时显示，
-  numberOfLines=2），补充细节在卡片上直接可见。
+  补充细节写入 content。FlashPreviewCard 与保存后结果卡 FlashResultCard 均新增
+  「内容」行（content 非空时显示，numberOfLines=2），补充细节在卡片上直接可见。
 - 防误伤边界：纯想法/记录/感叹不是预约动作不澄清；type=note 且无安排意图一律不反问；
   只有明确的预约/预订/挂号/订类动词触发。MuMu 实测（v0.23.0/versionCode 9，全远端
   路径）：预约体检→澄清「你想预约哪一天、去哪家医院体检？」→补时间出卡（title 预约

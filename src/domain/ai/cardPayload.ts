@@ -36,6 +36,7 @@ export function buildFlashCardPayload(
   return {
     itemId: created.id,
     title: created.title,
+    content: created.content,
     type: created.type,
     startAt: timePatch.startAt,
     endAt: timePatch.endAt,

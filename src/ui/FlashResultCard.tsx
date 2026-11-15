@@ -3,8 +3,9 @@
  *
  * 保存成功后的 assistant 消息呈现（kind:'card'，载荷 FlashCardPayload 结构化
  * 快照）：左侧分类色条（含 Emoji 分类行）+ 粗体标题 + 📅 日期行（含具体时间）
- * + 提醒行（describeCardReminderLine 现算文案，切片 23 起按渠道展示 ⏰ 闹钟 /
- * 🔔 通知标识；once 显示绝对触发时刻，阶段 3 推迟后可见联动变化）。
+ * + 📝 内容行（content 非空才显示，v0.19 验收反馈修补：机构/医院等细节在卡片
+ * 直接可见）+ 提醒行（describeCardReminderLine 现算文案，切片 23 起按渠道展示
+ * ⏰ 闹钟 / 🔔 通知标识；once 显示绝对触发时刻，阶段 3 推迟后可见联动变化）。
  *
  * 纪律：
  * - 纯展示组件：点击只发 onPress（导航到 /item/[id] 留在 flash.tsx 屏幕层，
@@ -126,6 +127,15 @@ export default function FlashResultCard({
             <Text style={styles.metaIcon}>📅</Text>
             <Text style={styles.metaText} numberOfLines={1}>
               {timeLine}
+            </Text>
+          </View>
+        ) : null}
+        {/* v0.19 验收反馈修补（切片 23）：内容补充说明行（机构/医院等细节），非空才显示。 */}
+        {payload.content.trim().length > 0 ? (
+          <View style={styles.metaRow}>
+            <Text style={styles.metaIcon}>📝</Text>
+            <Text style={styles.metaText} numberOfLines={2}>
+              {payload.content}
             </Text>
           </View>
         ) : null}
