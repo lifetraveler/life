@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.23
+版本：v0.24
 
 ## 1. 项目概览
 
@@ -275,6 +275,14 @@ schema 版本 5→6，新增/修改如下：
 - 真机反馈修补若发生在阶段之间，在所属 UI/功能阶段的总结里记录演化（如 slice-21-phase1）。
 - 提交纪律：反馈文件必须纳入 git 提交（阶段提交，或收尾时 docs(sNN) 补充提交），不得只留在会话里；写了的反馈文件在切片收尾时在 closeout §0 交付清单引用；收尾前按适用时机核对——该写的没写要补齐，「全部阶段一口气完成」的确认 closeout 已完整承载阶段粒度内容。
 - 版本：v0.22 成文；v0.23 按 2026-11-15 用户澄清修订适用时机（一口气全完成 → closeout 即可；一次完成多个阶段 → 一份反馈文件记录完成的阶段集合；阶段反馈本质是「未做完切片」的暂停移交）。
+
+### 7.34 闪电录入结果卡片化与快捷操作（v0.24）
+- **消息类型扩展**：闪电录入的 Chat 消息列表中，成功保存后的 AI 回复不再使用纯文本，而是新增 `kind: 'card'` 类型的消息载荷。该载荷应包含展示所需的快照数据（如 Item 摘要、分类色、时间、提醒）。
+- **卡片内容**：必须展示分类色条（含 Emoji）、标题、日期行（含具体时间）、提醒行（若配置了提醒）。
+- **点击去向**：点击卡片主体，导航至该条目的详情页（`item/[id]`）。
+- **快捷延迟操作**：若条目包含具体时间（非 allDay，非无时间待办），卡片底部展示「+15分钟」和「+1小时」快捷 Chips。
+- **联动更新规则**：点击快捷推迟后，不仅更新 Item 的 `startAt`，如果该 Item 绑定了 `once` 类型的提醒，**必须同步顺延该提醒的 `onceAt`**。
+- **约束**：本切片只做 UI 状态机和数据更新，不得触碰 `src/notifications/` 底层的调度与投递逻辑；无需新增第三方 UI 依赖。
 
 ## 8. 当前切片
 tasks/slice-21.md（已完成阶段 1–2、真机反馈修补与 MuMu 验收：真机显示修补与防重发。阶段 1 UI 修补——flash.tsx useSafeAreaInsets 顶垫+底部手势条、渠道/频率/时区 chips 去 flex:1 改自适应宽（ReminderChannelFields/ReminderFormEditor/TzPicker）+ numberOfLines、plan.tsx agenda 视图今天空态卡「今日没有安排」+「＋ 快速安排」（AgendaRowEmptyToday 行插今天月页月名行后，CTA=/item/new）；阶段 2 防重发——NetworkTimerRegistry beginDeliver/endDeliver/isInFlight 原子占位 + BaseNetworkChannel.deliver 首个 await 前 claim/finally 释放 + NetworkDeliverStatus 扩展 'skipped'（不 send、不写 attempts）+ reconcile missed 循环 isInFlight 判重，封闭 slice-20 披露的迟到 timer × reconcile 双 POST 竞态；单测 +8（registry 占位语义/WebhookChannel 并发 skipped/scheduler 端到端 race），tsc 0 错、jest 71 套件/926 用例全过、expo-doctor 2 项预存基线失败无新增。真机反馈修补（plan.tsx 三处）——①viewTime 跨午夜滚动：回 App 前台（AppState active）/回页签（useFocusEffect）滚动 now 到当前时刻，同民用日不重置避免无谓重渲染，anchor 不动（修复 App 进程长存、页面不重挂时 todayKey 停在挂载日，「今天」判定/空态卡/回位全部停滞）；②agenda 定位 effect 补空今日降级：今日组行 600ms 未解析则回退月名行定位并清除目标（原注释声称「无今日组回退月名行」但代码无此路径，「今天」pill 与冷启动定位在空今日上双双失效）；③「今天」组头恒显示（用户第二轮反馈）：空今日时合成「今天」组头（key=header-<todayKey>、count 0、isToday 高亮与精修定位 ref 同真实组头）+ 空态卡挂组头下，header-<todayKey> 恒存在——定位与「有内容」走同一条 header 路径；④空态卡去按钮 + FAB 长按跳闪电录入（用户第三轮反馈）：空态卡移除「＋ 快速安排」按钮（右下角 FAB 已是常驻新建入口）仅留文案「今日没有安排」（§7.32 空态引导条款加 v0.21 注记），FAB 长按由 stale Alert「闪电录入 即将上线」（阶段 5b 占位，slice-21 遗留披露）改为 router.push('/flash') 切闪电录入 tab，短按仍新建 /item/new。MuMu 验收（release APK，2026-11-15）：flash 顶部不遮挡 ✓、空今日「今天 0」合成组头+空态卡 ✓（冷启动与「今天」pill 从 2027年2月回位均落今天组头顶，第二轮验收；第三轮验收：空态卡无按钮仅文案 ✓、长按 FAB 800ms 跳闪电录入页 dump 证实 ✓）、font_scale 1.3 频率/渠道/时区 chips 不折行（「系统通知」不再断行）✓、闪电本地降级解析「明天下午3点」+落库 ✓（测试条目已归档清理）；**webhook 回前台不双发的实机复验留待用户**（对照 receiver 日志时间戳）。设备事实补充：MuMu 时区 Asia/Shanghai 正确，getDeviceTzid（slice-11 改 expo-localization）无 UTC 伪影，「今日停 11-14」根因是 viewTime 固化非时区。closeout 见 tasks/slice-21-closeout.md。下一候选：slice-22 闪电录入卡片化 → slice-23 夜间模式 → slice-24 数据备份 JSON+WebDAV【提案先行】；变更B 网络渠道后台送达为插队候选，确认前不修改 src/notifications/ 实现文件；开工按 §7.1 逐切片确认）
