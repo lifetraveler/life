@@ -18,6 +18,11 @@
  * - 验收 4 反馈：AI 落库提醒的渠道跟随全局默认渠道（defaultChannels 入参，
  *   app_settings.defaultChannels），不再恒为系统通知单渠道；网络渠道参数自动取
  *   渠道预设（默认预设 → 第一条，用户既定需求），完全无预设时才披露投递会失败。
+ * 切片 23（AGENTS.md §7.35 / ai.md v0.19）：强提醒场景——解析层显式携带渠道推荐
+ * （draft.reminderChannels，如“叫我起床”→ ['alarm']）且无 offset/delay 锚点时，
+ * 在 startAt 时刻创建 once 提醒（闹钟语义：8点叫就8点响）；draft 显式渠道优先于
+ * defaultChannels（强提醒语义来自用户输入本身，不被全局偏好覆盖）。allDay / 无时间
+ * 不建并披露。普通提醒不出渠道字段，落库渠道仍走 defaultChannels（§7.30 不变）。
  */
 
 import type { CreateItemInput } from '../item';
@@ -180,14 +185,34 @@ export function buildFlashSavePlan(
       // 场景是「10分钟后提醒我起床」这类无具体时间输入）。
       delayAnchoredStartAt = startAt === null ? delayed.fireInstant : null;
       reminderNotice = delayed.notice;
+    } else if (draft.reminderChannels !== undefined && draft.reminderChannels.length > 0) {
+      // 切片 23（§7.35 / ai.md v0.19）：强提醒场景且无 offset/delay 锚点 → 在
+      // startAt 时刻建 once 提醒（闹钟语义：8点叫就8点响，不需要提前量）。
+      // allDay / 无时间不建：全天 00:00 响铃属误伤，披露不静默。
+      // （startAt 来自 CreateItemInput 可选字段：undefined 与 null 同义=未表达。）
+      if (startAt === null || startAt === undefined) {
+        reminderNotice = '需设定时间才能创建强提醒';
+      } else if (allDay === true) {
+        reminderNotice = '全天条目暂不创建强提醒（未表达具体时刻）';
+      } else {
+        const once = toOncePlan(startAt, tzid);
+        reminderPlan = once.plan;
+        reminderNotice = once.notice;
+      }
     }
   }
 
   // 切片 19 验收 4 反馈：AI 落库提醒渠道跟随全局默认渠道（app_settings.defaultChannels，
   // §7.30 默认渠道偏好），覆盖 once/重复计划的默认单系统通知。入参来自设置读层
   // （已 canonical/去重/expo 互斥归一），Repository 写路径仍会再校验。
-  if (reminderPlan !== null && defaultChannels !== undefined && defaultChannels.length > 0) {
-    reminderPlan = { ...reminderPlan, channels: [...defaultChannels] };
+  // 切片 23（ai.md v0.19）：draft 显式携带渠道推断（如叫我起床 → ['alarm']）时
+  // 优先于 defaultChannels——强提醒语义来自用户输入本身，不被全局偏好覆盖。
+  if (reminderPlan !== null) {
+    if (draft.reminderChannels !== undefined && draft.reminderChannels.length > 0) {
+      reminderPlan = { ...reminderPlan, channels: [...draft.reminderChannels] };
+    } else if (defaultChannels !== undefined && defaultChannels.length > 0) {
+      reminderPlan = { ...reminderPlan, channels: [...defaultChannels] };
+    }
   }
   // 切片 19 验收 4 反馈（用户既定需求）：网络渠道参数自动取渠道预设——默认预设优先，
   // 无默认取第一条（resolveChannelPreset 与手动表单共用）。完全无预设时才披露

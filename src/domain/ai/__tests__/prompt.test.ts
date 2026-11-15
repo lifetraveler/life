@@ -52,6 +52,57 @@ describe('AI_SYSTEM_PROMPT：延迟提醒（切片 19 §7.30）', () => {
   });
 });
 
+describe('AI_SYSTEM_PROMPT：澄清与渠道推荐（切片 23 §7.35）', () => {
+  const P = AI_SYSTEM_PROMPT;
+
+  it('字段定义含 reminderChannels / needsClarification / clarificationPrompt（必填、语义描述）', () => {
+    expect(P).toContain(
+      'reminderChannels: ("system-notification" | "alarm" | "webhook" | "apprise")[] | null，必填',
+    );
+    expect(P).toContain('needsClarification: boolean，必填');
+    expect(P).toContain('clarificationPrompt: string | null，必填');
+  });
+
+  it('“强提醒场景与渠道推荐”一节存在：alarm 推荐 + 普通提醒禁自填 system-notification', () => {
+    expect(P).toContain('强提醒场景与渠道推荐');
+    expect(P).toContain('reminderChannels 填 ["alarm"]');
+    expect(P).toContain('禁止自填 ["system-notification"]');
+    expect(P).toContain('全局默认渠道决定');
+  });
+
+  it('渠道边界句：用户明示渠道才填 + system-notification 与 alarm 互斥', () => {
+    expect(P).toContain('仅当用户明确要求特定渠道时才填该渠道');
+    expect(P).toContain('"system-notification" 与 "alarm" 互斥，禁止出现在同一个数组里');
+  });
+
+  it('“主动澄清”一节存在：缺时刻反问（含仅日期场景）+ 示例文案', () => {
+    expect(P).toContain('主动澄清');
+    expect(P).toContain('“提醒我吃药”“叫我起床”“定个闹钟”“明天提醒我交报告”');
+    expect(P).toContain('你要在什么时间提醒你吃药？');
+    expect(P).toContain('不要编造时间落库');
+  });
+
+  it('澄清边界句：叫醒类已带时刻默认起床不反问 + 已有 offset/delay/重复禁反问', () => {
+    expect(P).toContain('“明天上午8点叫我起床”');
+    expect(P).toContain('默认事由就是起床');
+    expect(P).toContain('needsClarification=false，禁止反问');
+    expect(P).toContain('已表达提前量/延迟/重复规则、或时间已完整（有具体时刻）');
+  });
+
+  it('反问文案纪律：复用原词、只问缺失属性、单句', () => {
+    expect(P).toContain('复用用户原词、只问缺失的那一个属性，单句');
+  });
+
+  it('“多轮上下文（history）与澄清续答”一节存在：assistant=上一轮草稿 JSON + 续答合并 + 编辑意图占位', () => {
+    expect(P).toContain('多轮上下文（history）与澄清续答');
+    expect(P).toContain('history 中每条 assistant 消息就是上一轮解析出的完整草稿 JSON');
+    expect(P).toContain('needsClarification=true 时，用户本轮回复通常就是补全的信息');
+    expect(P).toContain('把补全值并入上一轮草稿的对应字段');
+    expect(P).toContain('并把 needsClarification 置回 false');
+    expect(P).toContain('只更新被提及的字段');
+  });
+});
+
 describe('buildNowFacts（既有行为回归）', () => {
   it('输出当前时间事实与相对时间基准说明', () => {
     const now = new Date('2026-11-13T10:30:00+08:00').getTime();

@@ -86,4 +86,34 @@ describe('mergeDraftCorrection（阶段 3 多轮合并）', () => {
     expect(previous.tags).toEqual(['工作']);
     expect(next.tags).toEqual([]);
   });
+
+  it('reminderChannels 按 expressed 掩码合并（切片 23 §7.35）', () => {
+    // 新一轮表达 → 采用新渠道（拷贝）
+    const alarmNext: ParsedItemDraft = { ...next, reminderChannels: ['alarm'] };
+    const taken = mergeDraftCorrection(previous, alarmNext, new Set(['reminderChannels']));
+    expect(taken.reminderChannels).toEqual(['alarm']);
+    // 未表达 → 保留上一轮（跨轮保留 alarm 推荐）
+    const alarmPrev: ParsedItemDraft = { ...previous, reminderChannels: ['alarm'] };
+    const kept = mergeDraftCorrection(alarmPrev, next, new Set(['title']));
+    expect(kept.reminderChannels).toEqual(['alarm']);
+    // 两轮都未表达 → undefined（落库走 defaultChannels，§7.30 不变）
+    expect(
+      mergeDraftCorrection(previous, next, new Set(['title'])).reminderChannels,
+    ).toBeUndefined();
+  });
+
+  it('needsClarification / clarificationPrompt 恒取新一轮（信号不粘滞）', () => {
+    const clarifying: ParsedItemDraft = {
+      ...next,
+      needsClarification: true,
+      clarificationPrompt: '你要在什么时间提醒你吃药？',
+    };
+    const merged = mergeDraftCorrection(previous, clarifying, new Set(['title']));
+    expect(merged.needsClarification).toBe(true);
+    expect(merged.clarificationPrompt).toBe('你要在什么时间提醒你吃药？');
+    // 续答轮（新一轮不再澄清）→ 归位 undefined，恢复正常出卡路径
+    const answered = mergeDraftCorrection(clarifying, next, new Set(['startAt']));
+    expect(answered.needsClarification).toBeUndefined();
+    expect(answered.clarificationPrompt).toBeUndefined();
+  });
 });

@@ -10,7 +10,7 @@
 
 import type { RecurrenceRule } from '../recurrence/types';
 import type { ItemType } from '../item';
-import type { OnceCivilTime, ReminderFrequency } from '../reminder';
+import type { OnceCivilTime, ReminderChannel, ReminderFrequency } from '../reminder';
 
 export type ChatRole = 'user' | 'assistant';
 
@@ -118,6 +118,23 @@ export interface ParsedItemDraft {
    * 以 now + reminderDelayMinutes*60000 为触发时刻创建 once 提醒（无需 startAt）。
    */
   reminderDelayMinutes: number | null;
+  /**
+   * 强提醒场景的渠道推荐（切片 23 / AGENTS.md §7.35 / ai.md v0.19）：
+   * 解析器识别出“起床/叫我/吃药/响铃”等强提醒场景且用户未指定提前量时，推荐
+   * ['alarm']（闹钟语义：几点叫就几点响）。undefined=未表达（普通提醒不出此字段，
+   * 落库渠道走用户全局默认渠道 defaultChannels，§7.30）；显式渠道落库时优先于默认渠道。
+   * 数组元素仅限 ReminderChannel 四值且 expo 家族（system-notification/alarm）互斥。
+   */
+  reminderChannels?: ReminderChannel[];
+  /**
+   * 主动澄清（切片 23 / ai.md v0.19）：缺关键信息（如“提醒我吃药”没有时间）时为
+   * true，解析层不急于落库，Chat 侧展示 clarificationPrompt 并等待用户续答。
+   * undefined/false=信息完整，直接出卡。多轮合并语义：该信号不粘滞（merge.ts），
+   * 下一轮解析结果未声明即视为不再澄清。
+   */
+  needsClarification?: boolean;
+  /** needsClarification=true 时的单句反问（复用用户原词，只问缺失属性）。 */
+  clarificationPrompt?: string;
 }
 
 /** AI 解析器接口（§7.24 冻结语义）：LocalFallbackProvider 与 OpenAICompatibleProvider 均实现它。 */

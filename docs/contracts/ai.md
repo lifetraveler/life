@@ -154,3 +154,36 @@ Reminder 模型中没有落库位置：data-model.md §4.1 冻结
   不涉及 schema、migration、Repository 签名。可选字段而非判别联合：ChatMessage 既有
   构造点（runFlashTurn historyAppend 等）缺省即 'text'，零改动。
 - 迁移方案：无库迁移。消息为内存 UI 状态，无持久化兼容问题。
+
+## 澄清与渠道推荐（v0.19，切片 23 阶段 1，方案经用户确认）
+- `ParsedItemDraft` 扩展三个可选字段（undefined = 未表达）：
+  - `reminderChannels?: ReminderChannel[]`：解析层识别出的**强提醒渠道推荐**。元素
+    ∈ ReminderChannel 四值，且 `"system-notification"` 与 `"alarm"` 不得同现
+    （expo 家族互斥，AGENTS.md §7.30）。语义澄清：**普通提醒不携带该字段**（远端
+    模型未提及渠道时填 `null`；本地解析未命中强提醒词表时不设键），落库渠道照旧
+    走 `app_settings` 的 defaultChannels（§7.30 不变，禁止远端每句自填
+    `['system-notification']` 踩掉用户默认渠道）；仅强提醒场景（起床/叫我/叫醒/
+    吃药/抢购等，远端按语义判断、本地按关键词表）才填 `['alarm']`；用户明示渠道
+    时按用户。落库优先级：draft 显式渠道 > defaultChannels > 单系统通知。
+  - `needsClarification?: boolean`：true = 输入缺关键属性（缺具体时刻，且无提前量/
+    延迟/重复规则兜底），不应急于落库，Chat 侧展示澄清反问并允许用户直接回复补充；
+    false/undefined = 正常出卡。带完整时刻的叫醒类输入（如「明天上午8点叫我起床」）
+    默认事由就是起床，不反问。
+  - `clarificationPrompt?: string`：澄清反问文案（单句，复用用户原词，只问缺失的
+    那一个属性，如「你要在什么时间提醒你吃药？」）。
+- wire 三键可缺省（对 v0.16「缺键整体拒绝」的刻意偏离）：`RemoteDraftWire` 新增
+  `reminderChannels?: ReminderChannel[] | null` / `needsClarification?: boolean | null` /
+  `clarificationPrompt?: string | null`。键缺省 = 旧版模型响应，照常通过；值出现即
+  从严校验（形状偏差仍整体拒绝）。偏离理由：澄清与渠道推荐是建议性信息，缺键不应
+  把整个解析炸成 schema-mismatch 降级。此偏离仅限本节三字段，reminderOffsetMinutes /
+  reminderDelayMinutes 的「缺键整体拒绝」纪律不变。
+- 落库语义（savePlan）：`reminderChannels` 已表达且无提前量/延迟/重复规则时，在
+  startAt 时刻创建 once 提醒并使用推荐渠道（闹钟语义：8点叫就8点响，不需要提前量）；
+  allDay 或无时间不建并披露；有提前量/延迟/重复规则时锚点规则不变，仅渠道取推荐渠道。
+- 影响范围：src/domain/ai/types.ts、guard.ts、openAiCompatible.ts、prompt.ts（字段行 +
+  强提醒/澄清/多轮续答三节指令）、localFallback.ts（强提醒词表 + 意图短语槽 + 澄清
+  判定）、merge.ts（reminderChannels 掩码合并；澄清信号恒取新一轮）、savePlan.ts
+  （强提醒 once 分支 + 渠道优先级）；不涉及 schema、migration、Repository 签名；
+  Chat/UI 侧消费（澄清消息、渠道标识）在阶段 3。
+- 迁移方案：无库迁移。三字段均为可选：旧 wire（12 键）与含三键或 null 值的新 wire
+  均可通过守卫；本地解析对不含意图词的输入行为不变。

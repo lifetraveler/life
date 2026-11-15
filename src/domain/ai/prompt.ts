@@ -12,7 +12,13 @@
  *   下午/晚上 12 点分别按 12:00 与次日 00:00（由“民用时刻归一化规则”一节说明）；
  * - v0.17（切片 19，ai.md）：新增 reminderDelayMinutes 字段与“延迟提醒判定规则”一节
  *   ——边界（支持单位、换算示例、非延迟语义、与 offset 的区别）全部写死在提示词里，
- *   不依赖模型自行推断（任务卡要求，防静默丢失）。
+ *   不依赖模型自行推断（任务卡要求，防静默丢失）；
+ * - v0.19（切片 23，ai.md / AGENTS.md §7.35）：新增 reminderChannels /
+ *   needsClarification / clarificationPrompt 字段与三节规则——强提醒场景与渠道推荐
+ *   （起床/叫我/吃药/响铃 → alarm，普通提醒禁止自填 system-notification）、主动澄清
+ *   （缺时间反问，叫醒类有时间默认起床不反问）、多轮上下文与澄清续答（history 里
+ *   assistant 消息即上一轮草稿 JSON，续答轮补全并归位）。普通提醒的落库渠道由
+ *   用户的 defaultChannels 决定（§7.30），提示词明确要求普通提醒不填渠道。
  *
  * 本文件是纯文本模板（常量 + 纯函数），不属于解析逻辑；单测只断言关键句存在，
  * 避免脆弱的全文比对。
@@ -41,6 +47,9 @@ export const AI_SYSTEM_PROMPT = [
   '  表达了重复（每天/每周X/每月X号）时，start 仍按字面日期填写即可（首次发生的日期），系统会自行计算。',
   '- reminderOffsetMinutes: number | null，必填。用户说“提前X分钟提醒”时填 X（正整数），否则 null。',
   '- reminderDelayMinutes: number | null，必填。用户说“X分钟/小时后提醒我”（相对当前时刻延迟多久再提醒）时填换算后的正整数分钟，否则 null。',
+  '- reminderChannels: ("system-notification" | "alarm" | "webhook" | "apprise")[] | null，必填。提醒渠道推荐：强提醒场景填 ["alarm"]；普通提醒或用户未提及渠道填 null（禁止自填 ["system-notification"]）；仅当用户明确要求特定渠道时才填该渠道。',
+  '- needsClarification: boolean，必填。信息不完整需要反问用户才填 true（规则见下方“主动澄清”一节），其余一律 false。',
+  '- clarificationPrompt: string | null，必填。needsClarification=true 时的单句反问（复用用户原词、只问缺失的信息）；false 时填 null。',
   '',
   '延迟提醒判定规则（reminderDelayMinutes，必须逐条遵守，不得自行推断）：',
   '- 换算示例：“10分钟后提醒我吃药”→10；“半小时后叫我起床”→30；“1小时后提醒我出门”→60；“一个半小时后提醒我拿外卖”→90；“两小时后提醒我拿外卖”→120（“两”按 2）。',
@@ -49,6 +58,22 @@ export const AI_SYSTEM_PROMPT = [
   '- 没有“延迟多久”语义时填 null：“明天提醒我吃药”“下午3点提醒我吃药”是 start 时间语义（照常填 start），不是延迟提醒。',
   '- “提前X分钟提醒”填 reminderOffsetMinutes，不填 reminderDelayMinutes——两者语义独立，可在同一句里分别出现、分别填写，互不覆盖。',
   '- reminderDelayMinutes 只表示“当前时刻之后多久提醒”，禁止换算成 start/end 的具体时刻；同句若另有具体时间（如“10分钟后提醒我吃药，明天下午3点开会”），start 照常按字面填写。',
+  '',
+  '强提醒场景与渠道推荐（reminderChannels，必须逐条遵守，不得自行推断）：',
+  '- 强提醒场景：起床/叫我/叫醒/吃药/抢购/响铃/闹钟等“错过会造成实际损失”的提醒——用户未指定提前量时 reminderChannels 填 ["alarm"]（闹钟语义：8点叫就8点响，不需要提前量）。',
+  '- 普通提醒（如“提醒我开会”“提前10分钟提醒我”）：用户未指定渠道时 reminderChannels 填 null，禁止自填 ["system-notification"]——落库渠道由用户的全局默认渠道决定。',
+  '- 仅当用户明确要求特定渠道时才填该渠道（如“发网络通知”→ ["webhook"]）；"system-notification" 与 "alarm" 互斥，禁止出现在同一个数组里。',
+  '',
+  '主动澄清（needsClarification / clarificationPrompt，必须逐条遵守）：',
+  '- 用户表达了提醒/叫醒意图但没有具体时刻（完全没有时间，或只有日期没有时刻，如“提醒我吃药”“叫我起床”“定个闹钟”“明天提醒我交报告”）：needsClarification=true，clarificationPrompt 用一句具体反问（如“你要在什么时间提醒你吃药？”），不要编造时间落库。',
+  '- 叫醒类输入已带具体时刻（如“明天上午8点叫我起床”）：默认事由就是起床，直接按普通解析出卡（reminderChannels 填 ["alarm"]），needsClarification=false，禁止反问。',
+  '- 已表达提前量/延迟/重复规则、或时间已完整（有具体时刻）：一律 needsClarification=false，禁止反问。',
+  '- clarificationPrompt 必须复用用户原词、只问缺失的那一个属性，单句，不要罗列多个问题。',
+  '',
+  '多轮上下文（history）与澄清续答：',
+  '- history 中每条 assistant 消息就是上一轮解析出的完整草稿 JSON，其字段值可直接读取复用。',
+  '- 上一轮草稿 needsClarification=true 时，用户本轮回复通常就是补全的信息：把补全值并入上一轮草稿的对应字段（沿用其标题/分类等，不要新建一个条目），并把 needsClarification 置回 false。',
+  '- 用户说“改成/改为+时间”时：定位 history 里最近的一张草稿卡片，只更新被提及的字段（如时间），其余字段保持原样，不要新建条目。',
   '',
   '时间字段书写规则：',
   '- date 一律 YYYY-MM-DD（公历），相对词（今天/明天/下周三/每月15号）先依据下方“当前时间”换算成绝对日期；',
