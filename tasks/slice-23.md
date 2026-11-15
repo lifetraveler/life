@@ -31,3 +31,10 @@
 
 ## 分支与提交
 - 从最新 main 新建 `task/slice-23`，分阶段提交。
+
+## 验收反馈修补（2026-11-16，全部完成）
+- 滚动遮挡（长历史不跟随新内容）：flash.tsx 三轮修补收敛——effect 滚底→onContentSizeChange→v6 scrollToEnd(animated:false)+onScroll 近底守卫（120px）；MuMu 像素级复验过。
+- 主动澄清扩展至预约/预订/安排类（用户反馈第 2 项）：prompt 主动澄清节新增预约类触发+顺带问细节+防误伤边界；本地降级层保持强提醒 scope。
+- 标题保留主题词、细节进 content（第 3 项）：prompt 语义反转（机构/医院写 content，title 只留主题词）+ chat.ts fallbackTurn 降级合并标题保护 + FlashPreviewCard 内容行。
+- 结果卡内容行（第 4 项）：FlashCardPayload 快照加 content，FlashResultCard 📝 行非空显示。
+- 终态：tsc 0 错、jest 76 套件/1042 用例、MuMu v10 全链实测（见 phase2-3 反馈文件）。
