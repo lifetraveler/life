@@ -476,3 +476,67 @@ describe('isRemoteDraftWire / wireToParsedItemDraft（v0.16 民用 wire）', () 
     expect(isRemoteDraftWire(patchWire({ reminderChannels: ['webhook', 'apprise'] }))).not.toBeNull();
   });
 });
+
+describe('buildHistoryBriefing 注入 system 消息（切片 23 阶段 2）', () => {
+  // 与 prompt.test.ts 同基准：民用换算后 2026-11-11 15:00 Asia/Shanghai。
+  const BRIEF_START = new Date('2026-11-11T15:00:00+08:00').getTime();
+
+  it('history 含草稿 JSON → system content 附带摘要块（民用时间，无毫秒泄漏）', async () => {
+    const { fetchImpl, calls } = makeFetch(() => okEnvelope(validWireJson));
+    const provider = makeProvider(fetchImpl);
+    await provider.parse('改成7点半', {
+      now: NOW,
+      tzid: TZID,
+      history: [
+        { role: 'user', text: '明天下午3点开会' },
+        {
+          role: 'assistant',
+          text: JSON.stringify({
+            title: '开会',
+            content: '',
+            type: 'event',
+            startAt: BRIEF_START,
+            endAt: null,
+            allDay: false,
+          }),
+        },
+      ],
+    });
+    const body = JSON.parse(calls[0].init?.body as string) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const system = body.messages[0]?.content ?? '';
+    expect(body.messages[0]?.role).toBe('system');
+    expect(system).toContain('上一张卡片草稿摘要（修改时以此为准，禁止新建条目）：');
+    expect(system).toContain('- 标题：开会');
+    expect(system).toContain('- 时间：2026-11-11 15:00（时区 Asia/Shanghai）');
+    expect(system).not.toContain(String(BRIEF_START));
+    // history 消息本体原样透传（user/assistant 顺序保持，草稿 JSON 不被替换）。
+    expect(body.messages[1]).toEqual({ role: 'user', content: '明天下午3点开会' });
+    expect(body.messages[2]?.role).toBe('assistant');
+    expect(body.messages[body.messages.length - 1]).toEqual({
+      role: 'user',
+      content: '改成7点半',
+    });
+  });
+
+  it('history 无草稿（assistant 为 note 文本）→ 不附摘要块，单轮行为不变', async () => {
+    const { fetchImpl, calls } = makeFetch(() => okEnvelope(validWireJson));
+    const provider = makeProvider(fetchImpl);
+    await provider.parse('改成明天', {
+      now: NOW,
+      tzid: TZID,
+      history: [
+        { role: 'user', text: '提醒我开会' },
+        { role: 'assistant', text: '已改为 2026-11-11 15:00' },
+      ],
+    });
+    const body = JSON.parse(calls[0].init?.body as string) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const system = body.messages[0]?.content ?? '';
+    // 静态 prompt 指令节本身含「上一张卡片草稿摘要」字样，须以完整渲染块头判定。
+    expect(system).not.toContain('上一张卡片草稿摘要（修改时以此为准，禁止新建条目）：');
+    expect(system).toContain('当前时间：');
+  });
+});

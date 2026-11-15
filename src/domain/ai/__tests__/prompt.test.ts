@@ -6,7 +6,7 @@
  * 自行推断——这里的断言就是那道防回归闸门：边界句被删掉时测试直接失败。
  */
 
-import { AI_SYSTEM_PROMPT, buildNowFacts } from '../prompt';
+import { AI_SYSTEM_PROMPT, buildHistoryBriefing, buildNowFacts } from '../prompt';
 
 describe('AI_SYSTEM_PROMPT：延迟提醒（切片 19 §7.30）', () => {
   const P = AI_SYSTEM_PROMPT;
@@ -93,13 +93,132 @@ describe('AI_SYSTEM_PROMPT：澄清与渠道推荐（切片 23 §7.35）', () =>
     expect(P).toContain('复用用户原词、只问缺失的那一个属性，单句');
   });
 
-  it('“多轮上下文（history）与澄清续答”一节存在：assistant=上一轮草稿 JSON + 续答合并 + 编辑意图占位', () => {
+  it('“多轮上下文（history）与澄清续答”一节存在：assistant=上一轮草稿 JSON + 续答合并 + 摘要块编辑指令', () => {
     expect(P).toContain('多轮上下文（history）与澄清续答');
     expect(P).toContain('history 中每条 assistant 消息就是上一轮解析出的完整草稿 JSON');
     expect(P).toContain('needsClarification=true 时，用户本轮回复通常就是补全的信息');
     expect(P).toContain('把补全值并入上一轮草稿的对应字段');
     expect(P).toContain('并把 needsClarification 置回 false');
-    expect(P).toContain('只更新被提及的字段');
+    // 切片 23 阶段 2：编辑指令从占位升级为摘要块引用（民用日期基准 + 不新建条目）。
+    expect(P).toContain('上一张卡片草稿摘要');
+    expect(P).toContain('以摘要中的日期为基准');
+    expect(P).toContain('其余字段照抄摘要');
+    expect(P).toContain('不要新建条目');
+  });
+
+  it('毫秒禁令：民用时间一律以摘要块为准，禁止由毫秒反算日期（切片 23 阶段 2）', () => {
+    expect(P).toContain('startAt/endAt 是毫秒时间戳，仅供程序读取');
+    expect(P).toContain('禁止由毫秒反算日期');
+    expect(P).toContain('民用时间一律以摘要块为准');
+    expect(P).toContain('无摘要块时按“当前时间”基准正常解析');
+  });
+});
+
+describe('buildHistoryBriefing（切片 23 阶段 2）', () => {
+  const BRIEFING_TZID = 'Asia/Shanghai';
+  // 2026-11-16 00:30 Asia/Shanghai（民用换算断言的基准 epoch）。
+  const START = new Date('2026-11-16T00:30:00+08:00').getTime();
+  const END = new Date('2026-11-16T01:30:00+08:00').getTime();
+
+  function draftJson(overrides: Record<string, unknown> = {}): string {
+    return JSON.stringify({
+      title: '吃药',
+      content: '',
+      type: 'task',
+      startAt: START,
+      endAt: null,
+      allDay: false,
+      categoryId: 'health',
+      tags: ['健康'],
+      priority: 0,
+      recurrence: null,
+      reminderOffsetMinutes: 10,
+      reminderDelayMinutes: null,
+      reminderChannels: ['alarm'],
+      needsClarification: false,
+      clarificationPrompt: null,
+      ...overrides,
+    });
+  }
+
+  it('无草稿（空 history / assistant 文本非 JSON）→ null', () => {
+    expect(buildHistoryBriefing([], BRIEFING_TZID)).toBeNull();
+    expect(
+      buildHistoryBriefing(
+        [
+          { role: 'user', text: '改成明天' },
+          { role: 'assistant', text: '已改为 2026-11-14 15:00（请核对卡片）' },
+        ],
+        BRIEFING_TZID,
+      ),
+    ).toBeNull();
+  });
+
+  it('渲染块头/标题/民用时间/渠道推荐，且输出不含毫秒时间戳', () => {
+    const briefing = buildHistoryBriefing(
+      [
+        { role: 'user', text: '提醒我吃药' },
+        { role: 'assistant', text: draftJson() },
+      ],
+      BRIEFING_TZID,
+    );
+    expect(briefing).not.toBeNull();
+    expect(briefing).toContain('上一张卡片草稿摘要（修改时以此为准，禁止新建条目）：');
+    expect(briefing).toContain('- 标题：吃药');
+    expect(briefing).toContain('- 时间：2026-11-16 00:30（时区 Asia/Shanghai）');
+    expect(briefing).toContain('- 渠道推荐：["alarm"]');
+    // 核心防回归：摘要块绝不携带毫秒 epoch（模型由毫秒反算日期不可靠）。
+    expect(briefing).not.toContain(String(START));
+  });
+
+  it('endAt 有值时展示区间；allDay → 全天；startAt null → 未设时间', () => {
+    const ranged = buildHistoryBriefing(
+      [{ role: 'assistant', text: draftJson({ endAt: END }) }],
+      BRIEFING_TZID,
+    );
+    expect(ranged).toContain('- 时间：2026-11-16 00:30 ～ 2026-11-16 01:30（时区 Asia/Shanghai）');
+    const allDay = buildHistoryBriefing(
+      [{ role: 'assistant', text: draftJson({ allDay: true }) }],
+      BRIEFING_TZID,
+    );
+    expect(allDay).toContain('- 时间：2026-11-16 全天');
+    const untimed = buildHistoryBriefing(
+      [{ role: 'assistant', text: draftJson({ startAt: null }) }],
+      BRIEFING_TZID,
+    );
+    expect(untimed).toContain('- 时间：未设时间');
+  });
+
+  it('needsClarification=true 注记澄清状态，供远端识别续答轮', () => {
+    const briefing = buildHistoryBriefing(
+      [
+        {
+          role: 'assistant',
+          text: draftJson({
+            startAt: null,
+            needsClarification: true,
+            clarificationPrompt: '你要在什么时间提醒你吃药？',
+          }),
+        },
+      ],
+      BRIEFING_TZID,
+    );
+    expect(briefing).toContain(
+      '- 上一轮状态：澄清反问中（缺具体时间），用户本轮回复通常是补充信息，补全后并入此草稿。',
+    );
+  });
+
+  it('note（非草稿 JSON）消息被跳过，向前取最近一条草稿', () => {
+    const briefing = buildHistoryBriefing(
+      [
+        { role: 'user', text: '提醒我吃药' },
+        { role: 'assistant', text: draftJson() },
+        { role: 'user', text: '改成明天' },
+        { role: 'assistant', text: '已改为 2026-11-14 15:00' },
+      ],
+      BRIEFING_TZID,
+    );
+    expect(briefing).toContain('- 标题：吃药');
   });
 });
 

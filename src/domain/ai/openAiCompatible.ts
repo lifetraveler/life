@@ -25,7 +25,7 @@
 import { AiParseError } from './errors';
 import { isRecurrenceRule, isReminderChannelArray } from './guard';
 import { nextOccurrenceInstant } from './localFallback';
-import { AI_SYSTEM_PROMPT, buildNowFacts } from './prompt';
+import { AI_SYSTEM_PROMPT, buildHistoryBriefing, buildNowFacts } from './prompt';
 import { daysInMonth, getZonedParts, resolveCivilTimeToInstant } from '../recurrence/civilTime';
 import type { RecurrenceRule } from '../recurrence/types';
 import type { ReminderChannel } from '../reminder';
@@ -378,8 +378,16 @@ export class OpenAICompatibleProvider implements AiParser {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
+    // 切片 23 阶段 2：history 里最近一张草稿以民用时间摘要注入 system 消息
+    //（buildHistoryBriefing 本地换算 epoch），“改成/改为”编辑以此为准；
+    // 无草稿（history 为空或只有 note）时不拼接，单轮行为不变。
+    const briefing = buildHistoryBriefing(context.history, context.tzid);
+    const systemContent =
+      briefing === null
+        ? `${AI_SYSTEM_PROMPT}\n\n${buildNowFacts(context)}`
+        : `${AI_SYSTEM_PROMPT}\n\n${buildNowFacts(context)}\n\n${briefing}`;
     const messages: Array<{ role: string; content: string }> = [
-      { role: 'system', content: `${AI_SYSTEM_PROMPT}\n\n${buildNowFacts(context)}` },
+      { role: 'system', content: systemContent },
       ...context.history.map((h: ChatMessage) => ({ role: h.role, content: h.text })),
       { role: 'user', content: input },
     ];

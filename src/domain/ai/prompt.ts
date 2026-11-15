@@ -19,13 +19,17 @@
  *   （缺时间反问，叫醒类有时间默认起床不反问）、多轮上下文与澄清续答（history 里
  *   assistant 消息即上一轮草稿 JSON，续答轮补全并归位）。普通提醒的落库渠道由
  *   用户的 defaultChannels 决定（§7.30），提示词明确要求普通提醒不填渠道。
+ * - v0.19 阶段 2（切片 23）：buildHistoryBriefing——从 history 取最近一张草稿，
+ *   毫秒时间戳本地换算为民用时间后注入 system 消息摘要块；「改成/改为」编辑以
+ *   摘要为基准只改被提及字段、其余照抄，禁止由毫秒反算日期（v0.16 教训：LLM
+ *   算 epoch 不可靠，民用换算必须本地做）。
  *
  * 本文件是纯文本模板（常量 + 纯函数），不属于解析逻辑；单测只断言关键句存在，
  * 避免脆弱的全文比对。
  */
 
 import { getZonedParts } from '../recurrence/civilTime';
-import type { AiParseContext } from './types';
+import type { AiParseContext, ChatMessage } from './types';
 
 export const AI_SYSTEM_PROMPT = [
   '你是一个日程/灵感解析助手。把用户输入解析成一个 JSON 对象，不要输出 JSON 以外的任何解释。',
@@ -73,7 +77,8 @@ export const AI_SYSTEM_PROMPT = [
   '多轮上下文（history）与澄清续答：',
   '- history 中每条 assistant 消息就是上一轮解析出的完整草稿 JSON，其字段值可直接读取复用。',
   '- 上一轮草稿 needsClarification=true 时，用户本轮回复通常就是补全的信息：把补全值并入上一轮草稿的对应字段（沿用其标题/分类等，不要新建一个条目），并把 needsClarification 置回 false。',
-  '- 用户说“改成/改为+时间”时：定位 history 里最近的一张草稿卡片，只更新被提及的字段（如时间），其余字段保持原样，不要新建条目。',
+  '- 系统消息若附带「上一张卡片草稿摘要」块，它就是最近一张卡片的状态（民用时间）。用户说“改成/改为+时间”时，以摘要中的日期为基准（用户没改日期就沿用日期，只替换被提及的时刻），其余字段照抄摘要，输出完整 JSON，不要新建条目。',
+  '- history 中 assistant 草稿 JSON 的 startAt/endAt 是毫秒时间戳，仅供程序读取；禁止由毫秒反算日期——民用时间一律以摘要块为准；无摘要块时按“当前时间”基准正常解析。',
   '',
   '时间字段书写规则：',
   '- date 一律 YYYY-MM-DD（公历），相对词（今天/明天/下周三/每月15号）先依据下方“当前时间”换算成绝对日期；',
@@ -100,4 +105,147 @@ export function buildNowFacts(context: AiParseContext): string {
     `当前时间：${parts.year}年${parts.month}月${parts.day}日 周${weekday} ${pad(parts.hour)}:${pad(parts.minute)}（时区 ${context.tzid}）`,
     '解析相对时间（明天/下周三等）一律以上述当前时间为基准；date 一律写绝对日期 YYYY-MM-DD。',
   ].join('\n');
+}
+
+/**
+ * history 中最近一张草稿的最小形状（防御式判据，不是完整 ParsedItemDraft 校验）。
+ * 字段值为 JSON.parse 产物，除判据字段外保持 unknown，由渲染侧逐项从严校验。
+ */
+interface BriefingDraftShape {
+  title: string;
+  startAt: number | null;
+  endAt: number | null;
+  allDay: boolean;
+  recurrence: unknown;
+  categoryId: unknown;
+  tags: unknown;
+  priority: unknown;
+  reminderChannels: unknown;
+  needsClarification: unknown;
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+/**
+ * 尝试把一条 history 消息文本解析成「形似草稿」的对象。
+ * 判据：对象非数组、title 为 string、含 startAt 键且为 number|null、allDay 为
+ * boolean——足以区分草稿 JSON 与编辑/引导轮的纯文本 note（后者 parse 失败或
+ * 形状不符，直接跳过）。
+ */
+function tryParseBriefingDraft(text: string): BriefingDraftShape | null {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return null;
+  }
+  const record = parsed as Record<string, unknown>;
+  const startAt = record['startAt'];
+  const endAt = record['endAt'];
+  if (
+    typeof record['title'] !== 'string' ||
+    typeof record['allDay'] !== 'boolean' ||
+    !('startAt' in record) ||
+    (startAt !== null && typeof startAt !== 'number') ||
+    (endAt !== undefined && endAt !== null && typeof endAt !== 'number')
+  ) {
+    return null;
+  }
+  return {
+    title: record['title'],
+    startAt,
+    endAt: endAt === undefined ? null : endAt,
+    allDay: record['allDay'],
+    recurrence: record['recurrence'],
+    categoryId: record['categoryId'],
+    tags: record['tags'],
+    priority: record['priority'],
+    reminderChannels: record['reminderChannels'],
+    needsClarification: record['needsClarification'],
+  };
+}
+
+function formatBriefingDate(epoch: number, tzid: string): string {
+  const parts = getZonedParts(epoch, tzid);
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${parts.year}-${pad(parts.month)}-${pad(parts.day)}`;
+}
+
+function formatBriefingDateTime(epoch: number, tzid: string): string {
+  const parts = getZonedParts(epoch, tzid);
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${formatBriefingDate(epoch, tzid)} ${pad(parts.hour)}:${pad(parts.minute)}`;
+}
+
+function describeBriefingTime(draft: BriefingDraftShape, tzid: string): string {
+  if (draft.startAt === null) return '未设时间';
+  if (draft.allDay) return `${formatBriefingDate(draft.startAt, tzid)} 全天`;
+  const endText =
+    draft.endAt !== null ? ` ～ ${formatBriefingDateTime(draft.endAt, tzid)}` : '';
+  return `${formatBriefingDateTime(draft.startAt, tzid)}${endText}（时区 ${tzid}）`;
+}
+
+function renderBriefing(draft: BriefingDraftShape, tzid: string): string {
+  const lines = [
+    '上一张卡片草稿摘要（修改时以此为准，禁止新建条目）：',
+    `- 标题：${draft.title}`,
+    `- 时间：${describeBriefingTime(draft, tzid)}`,
+  ];
+  if (
+    draft.recurrence !== null &&
+    draft.recurrence !== undefined &&
+    typeof draft.recurrence === 'object'
+  ) {
+    lines.push(`- 重复：${JSON.stringify(draft.recurrence)}`);
+  }
+  if (typeof draft.categoryId === 'string' && draft.categoryId.length > 0) {
+    lines.push(`- 分类：${draft.categoryId}`);
+  }
+  if (isStringArray(draft.tags) && draft.tags.length > 0) {
+    lines.push(`- 标签：${JSON.stringify(draft.tags)}`);
+  }
+  if (typeof draft.priority === 'number' && draft.priority >= 1) {
+    lines.push(`- 优先级：${draft.priority}`);
+  }
+  if (isStringArray(draft.reminderChannels) && draft.reminderChannels.length > 0) {
+    lines.push(`- 渠道推荐：${JSON.stringify(draft.reminderChannels)}`);
+  }
+  if (draft.needsClarification === true) {
+    lines.push(
+      '- 上一轮状态：澄清反问中（缺具体时间），用户本轮回复通常是补充信息，补全后并入此草稿。',
+    );
+  }
+  return lines.join('\n');
+}
+
+/**
+ * 上一张卡片草稿摘要（切片 23 阶段 2 / ai.md）：从 history 末尾向前找最后一条
+ * assistant 草稿 JSON 消息（切片 15 约定：草稿轮 assistant 文本 = 合并后草稿的
+ * JSON；编辑/引导轮是纯文本 note，parse 失败自动跳过继续向前扫），把毫秒时间戳
+ * 本地换算为民用时间（v0.16 纪律：epoch 换算绝不交给模型），输出一段可直接引用
+ * 的摘要块。远端编辑意图（“改成7点半”）以此块为基准：模型不再从毫秒反算日期，
+ * 且被明确禁止新建条目。找不到任何草稿 → null（单轮行为不变）。
+ */
+export function buildHistoryBriefing(
+  history: ReadonlyArray<ChatMessage>,
+  tzid: string,
+): string | null {
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const message = history[index];
+    if (message.role !== 'assistant') continue;
+    const draft = tryParseBriefingDraft(message.text);
+    if (draft !== null) {
+      return renderBriefing(draft, tzid);
+    }
+  }
+  return null;
 }
