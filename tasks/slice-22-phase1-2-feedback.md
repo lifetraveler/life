@@ -20,7 +20,8 @@
 | `npx tsc --noEmit` | 0 错 |
 | `npx jest --runInBand` | 72 套件 / 932 用例全过（基线 71 / 926，+1 套件 +6 用例 = cardPayload.test.ts） |
 | `npx expo-doctor` | 16/18 过；2 项失败 = 预存基线（app config 非 CNG 同步检查、React Native Directory 元数据检查），对照 slice-21 无新增 |
-| 真机/模拟器验收 | 未做（Phase 4 执行；本阶段可先人工核对「保存出卡 + 点卡跳详情」） |
+| APK 版本号 | 0.22.0 / versionCode 3（release 包，commit `4f710f0`；MuMu 127.0.0.1:16384 已装并冷启动 ✓） |
+| 真机/模拟器验收 | MuMu 验收进行中（用户人工核对「保存出卡 + 点卡跳详情」等清单；Phase 4 正式验收待做） |
 
 ## 范围落点表
 
