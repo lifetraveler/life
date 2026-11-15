@@ -66,7 +66,12 @@
 - **普通提醒落库 null 分支 PASS**：写周报草稿无任何提醒表达（无提前量/延迟/渠道）→ 保存后结果卡无提醒行（describeCardReminderLine(null)）、详情页不建提醒；默认渠道仅在实际创建提醒时生效。
 - MuMu 库现存测试条目（可删）：叫我起床（明天 08:00，闹钟，兼作响铃观察素材）、提醒吃药（今天 14:00，闹钟）、写周报（明天 08:00，无提醒）。
 - 观察项（不属本切片修复面）：FlashPreviewCard 时间行对非 allDay 草稿渲染「时间：2026-11-16 2026-11-16 07:30」（日期重复，describeDraftTime 既有格式行为，phase 2/3 未触碰该函数），留后续 UI 打磨切片处理。
-- **验收后用户反馈修补（2026-11-15 晚，fix 提交见 git log）**：用户报告长历史下新增录入的卡片「盖住」历史区不顶上去。复现确认根因：**非倒置 FlatList 不自动跟随新内容**——长历史追加消息及预览卡出现压缩列表视口时滚动偏移不跟随，列表尾部被裁出屏外（a11y 证据：修复前新消息「下午5点喝水」不在可视树）。修复：flash.tsx 加 listRef + useEffect（依赖 messages.length / hasDraft / messages）自动 scrollToEnd。MuMu 复验（versionCode 5）：5 轮连发 10+ 条消息后最新消息、回执、预览卡全部在可视树，保存出结果卡同样滚底可见。该缺陷自切片 15 起即存在，长历史下才显性化。构建插曲：mergeDexRelease 的 classes.dex 被残留 gradle daemon 占用（「另一个程序正在使用此文件」），--stop 后重建通过。
+- **验收后用户反馈修补（2026-11-15 晚，fix 提交见 git log）**：用户报告长历史下新增录入的卡片「盖住」历史区不顶上去。复现确认根因：**非倒置 FlatList 不自动跟随新内容**——长历史追加消息及预览卡出现压缩列表视口时滚动偏移不跟随，列表尾部被裁出屏外（a11y 证据：修复前新消息「下午5点喝水」不在可视树）。该缺陷自切片 15 起即存在，长历史下才显性化。修补共三轮（flash.tsx）：
+  - 一轮（versionCode 5）：listRef + useEffect（messages/hasDraft 变化时 scrollToEnd）。用户复测仍遮挡——effect 在新 item 布局完成前就滚（竞态），滚完内容又长高、列表停在旧位置。
+  - 二轮（未单独出包，并入三轮）：滚动挂 `onContentSizeChange`（新内容布局完成后才回调），effect 仅负责预览卡出现/消失的视口压缩（contentSize 不变、触发不了 onContentSizeChange）。复验发现 `animated: true` 与 FlatList 窗口化挂载竞速：滚动途中新 item 陆续挂载、内容底边持续下移，动画停在半截（结果卡只露出上半）。
+  - 三轮（versionCode 6）：`animated: false` 瞬时跳底，窗口化每次 remeasure 都再跳、最终收敛；`onScroll` 跟踪是否近底（120px 阈值），仅近底或用户刚发送（最后一条 role==='user'）才跟随，避免上翻历史时被 remeasure 硬拽回底部。
+  - MuMu 复验（v6，screencap 像素级）：5 轮连发→保存→结果卡完整可见；保存后再发新消息→新气泡、回执、完整预览卡（含按钮）全部滚入可视区，此前遮挡场景全部消除。
+- 构建插曲：mergeDexRelease 的 classes.dex 被残留 gradle daemon 占用（「另一个程序正在使用此文件」），--stop 后重建通过；另一次误在工作区根执行 gradlew（workdir 漏传）报「不是内部或外部命令」，需在 android/ 下执行。
 
 ## 6. 教训索引
 
