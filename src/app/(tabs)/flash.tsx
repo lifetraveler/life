@@ -10,10 +10,12 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import FlashEditModal from '../../ui/FlashEditModal';
 import FlashPreviewCard from '../../ui/FlashPreviewCard';
+import FlashResultCard from '../../ui/FlashResultCard';
 import { useFlashChat } from '../../ui/useFlashChat';
 import type { FlashChatMessage } from '../../ui/useFlashChat';
 import { getDeviceTzid } from '../../ui/timeFormat';
@@ -25,6 +27,9 @@ import { getDeviceTzid } from '../../ui/timeFormat';
  *   点击卡片进编辑弹窗（验收 8），「确认添加」落库（验收 9）；
  * - 无 Key / 断网降级为本地解析，原因注明在 AI 侧消息里（验收 5）；
  * - 确认添加后提示 Alert（含提醒未落库说明），列表由计划页响应式刷新。
+ * - 切片 22 阶段 2/3（AGENTS.md §7.34）：保存成功后的 AI 回复渲染为结果卡片
+ *   （kind:'card'），点击卡片主体跳详情页 /item/[id]；快捷推迟 chips 阶段 3
+ *   接线（推迟 + once 提醒 onceAt 联动 + 卡片原地刷新）。
  */
 
 function MessageRow({ message }: { message: FlashChatMessage }) {
@@ -45,6 +50,7 @@ export default function FlashScreen() {
   const deviceTzid = getDeviceTzid();
   // 切片 21（AGENTS.md §7.32）：Tab 页顶部必须让出系统状态栏；底部让出手势条。
   const insets = useSafeAreaInsets();
+  const router = useRouter();
 
   const handleSend = (): void => {
     const text = input;
@@ -62,6 +68,29 @@ export default function FlashScreen() {
   const currentDraft = chat.draft;
   const hasDraft = currentDraft !== null;
 
+  // 切片 22 阶段 2（AGENTS.md §7.34）：结果卡片消息走 FlashResultCard；
+  // cardPayload 属性窄化不进闭包，先捕获到局部 const 再用于 onPress。
+  // 卡片直接作为 FlatList 单元渲染（不包 row wrapper：row 主轴按内容测宽
+  // 会把内部 flex:1 的 body 塌缩成 0 宽——13:50 MuMu 复现，见反馈文件教训）。
+  // 切片 22 阶段 3：快捷推迟 chips 接线（推迟 + once 提醒 onceAt 联动 +
+  // cardPayload 原地刷新在 useFlashChat.postponeCard）。
+  const renderMessage = ({ item }: { item: FlashChatMessage }) => {
+    if (item.kind === 'card' && item.cardPayload !== undefined) {
+      const payload = item.cardPayload;
+      return (
+        <FlashResultCard
+          payload={payload}
+          tzid={deviceTzid}
+          onPress={() => router.push(`/item/${payload.itemId}`)}
+          onPostpone={(minutes) => {
+            void chat.postponeCard(payload.itemId, minutes);
+          }}
+        />
+      );
+    }
+    return <MessageRow message={item} />;
+  };
+
   return (
     <KeyboardAvoidingView
       style={[styles.flex, { paddingTop: insets.top }]}
@@ -71,7 +100,7 @@ export default function FlashScreen() {
         style={styles.list}
         data={chat.messages}
         keyExtractor={(message) => String(message.id)}
-        renderItem={({ item }) => <MessageRow message={item} />}
+        renderItem={renderMessage}
         ListEmptyComponent={
           <View style={styles.emptyWrap}>
             <Text style={styles.emptyTitle}>⚡ 闪电添加</Text>
