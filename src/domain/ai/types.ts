@@ -40,6 +40,11 @@ export interface FlashCardReminderSnapshot {
   /** 仅 frequency='once' 非空（民用时间，once 触发时刻唯一来源）。 */
   onceAt: OnceCivilTime | null;
   tzid: string;
+  /**
+   * 渠道列表快照（切片 23 阶段 3 / ai.md）：结果卡提醒行按渠道展示
+   * ⏰ 闹钟 / 🔔 通知。Reminder.channels 为必有字段，快照恒携带。
+   */
+  channels: ReminderChannel[];
 }
 
 /**

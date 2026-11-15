@@ -3,11 +3,15 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { RecurrenceRule } from '../domain/recurrence/types';
 import type { ParsedItemDraft } from '../domain/ai/types';
 import type { Category } from '../domain/category';
+import type { ReminderChannel } from '../domain/reminder';
 import { formatItemDate, formatItemTime } from './timeFormat';
+import { REMINDER_CHANNEL_LABELS } from './reminderForm';
 
 /**
  * 闪电添加预览卡片（tasks/slice-15.md 阶段 3，验收 6/8；AGENTS.md §7.25）。
  * 展示解析出的全部字段；点击整卡进入编辑弹窗。纯展示组件，不触 Repository。
+ * 切片 23 阶段 3（§7.35）：reminderChannels 含 alarm/system-notification 时
+ * 渲染渠道标识行（⏰ 闹钟 / 🔔 通知）。
  */
 
 const TYPE_LABELS: Record<ParsedItemDraft['type'], string> = {
@@ -47,6 +51,20 @@ export function describeDraftTime(draft: ParsedItemDraft, tzid: string): string 
   return `${start} ~ ${formatItemTime(draft.endAt, tzid)}`;
 }
 
+/**
+ * 渠道标识文案（切片 23 阶段 3 / §7.35，任务卡验收 2）：含 alarm → '⏰ 闹钟'；
+ * 含 system-notification → '🔔 通知'；网络渠道按 REMINDER_CHANNEL_LABELS 列出。
+ * reminderChannels 未表达（undefined/空数组）→ null（不渲染渠道行）。
+ */
+export function describeDraftChannelLine(
+  channels?: ReminderChannel[],
+): string | null {
+  if (channels === undefined || channels.length === 0) return null;
+  if (channels.includes('alarm')) return '⏰ 闹钟';
+  if (channels.includes('system-notification')) return '🔔 通知';
+  return channels.map((channel) => REMINDER_CHANNEL_LABELS[channel]).join('、');
+}
+
 export default function FlashPreviewCard({
   draft,
   categories,
@@ -54,6 +72,7 @@ export default function FlashPreviewCard({
   onPress,
 }: FlashPreviewCardProps) {
   const category = categories.find((c) => c.id === draft.categoryId) ?? null;
+  const channelLine = describeDraftChannelLine(draft.reminderChannels);
   const timeText =
     draft.recurrence !== null
       ? `${describeRecurrenceRule(draft.recurrence)} ${String(
@@ -76,6 +95,9 @@ export default function FlashPreviewCard({
       ) : null}
       {draft.tags.length > 0 ? (
         <Text style={styles.rowText}>标签：{draft.tags.join('、')}</Text>
+      ) : null}
+      {channelLine !== null ? (
+        <Text style={styles.rowText}>提醒：{channelLine}</Text>
       ) : null}
       {draft.reminderOffsetMinutes !== null ? (
         <Text style={styles.rowText}>

@@ -61,6 +61,7 @@ export function buildFlashCardPayload(
             dayOfMonth: reminder.dayOfMonth,
             onceAt: reminder.onceAt === null ? null : { ...reminder.onceAt },
             tzid: reminder.tzid,
+            channels: [...reminder.channels],
           },
   };
 }

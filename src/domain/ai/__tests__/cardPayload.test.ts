@@ -86,6 +86,7 @@ describe('buildFlashCardPayload（切片 22 阶段 1）', () => {
         dayOfMonth: 1,
         onceAt: { year: 2026, month: 11, day: 16, hour: 8, minute: 50 },
         tzid: 'Asia/Shanghai',
+        channels: ['system-notification'],
       },
     });
   });
@@ -131,10 +132,11 @@ describe('buildFlashCardPayload（切片 22 阶段 1）', () => {
       dayOfMonth: 15,
       onceAt: null,
       tzid: 'Asia/Shanghai',
+      channels: ['system-notification'],
     });
   });
 
-  it('快照防御性拷贝：载荷 weekdays/onceAt 与 Reminder 对象互不串扰', () => {
+  it('快照防御性拷贝：载荷 weekdays/onceAt/channels 与 Reminder 对象互不串扰', () => {
     const reminder = baseReminder({ weekdays: [1, 3] });
     const payload = buildFlashCardPayload(baseItem({}), TIME_PATCH, reminder, CATEGORIES);
 
@@ -145,8 +147,10 @@ describe('buildFlashCardPayload（切片 22 阶段 1）', () => {
     }
     snapshot.weekdays.push(5);
     snapshot.onceAt = { year: 2030, month: 1, day: 1, hour: 0, minute: 0 };
+    snapshot.channels.push('alarm');
     expect(reminder.weekdays).toEqual([1, 3]);
     expect(reminder.onceAt).toEqual({ year: 2026, month: 11, day: 16, hour: 8, minute: 50 });
+    expect(reminder.channels).toEqual(['system-notification']);
 
     // 改原 Reminder 不得影响载荷。
     const payload2 = buildFlashCardPayload(baseItem({}), TIME_PATCH, reminder, CATEGORIES);

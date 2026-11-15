@@ -187,3 +187,25 @@ Reminder 模型中没有落库位置：data-model.md §4.1 冻结
   Chat/UI 侧消费（澄清消息、渠道标识）在阶段 3。
 - 迁移方案：无库迁移。三字段均为可选：旧 wire（12 键）与含三键或 null 值的新 wire
   均可通过守卫；本地解析对不含意图词的输入行为不变。
+## v0.19 阶段 2/3 落点记录（切片 23，2026-11-15）
+
+上文「Chat/UI 侧消费（澄清消息、渠道标识）在阶段 3」的落点与本阶段远端上下文编辑的实现记录：
+
+- 远端上下文编辑：新增 `buildHistoryBriefing(history, tzid)`（prompt.ts）——从 history
+  末尾向前取最近一条 assistant 草稿 JSON（note 文本跳过），渲染「上一张卡片草稿摘要
+  （修改时以此为准，禁止新建条目）：」块（标题/民用时间/重复/分类/标签/优先级/渠道
+  推荐/澄清注记），由 OpenAICompatibleProvider.parse 拼入 system 消息。民用时间经
+  getZonedParts 本地换算，摘要块绝不携带毫秒 epoch；Prompt 同步升级：编辑意图以摘要
+  块民用日期为基准、其余字段照抄、禁止由毫秒反算日期。
+- history 契约回正（useFlashChat.appendEditHistory）：草稿编辑成功路径的 assistant
+  文本回写编辑后草稿的 JSON（切片 15 格式），纯文本 note 只留消息流；失败/引导路径
+  仍写 note。澄清轮 historyAppend 不变（assistant=草稿 JSON）。
+- Chat 澄清消费（useFlashChat.send）：解析结果 `needsClarification === true` 时不设
+  待确认草稿（不出预览卡），clarificationPrompt（缺省兜底通用文案）作为普通 AI 文本
+  消息追加，degraded 时补降级说明；草稿保留供下一轮续答经 merge 补全后自然出卡。
+  澄清待补轮不被「改成X点」编辑窄规则劫持（needsClarification=true 时窄规则不拦截）。
+- 结果卡片快照渠道（阶段 3）：FlashCardReminderSnapshot 新增 `channels:
+  ReminderChannel[]`（恒携带、防御拷贝）；FlashPreviewCard 新增 describeDraftChannelLine
+  （alarm → ⏰ 闹钟 / system-notification → 🔔 通知 / 网络渠道按标签列出 / 未表达不渲染）、
+  FlashResultCard 提醒行改 describeCardReminderLine（图标 + 「渠道 · 规则摘要」，
+  规则摘要保留）。展示为纯 UI 消费，不改变 wire 契约与落库语义。
