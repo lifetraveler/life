@@ -89,8 +89,33 @@ describe('AI_SYSTEM_PROMPT：澄清与渠道推荐（切片 23 §7.35）', () =>
     expect(P).toContain('已表达提前量/延迟/重复规则、或时间已完整（有具体时刻）');
   });
 
-  it('反问文案纪律：复用原词、只问缺失属性、单句', () => {
-    expect(P).toContain('复用用户原词、只问缺失的那一个属性，单句');
+  it('反问文案纪律：复用原词、只问缺失关键信息、单句（预约类允许顺带一问细节）', () => {
+    expect(P).toContain('复用用户原词、只问缺失的关键信息，单句');
+    expect(P).toContain('预约/预订类允许顺带一问自然相伴的细节（见上），其余场景不要罗列多个问题');
+  });
+
+  it('澄清节扩展（验收反馈修补）：预约/预订/安排类缺时间主动澄清', () => {
+    expect(P).toContain('预约/预订/安排类输入');
+    expect(P).toContain('预约、预订、挂号、订票、订酒店、订餐厅');
+    expect(P).toContain('或只有“下周/周末/近期”这类模糊说法：needsClarification=true');
+    expect(P).toContain('先问具体时间（哪一天、什么时候）');
+    // 可顺带问自然细节，但仍是单句。
+    expect(P).toContain('可顺带问与该动作自然相伴的一个细节（如哪家医院/机构、常规还是专项）');
+    expect(P).toContain('但仍是单句，不要列问题清单');
+  });
+
+  it('澄清节扩展：预约类有时间直接出卡、细节并入 title/content、防误伤边界', () => {
+    expect(P).toContain('时间已明确（说了具体日期/时刻）：needsClarification=false 直接出卡');
+    expect(P).toContain('禁止再为细节反问');
+    expect(P).toContain('机构/医院/类型等细节并入 title（如 title「仁济医院常规体检」，让卡片一眼可读）或 content/tags');
+    // 防误伤：note/纯想法/感叹不反问。
+    expect(P).toContain('“体检很重要”“记一下体检报告指标”）不是预约动作，不澄清');
+    expect(P).toContain('type 为 note 且用户没表达安排意图时一律不反问');
+    expect(P).toContain('只有明确的预约/预订/挂号/订类动词才触发上一条');
+  });
+
+  it('澄清续答：补全细节并入 title/content（验收反馈修补）', () => {
+    expect(P).toContain('补全里出现的机构/医院/类型等细节并入 title（让卡片一眼可读）或 content/tags');
   });
 
   it('“多轮上下文（history）与澄清续答”一节存在：assistant=上一轮草稿 JSON + 续答合并 + 摘要块编辑指令', () => {
