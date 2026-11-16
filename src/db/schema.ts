@@ -13,8 +13,10 @@ import { appSchema, tableSchema } from '@nozbe/watermelondb';
  * （AGENTS.md §7.30 延迟提醒意图与默认渠道）。
  * v12（切片 25 阶段 1）：app_settings 新增 careful_mode
  * （AGENTS.md §7.37 闪电录入认真模式）。
+ * v13（切片 26 阶段 1）：app_settings 新增 show_ai_usage
+ * （AGENTS.md §7.38 AI 透明度——用量展示开关）。
  */
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 
 export const schema = appSchema({
   version: SCHEMA_VERSION,
@@ -144,6 +146,9 @@ export const schema = appSchema({
     // （默认 false = 默认模式）。非可选 boolean：addColumns 对既有行自动回填类型零值
     // false（v10 channel_presets.is_default 同款先例，无需 UPDATE）；新行由
     // Repository 写入显式值。
+    // v13（切片 26 阶段 1，AGENTS.md §7.38）：show_ai_usage——AI 用量展示开关
+    // （默认 false = 不显示）。非可选 boolean，addColumns 既有行回填 false，
+    // careful_mode（v12）同款先例，无需 UPDATE。
     tableSchema({
       name: 'app_settings',
       columns: [
@@ -155,6 +160,7 @@ export const schema = appSchema({
         { name: 'chips_increments', type: 'string', isOptional: true },
         { name: 'default_channels_json', type: 'string', isOptional: true },
         { name: 'careful_mode', type: 'boolean' },
+        { name: 'show_ai_usage', type: 'boolean' },
       ],
     }),
     // 切片 17 阶段 1（AGENTS.md §7.27 渠道配置中心，schema v9）：渠道预设表。

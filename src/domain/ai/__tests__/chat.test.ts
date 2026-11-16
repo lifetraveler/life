@@ -405,3 +405,113 @@ describe('runFlashTurn 标题守卫三态（切片 25 §7.37 / slice-24 closeout
     expect(result.draft.needsClarification).toBeUndefined();
   });
 });
+
+describe('runFlashTurn usage 传输边界（切片 26 / AGENTS.md §7.38，ai.md v0.20）', () => {
+  const NOW = new Date('2026-11-10T10:00:00+08:00').getTime();
+  const TZID = 'Asia/Shanghai';
+
+  // 与上方 describe 相同的 remote wire / config（本 describe 内自持，避免耦合上游改动）。
+  const remoteWire = {
+    title: '开周会',
+    content: '',
+    type: 'event',
+    start: { date: '2026-11-11', time: '15:00' },
+    end: null,
+    allDay: false,
+    categoryId: 'work',
+    tags: [] as string[],
+    priority: 2,
+    recurrence: null,
+    reminderOffsetMinutes: null,
+    reminderDelayMinutes: null,
+  };
+  const config = {
+    active: {
+      provider: 'openai-compatible' as const,
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: 'sk-test-secret-key-do-not-leak',
+      model: 'test-model',
+      timeoutMs: undefined,
+    },
+  };
+
+  function okFetch(body: string): typeof fetch {
+    return (async () =>
+      new Response(body, {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })) as unknown as typeof fetch;
+  }
+
+  function remoteBody(wire: unknown, usage?: unknown): string {
+    return JSON.stringify({
+      choices: [{ message: { content: JSON.stringify(wire) } }],
+      ...(usage !== undefined ? { usage } : {}),
+    });
+  }
+
+  it('远端成功轮：usage 携带 provider.lastUsage 快照（envelope 有 usage 时）', async () => {
+    const result = await runFlashTurn('明天下午3点开周会', {
+      config,
+      now: NOW,
+      tzid: TZID,
+      history: [],
+      previousDraft: null,
+      fetchImpl: okFetch(
+        remoteBody(remoteWire, {
+          prompt_tokens: 1000,
+          completion_tokens: 200,
+          prompt_tokens_details: { cached_tokens: 600 },
+        }),
+      ),
+    });
+    expect(result.degraded).toBe(false);
+    expect(result.usage).toEqual({
+      promptTokens: 1000,
+      completionTokens: 200,
+      cachedPromptTokens: 600,
+      estimatedCost: null, // 单价未配置：只出 token 段
+    });
+  });
+
+  it('远端成功轮：envelope 无 usage → result.usage null；history JSON 不携带 usage 字段', async () => {
+    const result = await runFlashTurn('明天下午3点开周会', {
+      config,
+      now: NOW,
+      tzid: TZID,
+      history: [],
+      previousDraft: null,
+      fetchImpl: okFetch(remoteBody(remoteWire)),
+    });
+    expect(result.usage).toBeNull();
+    const historyDraft = JSON.parse(result.historyAppend[1].text) as Record<string, unknown>;
+    expect(historyDraft.title).toBe('开周会');
+    expect('usage' in historyDraft).toBe(false);
+    expect('usage' in result.draft).toBe(false);
+  });
+
+  it('降级轮（HTTP 500）与无 Key 轮：usage 恒 null（本地解析无 usage）', async () => {
+    const failingFetch = (async () =>
+      new Response('boom', { status: 500 })) as unknown as typeof fetch;
+    const degraded = await runFlashTurn('明天买菜', {
+      config,
+      now: NOW,
+      tzid: TZID,
+      history: [],
+      previousDraft: null,
+      fetchImpl: failingFetch,
+    });
+    expect(degraded.degraded).toBe(true);
+    expect(degraded.usage).toBeNull();
+
+    const noKey = await runFlashTurn('明天买菜', {
+      config: null,
+      now: NOW,
+      tzid: TZID,
+      history: [],
+      previousDraft: null,
+    });
+    expect(noKey.degraded).toBe(true);
+    expect(noKey.usage).toBeNull();
+  });
+});

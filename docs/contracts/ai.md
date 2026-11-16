@@ -1,4 +1,4 @@
-# AI 解析层契约（v0.17）
+# AI 解析层契约（v0.20；头部此前停在 v0.17 而变更记录已推进至 v0.19——文档缺陷已报告，随切片 26 阶段 1 顺带修正至 v0.20）
 
 ## 接口定义
 ```typescript
@@ -228,3 +228,30 @@ Reminder 模型中没有落库位置：data-model.md §4.1 冻结
   （alarm → ⏰ 闹钟 / system-notification → 🔔 通知 / 网络渠道按标签列出 / 未表达不渲染）、
   FlashResultCard 提醒行改 describeCardReminderLine（图标 + 「渠道 · 规则摘要」，
   规则摘要保留）。展示为纯 UI 消费，不改变 wire 契约与落库语义。
+
+## 用量展示副通道（v0.20，切片 26 阶段 1，AGENTS.md §7.38，非破坏性条目）
+- OpenAICompatibleProvider 新增只读 getter `lastUsage: AiUsageSnapshot | null`：
+  取自 chat-completions **信封** `usage` 字段（非模型 JSON content），defensive
+  读取（usage 缺失/非对象、tokens 非有限数值或为负、cached_tokens 越界等形状
+  偏差 → 整体回退 null，不炸解析主链）；失败轮恒 null，每轮重置不残留。
+- FlashTurnResult 新增域内字段 `usage: AiUsageSnapshot | null`（runFlashTurn 成功
+  轮携带 provider.lastUsage；fallbackTurn / 无 Key / 降级轮恒 null），由
+  src/domain/ai/usage.ts（新文件）定义 AiUsageSnapshot / AiUsagePrices /
+  formatAiUsageLine。
+- **传输边界（冻结）**：usage 不进入 ParsedItemDraft、不进入 history JSON、
+  不触碰 RemoteDraftWire / isRemoteDraftWire；AiParser.parse 冻结签名与返回
+  类型不变。本条目对契约接口为零改动（纯新增旁路字段）。
+- AiProviderConfig 新增可选 `priceInputPerMillion` / `priceOutputPerMillion`
+  （正数有效；非正数/非数值由 isAiProviderConfig 丢弃为 undefined、不整包拒绝
+  ——旧版本写入的配置不能因强校验整条失效）；两价齐备才按全价上界估算
+  estimatedCost（不区分缓存命中折扣，不做币种换算）。
+- 原因：tasks/slice-26.md 阶段 1（AI 透明度）要求远端解析轮可展示每轮输入/
+  输出 tokens、缓存命中数与估算费用；开关存储走 app_settings.show_ai_usage
+  （schema v13，UI 开关在阶段 2 接线）。
+- 影响范围：src/domain/ai/usage.ts（新）、openAiCompatible.ts、chat.ts、
+  configStore.ts；src/db/schema.ts（v13）、migrations.ts、AppSettingsModel.ts、
+  src/domain/settings.ts、WatermelonItemRepository.ts（settings 读写的 v13 列
+  接线）；相关测试。不涉及任何冻结签名变更。
+- 迁移方案：schema v12→v13 addColumns（app_settings.show_ai_usage，boolean
+  非可选默认 false，旧数据回退 false，v12 careful_mode 先例，零
+  unsafeExecuteSql）；usage 本身无持久化（每轮内存即弃），无兼容路径需要。

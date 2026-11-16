@@ -540,3 +540,156 @@ describe('buildHistoryBriefing 注入 system 消息（切片 23 阶段 2）', ()
     expect(system).toContain('当前时间：');
   });
 });
+
+describe('OpenAICompatibleProvider.lastUsage（切片 26 / AGENTS.md §7.38）', () => {
+  /** 信封带 usage 的 200 响应（DeepSeek/OpenAI chat-completions 形态）。 */
+  function okEnvelopeWithUsage(content: string, usage: unknown): Response {
+    return new Response(
+      JSON.stringify({
+        choices: [{ message: { role: 'assistant', content } }],
+        usage,
+      }),
+      { status: 200 },
+    );
+  }
+
+  const fullUsage = {
+    prompt_tokens: 1000,
+    completion_tokens: 200,
+    prompt_tokens_details: { cached_tokens: 600 },
+  };
+
+  function makeProviderWithPrices(
+    fetchImpl: (url: string, init?: RequestInit) => Promise<Response>,
+    prices?: { priceInputPerMillion?: number; priceOutputPerMillion?: number },
+  ): OpenAICompatibleProvider {
+    return new OpenAICompatibleProvider(
+      {
+        baseUrl: 'https://api.deepseek.com/v1',
+        apiKey: API_KEY,
+        model: 'deepseek-chat',
+        ...prices,
+      },
+      fetchImpl,
+    );
+  }
+
+  it('构造后 lastUsage 初始为 null', () => {
+    const { fetchImpl } = makeFetch(() => okEnvelope(validWireJson));
+    const provider = makeProviderWithPrices(fetchImpl);
+    expect(provider.lastUsage).toBeNull();
+  });
+
+  it('成功轮：envelope usage 完整 + 两价齐备 → 快照全段（费用按全价上界估算）', async () => {
+    const { fetchImpl } = makeFetch(() => okEnvelopeWithUsage(validWireJson, fullUsage));
+    const provider = makeProviderWithPrices(fetchImpl, {
+      priceInputPerMillion: 2,
+      priceOutputPerMillion: 8,
+    });
+    await provider.parse('明天下午3点开会', CONTEXT);
+    expect(provider.lastUsage).toEqual({
+      promptTokens: 1000,
+      completionTokens: 200,
+      cachedPromptTokens: 600,
+      estimatedCost: 0.0036, // (1000*2 + 200*8) / 1e6
+    });
+  });
+
+  it('成功轮：envelope 无 usage / usage 畸形 → lastUsage null（不炸主链）', async () => {
+    const noUsage = makeFetch(() => okEnvelope(validWireJson));
+    const p1 = makeProvider(noUsage.fetchImpl);
+    await p1.parse('明天下午3点开会', CONTEXT);
+    expect(p1.lastUsage).toBeNull();
+
+    const badUsage = makeFetch(() =>
+      okEnvelopeWithUsage(validWireJson, {
+        prompt_tokens: 'garbage',
+        completion_tokens: 200,
+      }),
+    );
+    const p2 = makeProvider(badUsage.fetchImpl);
+    await expect(p2.parse('明天下午3点开会', CONTEXT)).resolves.toMatchObject({ title: '开会' });
+    expect(p2.lastUsage).toBeNull();
+  });
+
+  it('成功轮：单价缺省 → token/缓存段照常，estimatedCost null', async () => {
+    const { fetchImpl } = makeFetch(() => okEnvelopeWithUsage(validWireJson, fullUsage));
+    const provider = makeProviderWithPrices(fetchImpl);
+    await provider.parse('明天下午3点开会', CONTEXT);
+    expect(provider.lastUsage).toEqual({
+      promptTokens: 1000,
+      completionTokens: 200,
+      cachedPromptTokens: 600,
+      estimatedCost: null,
+    });
+  });
+
+  it('recurrence 分支（{...draft, startAt: local} 返回路径）同样携带 lastUsage', async () => {
+    const draftWithRecurrence = JSON.stringify({
+      title: '喝水',
+      content: '',
+      type: 'task',
+      start: { date: '2026-11-10', time: '09:00' },
+      end: null,
+      allDay: false,
+      categoryId: 'health',
+      tags: [],
+      priority: null,
+      recurrence: { frequency: 'daily', localTime: { hour: 9, minute: 0 } },
+      reminderOffsetMinutes: null,
+      reminderDelayMinutes: null,
+    });
+    const { fetchImpl } = makeFetch(() => okEnvelopeWithUsage(draftWithRecurrence, fullUsage));
+    const provider = makeProviderWithPrices(fetchImpl);
+    const draft = await provider.parse('每天9点喝水', CONTEXT);
+    expect(draft.startAt).toBe(mustAt(2026, 11, 11, 9, 0));
+    expect(provider.lastUsage).not.toBeNull();
+    expect(provider.lastUsage?.promptTokens).toBe(1000);
+  });
+
+  it('失败轮：parse 抛 AiParseError（schema-mismatch）→ lastUsage 保持 null', async () => {
+    // envelope 有 usage，但 content JSON 未通过结构守卫 → 抛错路径不得赋值。
+    const { fetchImpl } = makeFetch(() =>
+      okEnvelopeWithUsage('not-json-at-all', fullUsage),
+    );
+    const provider = makeProviderWithPrices(fetchImpl);
+    await expect(provider.parse('明天下午3点开会', CONTEXT)).rejects.toMatchObject({
+      kind: 'invalid-json',
+    });
+    expect(provider.lastUsage).toBeNull();
+  });
+
+  it('失败轮：HTTP 500 → lastUsage null；下一轮成功后恢复赋值（不残留失败态也不误留旧值）', async () => {
+    let status = 500;
+    const { fetchImpl } = makeFetch(() =>
+      status === 500
+        ? new Response('boom', { status: 500 })
+        : okEnvelopeWithUsage(validWireJson, fullUsage),
+    );
+    const provider = makeProviderWithPrices(fetchImpl);
+    await expect(provider.parse('明天下午3点开会', CONTEXT)).rejects.toMatchObject({
+      kind: 'http-status',
+    });
+    expect(provider.lastUsage).toBeNull();
+
+    status = 200;
+    await provider.parse('明天下午3点开会', CONTEXT);
+    expect(provider.lastUsage?.promptTokens).toBe(1000);
+  });
+
+  it('连续两轮：第二轮 envelope 无 usage → lastUsage 回落 null（不残留第一轮数值）', async () => {
+    let withUsage = true;
+    const { fetchImpl } = makeFetch(() =>
+      withUsage
+        ? okEnvelopeWithUsage(validWireJson, fullUsage)
+        : okEnvelope(validWireJson),
+    );
+    const provider = makeProviderWithPrices(fetchImpl);
+    await provider.parse('明天下午3点开会', CONTEXT);
+    expect(provider.lastUsage?.promptTokens).toBe(1000);
+
+    withUsage = false;
+    await provider.parse('改成明天', CONTEXT);
+    expect(provider.lastUsage).toBeNull();
+  });
+});

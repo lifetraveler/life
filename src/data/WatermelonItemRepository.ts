@@ -209,6 +209,8 @@ function toDomainCategory(model: CategoryModel): Category {
  * 切片 25（§7.37，schema v12）：careful_mode 非可选 boolean 列（v12 migration/seed 保证
  * 有值），直接映射；防御归一——库中读到非 boolean（理论上不应出现，如手改数据库）时
  * 回退默认 false，不抛错（列本身无枚举语义，boolean 归一即可）。
+ * 切片 26（§7.38，schema v13）：show_ai_usage 同 careful_mode 先例——非可选 boolean
+ * 直接映射，非 boolean 回退默认 false，不抛错。
  */
 function toDomainSettings(model: AppSettingsModel): AppSettings {
   return {
@@ -224,6 +226,9 @@ function toDomainSettings(model: AppSettingsModel): AppSettings {
     carefulMode: typeof model.carefulMode === 'boolean'
       ? model.carefulMode
       : DEFAULT_APP_SETTINGS.carefulMode,
+    showAiUsage: typeof model.showAiUsage === 'boolean'
+      ? model.showAiUsage
+      : DEFAULT_APP_SETTINGS.showAiUsage,
   };
 }
 
@@ -1823,6 +1828,8 @@ export class WatermelonItemRepository implements ItemRepository {
           );
           // 切片 25（schema v12）：补插默认行时写认真模式默认值（读层有归一，此处求自描述）。
           record.carefulMode = DEFAULT_APP_SETTINGS.carefulMode;
+          // 切片 26（schema v13）：补插默认行时写用量展示开关默认值（读层有归一，此处求自描述）。
+          record.showAiUsage = DEFAULT_APP_SETTINGS.showAiUsage;
         });
         return { ...DEFAULT_APP_SETTINGS };
       }
@@ -1837,7 +1844,8 @@ export class WatermelonItemRepository implements ItemRepository {
    * 切片 19（§7.30）：defaultChannels 写路径 validateDefaultChannels 严格校验
    * （非法渠道/空/expo 家族双开抛错，返回 canonical 序标准化拷贝）；
    * 切片 25（§7.37）：carefulMode boolean 无枚举语义，直接写（非 boolean 理论上
-   * 不可能出现——类型系统已约束，无独立校验函数））；
+   * 不可能出现——类型系统已约束，无独立校验函数）；
+   * 切片 26（§7.38）：showAiUsage 同 carefulMode 先例，boolean 直接写；
    * 行不存在时以 patch 值（缺省用默认值）建行。
    * 改动小组件显示开关后，调用方需自行触发一次小组件快照刷新
    * （桥不订阅 app_settings；设置页负责）。
@@ -1872,6 +1880,7 @@ export class WatermelonItemRepository implements ItemRepository {
           record.defaultChannelsJson =
             defaultChannels ?? serializeDefaultChannels(DEFAULT_APP_SETTINGS.defaultChannels);
           record.carefulMode = patch.carefulMode ?? DEFAULT_APP_SETTINGS.carefulMode;
+          record.showAiUsage = patch.showAiUsage ?? DEFAULT_APP_SETTINGS.showAiUsage;
         });
         return;
       }
@@ -1899,6 +1908,9 @@ export class WatermelonItemRepository implements ItemRepository {
         }
         if (patch.carefulMode !== undefined) {
           draft.carefulMode = patch.carefulMode;
+        }
+        if (patch.showAiUsage !== undefined) {
+          draft.showAiUsage = patch.showAiUsage;
         }
       });
     });

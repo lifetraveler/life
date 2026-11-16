@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.27
+版本：v0.28
 
 ## 1. 项目概览
 
@@ -312,8 +312,25 @@ schema 版本 5→6，新增/修改如下：
   同谓词）；全新意图不复用上一张卡的标题（修复切片 23/24 误留旧标题缺陷），
   远端 prompt 同语义注记。
 
+### 7.38 AI 透明度（v0.28）
+- **提示词查看**：设置页提供只读界面展示 `AI_SYSTEM_PROMPT` 静态规则串
+  （src/domain/ai/prompt.ts）；动态拼接部分（当前时间事实、多轮上下文摘要）
+  不展示，页面需注明。只读，不提供编辑/复制/导出。
+- **用量展示**：app_settings 新增 `show_ai_usage`（boolean，默认 false = 不显示），
+  schema v12→v13 addColumns 迁移（旧数据回退 false）。开启后远端解析轮在 AI
+  回复消息尾追加一行用量摘要（输入/输出 tokens、缓存命中数、按配置单价的估算
+  费用，段缺失自动省略）；本地降级轮无 usage 不展示。
+- **usage 传输边界（冻结）**：usage 取自 chat-completions 信封（非模型 JSON），
+  经 provider 实例 `lastUsage` 副通道暴露、`FlashTurnResult` 域内字段携带到 hook；
+  **不进入 ParsedItemDraft、不进入 history JSON、不触碰 RemoteDraftWire/
+  isRemoteDraftWire**。AiParser.parse 冻结签名与返回类型不变；ai.md 仅在变更
+  记录追加非破坏性条目，契约正文零改动。
+- **单价配置**：AiProviderConfig 新增可选 `priceInputPerMillion` /
+  `priceOutputPerMillion`（正数有效，留空不估算）；估算为全价上界（不区分缓存
+  命中折扣），不做币种换算。开关与单价即时生效（每轮重读），重启保持。
+
 ## 8. 当前切片
 
-- **已完成**：切片 1–24 全部收尾合并（main，最新 merge `7a414e6`；切片 24 夜间模式 merge `72daa78`，main @ `d5cb4cc`；schema v11，版本 0.23.0/versionCode 10）。各切片历史见对应 `tasks/slice-NN.md` / `tasks/slice-NN-closeout.md`。
-- **当前切片**：切片 25 闪电录入认真模式已完成（分支 `task/slice-25`，schema v12 `careful_mode`；提交索引、MuMu 验收与遗留披露见 `tasks/slice-25-closeout.md`，两阶段反馈见 `tasks/slice-25-phase1-feedback.md` / `slice-25-phase2-feedback.md`）。下一片按 backlog 候选排序执行（26 AI 透明度为建议值，立项时逐切片确认）。未完成项以 `tasks/backlog.md` 为准。
-- **未完成项以 `tasks/backlog.md` 为准**（2026-11-16 起的惯例）：候选排序（~~切片 25 认真模式~~已完成 → 26 AI 透明度 → 27 系统日历 live 直读【先回答调研报告的 4 个开放问题】→ 28 备份/同步 WebDAV【设计讨论先行】+ 插队候选「变更 B 网络渠道后台送达」+ 切片 25 收尾新增 4 条待定候选）、遗留 L1–L13、手验项 U1–U3、契约化已知限制均记录在 backlog，本节不再罗列候选清单。每切片 closeout 同步更新 backlog.md（划掉完成项并注明关闭切片号）并保持本节精简。
+- **已完成**：切片 1–25 全部收尾合并（main @ `5ed723f`；切片 24 夜间模式 merge `72daa78`，切片 25 认真模式 merge `5ed723f`；schema v12，版本 0.23.0/versionCode 10）。各切片历史见对应 `tasks/slice-NN.md` / `tasks/slice-NN-closeout.md`。
+- **当前切片**：切片 26 AI 透明度（提示词查看 + 用量展示）已立项（卡 `tasks/slice-26.md`，AGENTS v0.28 §7.38 随切片 26 阶段 1 提交，分支 `task/slice-26` 基点 main @ `91ed33d`）。切片 25 收尾索引见 `tasks/slice-25-closeout.md`。下一片按 backlog 候选排序执行（27 系统日历 live 直读为建议值，前置 4 问待用户决策，立项时逐切片确认）。未完成项以 `tasks/backlog.md` 为准。
+- **未完成项以 `tasks/backlog.md` 为准**（2026-11-16 起的惯例）：候选排序（~~切片 25 认真模式~~已完成 → ~~26 AI 透明度~~已立项随切片 26 开工 → 27 系统日历 live 直读【先回答调研报告的 4 个开放问题】→ 28 备份/同步 WebDAV【设计讨论先行】+ 插队候选「变更 B 网络渠道后台送达」+ 切片 25 收尾新增 4 条待定候选）、遗留 L1–L13、手验项 U1–U3、契约化已知限制均记录在 backlog，本节不再罗列候选清单。每切片 closeout 同步更新 backlog.md（划掉完成项并注明关闭切片号）并保持本节精简。

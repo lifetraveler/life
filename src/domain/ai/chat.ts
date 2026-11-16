@@ -23,6 +23,7 @@ import { LocalFallbackProvider } from './localFallback';
 import { mergeDraftCorrection } from './merge';
 import { OpenAICompatibleProvider } from './openAiCompatible';
 import type { AiConfig } from './configStore';
+import type { AiUsageSnapshot } from './usage';
 import type { AiParseContext, ChatMessage, ParsedItemDraft } from './types';
 
 export interface FlashTurnDeps {
@@ -45,6 +46,12 @@ export interface FlashTurnResult {
   degraded: boolean;
   /** 追加到会话 history 的一对消息（user 原文 + assistant 草稿 JSON）。 */
   historyAppend: [ChatMessage, ChatMessage];
+  /**
+   * 本轮用量快照（切片 26 / §7.38）：远端轮取自 provider.lastUsage 副通道，
+   * 降级轮 / 无 Key 轮恒 null（本地解析无 usage）。域内字段——不进入
+   * ParsedItemDraft、不进入 history JSON（ai.md v0.20 传输边界，冻结）。
+   */
+  usage: AiUsageSnapshot | null;
 }
 
 const KIND_LABELS: Record<AiParseError['kind'], string> = {
@@ -122,6 +129,8 @@ function fallbackTurn(
     draft,
     assistantNote: note,
     degraded: true,
+    // 切片 26（§7.38）：本地降级轮无 usage，恒 null。
+    usage: null,
     historyAppend: [
       { role: 'user', text: trimmed },
       { role: 'assistant', text: JSON.stringify(draft) },
@@ -151,6 +160,9 @@ export async function runFlashTurn(
         draft,
         assistantNote: deps.previousDraft === null ? '已解析，请核对卡片' : '已更新卡片',
         degraded: false,
+        // 切片 26（§7.38）：远端轮携带 provider.lastUsage 副通道快照
+        //（抛错降级路径不会到达这里，无残留上一轮的风险）。
+        usage: provider.lastUsage,
         historyAppend: [
           { role: 'user', text: trimmed },
           { role: 'assistant', text: JSON.stringify(draft) },

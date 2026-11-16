@@ -32,6 +32,36 @@ describe('isAiProviderConfig', () => {
     expect(isAiProviderConfig({ ...validConfig, timeoutMs: 0 })).toBeNull();
     expect(isAiProviderConfig({ ...validConfig, timeoutMs: 1.5 })).toBeNull();
   });
+
+  it('单价（切片 26 / §7.38）：正数透传，非正数/非数值丢弃为 undefined，不整包拒绝', () => {
+    expect(
+      isAiProviderConfig({
+        ...validConfig,
+        priceInputPerMillion: 2,
+        priceOutputPerMillion: 8,
+      }),
+    ).toEqual({
+      ...validConfig,
+      priceInputPerMillion: 2,
+      priceOutputPerMillion: 8,
+    });
+    for (const badPrice of [0, -1, '2', Number.NaN, Number.POSITIVE_INFINITY, null, {}]) {
+      const guarded = isAiProviderConfig({
+        ...validConfig,
+        priceInputPerMillion: badPrice,
+        priceOutputPerMillion: badPrice,
+      });
+      expect(guarded).not.toBeNull();
+      expect(guarded?.priceInputPerMillion).toBeUndefined();
+      expect(guarded?.priceOutputPerMillion).toBeUndefined();
+    }
+  });
+
+  it('旧版本 JSON 无单价键：守卫通过，单价为 undefined（向后兼容）', () => {
+    expect(isAiProviderConfig(validConfig)).toEqual(validConfig);
+    expect(isAiProviderConfig(validConfig)?.priceInputPerMillion).toBeUndefined();
+    expect(isAiProviderConfig(validConfig)?.priceOutputPerMillion).toBeUndefined();
+  });
 });
 
 describe('isAiConfig', () => {

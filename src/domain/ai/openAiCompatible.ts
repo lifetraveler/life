@@ -26,6 +26,8 @@ import { AiParseError } from './errors';
 import { isRecurrenceRule, isReminderChannelArray } from './guard';
 import { nextOccurrenceInstant } from './localFallback';
 import { AI_SYSTEM_PROMPT, buildHistoryBriefing, buildNowFacts } from './prompt';
+import { positivePriceOrNull, readAiUsageSnapshot } from './usage';
+import type { AiUsageSnapshot } from './usage';
 import { daysInMonth, getZonedParts, resolveCivilTimeToInstant } from '../recurrence/civilTime';
 import type { RecurrenceRule } from '../recurrence/types';
 import type { ReminderChannel } from '../reminder';
@@ -38,6 +40,12 @@ export interface OpenAiCompatibleConfig {
   model: string;
   /** 请求超时毫秒数；缺省 20000 */
   timeoutMs?: number;
+  /**
+   * 每百万 tokens 输入/输出单价（切片 26 / §7.38，可选；正数才有效）。
+   * 两价齐备时按全价上界估算费用（不区分缓存折扣）；留空/非正数只出 token 段。
+   */
+  priceInputPerMillion?: number;
+  priceOutputPerMillion?: number;
 }
 
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -307,6 +315,11 @@ export function wireToParsedItemDraft(
 export class OpenAICompatibleProvider implements AiParser {
   private readonly config: OpenAiCompatibleConfig;
   private readonly fetchImpl: FetchLike;
+  /**
+   * 切片 26（§7.38 D1）：usage 副通道存值——初始 null；parse() 进入即清空，
+   * 成功路径返回前才赋值，任何抛错点保持 null（不残留上一轮数值）。
+   */
+  private lastUsageSnapshot: AiUsageSnapshot | null = null;
 
   constructor(config: OpenAiCompatibleConfig, fetchImpl: FetchLike = fetch) {
     if (
@@ -318,6 +331,11 @@ export class OpenAICompatibleProvider implements AiParser {
     }
     this.config = config;
     this.fetchImpl = fetchImpl;
+  }
+
+  /** 切片 26（§7.38）：usage 副通道只读暴露；chat.ts 经 FlashTurnResult 携带到 hook。 */
+  get lastUsage(): AiUsageSnapshot | null {
+    return this.lastUsageSnapshot;
   }
 
   /**
@@ -370,6 +388,9 @@ export class OpenAICompatibleProvider implements AiParser {
   }
 
   async parse(input: string, context: AiParseContext): Promise<ParsedItemDraft> {
+    // 切片 26（§7.38）：进入即清空上轮用量；本轮成功路径返回前才赋值，
+    // 任何抛错点（AiParseError 等）lastUsage 保持 null。
+    this.lastUsageSnapshot = null;
     if (input.trim().length === 0) {
       throw new AiParseError('empty-input', 'AI 解析输入为空');
     }
@@ -431,6 +452,14 @@ export class OpenAICompatibleProvider implements AiParser {
         throw new AiParseError('invalid-json', 'AI 响应体不是合法 JSON（已拦截，不做补救）');
       }
 
+      // 切片 26（§7.38）：usage 副通道提取——defensive 读取，形状偏差一律
+      // null（不炸解析主链）；单价取 config 两字段均为正数才参与估算
+      //（全价上界，不区分缓存折扣，ai.md v0.20）。
+      const usageSnapshot = readAiUsageSnapshot(envelope, {
+        input: positivePriceOrNull(this.config.priceInputPerMillion),
+        output: positivePriceOrNull(this.config.priceOutputPerMillion),
+      });
+
       const content = extractContent(envelope);
       const candidateText = stripCodeFence(content);
       let candidate: unknown;
@@ -445,6 +474,9 @@ export class OpenAICompatibleProvider implements AiParser {
         throw new AiParseError('schema-mismatch', 'AI 返回 JSON 未通过 isRemoteDraftWire 校验（已拦截）');
       }
       const draft = wireToParsedItemDraft(wire, context);
+      // 切片 26（§7.38）：成功路径返回前赋值（两个 return 点都在其后——
+      // recurrence 分支与普通分支观察等价）。
+      this.lastUsageSnapshot = usageSnapshot;
       // 重复项的下一次发生完全由 (rule, now, tzid) 决定，模型给的时刻不携带
       // 额外信息——一律本地确定性重算，与 LocalFallbackProvider 语义对齐。
       if (draft.recurrence !== null) {

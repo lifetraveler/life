@@ -6,6 +6,8 @@
  * SecureStore 实现在 src/data/SecureAiConfigStore.ts（阶段 3 编排层注入）。
  */
 
+import { positivePriceOrNull } from './usage';
+
 /** 当前仅支持 OpenAI 兼容端点；为未来官方代理预留 provider 字段扩展。 */
 export interface AiProviderConfig {
   provider: 'openai-compatible';
@@ -14,6 +16,13 @@ export interface AiProviderConfig {
   model: string;
   /** 请求超时毫秒；缺省由 Provider 决定（20000） */
   timeoutMs?: number;
+  /**
+   * 每百万 tokens 输入/输出单价（切片 26 / §7.38，可选；正数才有效）。
+   * 旧 JSON 缺键容忍；非正数/非数值在守卫里丢弃为 undefined，不整包拒绝。
+   * 两价齐备且为正数时按全价上界估算费用（不区分缓存折扣）。
+   */
+  priceInputPerMillion?: number;
+  priceOutputPerMillion?: number;
 }
 
 /** SecureStore 单键存储的顶层形状（键名见 AI_CONFIG_STORE_KEY）。 */
@@ -50,6 +59,10 @@ export function isAiProviderConfig(value: unknown): AiProviderConfig | null {
     apiKey: value.apiKey,
     model: value.model,
     timeoutMs: value.timeoutMs,
+    // 切片 26（§7.38）：单价透传——非正数/非数值丢弃为 undefined，不整包拒绝
+    //（若作必填强校验，旧版本写入的配置会让整条 AI 配置失效）。
+    priceInputPerMillion: positivePriceOrNull(value.priceInputPerMillion) ?? undefined,
+    priceOutputPerMillion: positivePriceOrNull(value.priceOutputPerMillion) ?? undefined,
   };
 }
 

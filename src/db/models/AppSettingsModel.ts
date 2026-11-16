@@ -37,4 +37,7 @@ export default class AppSettingsModel extends Model {
   @text('default_channels_json') defaultChannelsJson!: string | null;
   // v12（切片 25，AGENTS.md §7.37）：闪电录入认真模式；非可选 boolean 同 widget* 先例。
   @field('careful_mode') carefulMode!: boolean;
+  // v13（切片 26，AGENTS.md §7.38）：AI 用量展示开关（默认 false = 不显示）；
+  // 非可选 boolean 同 careful_mode 先例。
+  @field('show_ai_usage') showAiUsage!: boolean;
 }
