@@ -1,6 +1,9 @@
+import { useMemo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { contrastTextColor } from './color';
+import { useTheme } from './theme';
+import type { ThemeColors } from './theme';
 
 interface AgendaItemCardProps {
   title: string;
@@ -17,16 +20,12 @@ interface AgendaItemCardProps {
   onPress?: () => void;
 }
 
-/** 分类颜色缺失/非法时的颜色条回退（repository.md v0.14 数据异常回退约定） */
-const FALLBACK_BAR_COLOR = '#9E9E9E';
-/** 时间行在无有效分类色时的兜底文字色 */
-const FALLBACK_TIME_COLOR = '#666666';
-
 /**
  * Agenda 条目卡片容器骨架（tasks/slice-14.md 阶段 2，静态 UI）：
  * 极简风格，无边框，微小圆角（8），左侧 4px 颜色条，
  * 内部左侧 Emoji、右侧标题 + 时间段（对齐 Toki 图3）。
  * 纯展示组件：文案与颜色均由调用方传入（Phase 4 接线 ItemWithRelations）。
+ * 切片 24 阶段 2：回退色 Token 化（colorHex 数据驱动路径不动）。
  */
 export default function AgendaItemCard({
   title,
@@ -35,9 +34,13 @@ export default function AgendaItemCard({
   timeLabel,
   onPress,
 }: AgendaItemCardProps) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const onColor = colorHex ? contrastTextColor(colorHex) : null;
-  const barColor = onColor !== null && colorHex ? colorHex : FALLBACK_BAR_COLOR;
-  const timeColor = onColor !== null && colorHex ? colorHex : FALLBACK_TIME_COLOR;
+  // 分类颜色缺失/非法时的颜色条回退（repository.md v0.14 数据异常回退约定）→ c.textMuted
+  const barColor = onColor !== null && colorHex ? colorHex : colors.textMuted;
+  // 时间行在无有效分类色时的兜底文字色 → c.textMuted
+  const timeColor = onColor !== null && colorHex ? colorHex : colors.textMuted;
 
   const body = (
     <View style={styles.card}>
@@ -66,40 +69,42 @@ export default function AgendaItemCard({
   return body;
 }
 
-const styles = StyleSheet.create({
-  card: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    overflow: 'hidden',
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  bar: {
-    width: 4,
-    alignSelf: 'stretch',
-  },
-  content: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    paddingLeft: 12,
-    paddingRight: 12,
-  },
-  emoji: {
-    fontSize: 18,
-    marginRight: 10,
-  },
-  textColumn: {
-    flex: 1,
-    gap: 2,
-  },
-  title: {
-    fontSize: 15,
-    fontWeight: '500',
-    color: '#1F1F1F',
-  },
-  time: {
-    fontSize: 12,
-  },
-});
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    card: {
+      backgroundColor: c.card,
+      borderRadius: 8,
+      overflow: 'hidden',
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    bar: {
+      width: 4,
+      alignSelf: 'stretch',
+    },
+    content: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 10,
+      paddingLeft: 12,
+      paddingRight: 12,
+    },
+    emoji: {
+      fontSize: 18,
+      marginRight: 10,
+    },
+    textColumn: {
+      flex: 1,
+      gap: 2,
+    },
+    title: {
+      fontSize: 15,
+      fontWeight: '500',
+      color: c.text,
+    },
+    time: {
+      fontSize: 12,
+    },
+  });
+}

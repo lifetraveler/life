@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import DateTimePicker, {
   type DateTimePickerEvent,
 } from '@react-native-community/datetimepicker';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { useTheme } from './theme';
+import type { ThemeColors } from './theme';
 import { formatItemDate, formatItemTime, getDeviceTzid } from './timeFormat';
 
 /**
@@ -32,6 +34,8 @@ export default function DateTimeField({
   mode = 'datetime',
   fallback = Date.now(),
 }: DateTimeFieldProps) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [step, setStep] = useState<PickerStep>('idle');
   const [pickedDate, setPickedDate] = useState<Date | null>(null);
   const deviceTzid = getDeviceTzid();
@@ -114,39 +118,41 @@ export default function DateTimeField({
   );
 }
 
-const styles = StyleSheet.create({
-  field: {
-    marginBottom: 10,
-  },
-  label: {
-    fontSize: 13,
-    color: '#666',
-    marginBottom: 4,
-  },
-  valueRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  valueButton: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: '#d0d0d0',
-    borderRadius: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    backgroundColor: '#fff',
-  },
-  valueText: {
-    fontSize: 15,
-    color: '#111',
-  },
-  valuePlaceholder: {
-    fontSize: 15,
-    color: '#999',
-  },
-  clearText: {
-    fontSize: 13,
-    color: '#c62828',
-  },
-});
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    field: {
+      marginBottom: 10,
+    },
+    label: {
+      fontSize: 13,
+      color: c.textMuted,
+      marginBottom: 4,
+    },
+    valueRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+    },
+    valueButton: {
+      flex: 1,
+      borderWidth: 1,
+      borderColor: c.border,
+      borderRadius: 6,
+      paddingVertical: 8,
+      paddingHorizontal: 10,
+      backgroundColor: c.card,
+    },
+    valueText: {
+      fontSize: 15,
+      color: c.text,
+    },
+    valuePlaceholder: {
+      fontSize: 15,
+      color: c.textMuted,
+    },
+    clearText: {
+      fontSize: 13,
+      color: c.danger,
+    },
+  });
+}

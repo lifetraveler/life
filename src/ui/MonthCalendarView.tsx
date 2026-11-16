@@ -22,6 +22,8 @@ import type { DayProps } from 'react-native-calendars/src/calendar/day';
 import type { CivilMonth } from '../domain/views/ranges';
 import type { ItemWithRelations } from '../domain/relations/itemWithRelations';
 import { stripeColorOf } from './stripeColor';
+import { useTheme } from './theme';
+import type { ThemeColors } from './theme';
 
 /** 每格最多展示的事件 chip 数（超出显示「+N」，用户拍板 ≤3） */
 const MAX_CHIPS_PER_DAY = 3;
@@ -83,6 +85,8 @@ export function MonthCalendarView({
   jumpToMonth = null,
   jumpKey = 0,
 }: MonthCalendarViewProps) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const listRef = useRef<FlatList<CivilMonth> | null>(null);
   // onVisibleMonthChange 用 ref 中转：回调每次渲染都是新函数时 FlatList prop 不抖动
   const visibleChangeRef = useRef(onVisibleMonthChange);
@@ -157,7 +161,8 @@ export function MonthCalendarView({
         </Pressable>
       );
     },
-    [dayItems, onSelectDay, todayKey],
+    // 切片 24：styles 随 colors 重建，须入依赖否则深浅切换瞬间格沿用旧色
+    [dayItems, onSelectDay, todayKey, styles],
   );
 
   const renderMonth = useCallback(
@@ -183,7 +188,7 @@ export function MonthCalendarView({
         />
       </View>
     ),
-    [renderCell],
+    [renderCell, styles],
   );
 
   const pageKeyExtractor = useCallback((month: CivilMonth): string => monthKeyOf(month), []);
@@ -222,94 +227,96 @@ export function MonthCalendarView({
   );
 }
 
-const styles = StyleSheet.create({
-  list: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-  },
-  monthPage: {
-    paddingHorizontal: 12,
-    paddingBottom: 8,
-  },
-  monthTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#111111',
-    paddingTop: 6,
-    paddingBottom: 4,
-  },
-  weekHeader: {
-    flexDirection: 'row',
-    paddingBottom: 4,
-  },
-  weekHeaderText: {
-    flex: 1,
-    textAlign: 'center',
-    fontSize: 11,
-    color: '#999999',
-  },
-  calendar: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#ECECEC',
-    borderRadius: 12,
-    backgroundColor: '#FFFFFF',
-  },
-  cellEmpty: {
-    flex: 1,
-    minHeight: 72,
-  },
-  // 阶段 5d：空格子保持空白不画框——去掉格子边框/圆角/底色，
-  // 有项目的日子由 chip 自身的 #F5F5F5 背景承载视觉
-  cell: {
-    flex: 1,
-    minHeight: 72,
-    paddingVertical: 3,
-    paddingHorizontal: 3,
-    marginHorizontal: 1,
-    overflow: 'hidden',
-  },
-  cellDayTodayWrap: {
-    alignSelf: 'center',
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: '#111111',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cellDay: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#333333',
-    textAlign: 'center',
-  },
-  cellDayToday: {
-    color: '#FFFFFF',
-    fontSize: 12,
-  },
-  chip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: 4,
-    backgroundColor: '#F5F5F5',
-    paddingHorizontal: 3,
-    paddingVertical: 1,
-    marginTop: 2,
-    gap: 3,
-  },
-  chipStripe: {
-    width: 3,
-    height: 10,
-    borderRadius: 1.5,
-  },
-  chipText: {
-    flexShrink: 1,
-    fontSize: 10,
-    color: '#333333',
-  },
-  chipOverflow: {
-    fontSize: 10,
-    color: '#888888',
-    marginTop: 2,
-  },
-});
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    list: {
+      flex: 1,
+      backgroundColor: c.background,
+    },
+    monthPage: {
+      paddingHorizontal: 12,
+      paddingBottom: 8,
+    },
+    monthTitle: {
+      fontSize: 15,
+      fontWeight: '700',
+      color: c.text,
+      paddingTop: 6,
+      paddingBottom: 4,
+    },
+    weekHeader: {
+      flexDirection: 'row',
+      paddingBottom: 4,
+    },
+    weekHeaderText: {
+      flex: 1,
+      textAlign: 'center',
+      fontSize: 11,
+      color: c.textMuted,
+    },
+    calendar: {
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.border,
+      borderRadius: 12,
+      backgroundColor: c.card,
+    },
+    cellEmpty: {
+      flex: 1,
+      minHeight: 72,
+    },
+    // 阶段 5d：空格子保持空白不画框——去掉格子边框/圆角/底色，
+    // 有项目的日子由 chip 自身的 colors.background 背景承载视觉
+    cell: {
+      flex: 1,
+      minHeight: 72,
+      paddingVertical: 3,
+      paddingHorizontal: 3,
+      marginHorizontal: 1,
+      overflow: 'hidden',
+    },
+    cellDayTodayWrap: {
+      alignSelf: 'center',
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      backgroundColor: c.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    cellDay: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: c.text,
+      textAlign: 'center',
+    },
+    cellDayToday: {
+      color: c.textOnPrimary,
+      fontSize: 12,
+    },
+    chip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      borderRadius: 4,
+      backgroundColor: c.background,
+      paddingHorizontal: 3,
+      paddingVertical: 1,
+      marginTop: 2,
+      gap: 3,
+    },
+    chipStripe: {
+      width: 3,
+      height: 10,
+      borderRadius: 1.5,
+    },
+    chipText: {
+      flexShrink: 1,
+      fontSize: 10,
+      color: c.text,
+    },
+    chipOverflow: {
+      fontSize: 10,
+      color: c.textMuted,
+      marginTop: 2,
+    },
+  });
+}

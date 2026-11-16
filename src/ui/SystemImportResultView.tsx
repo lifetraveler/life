@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { SystemImportResult } from '../data/ItemRepository';
+import { useTheme } from './theme';
+import type { ThemeColors } from './theme';
 
 /**
  * 切片 9：系统日历导入结果展示组件（tasks/slice-09.md 实现要求 4）。
@@ -12,6 +14,8 @@ import type { SystemImportResult } from '../data/ItemRepository';
  */
 
 export default function SystemImportResultView({ result }: { result: SystemImportResult }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [showFailures, setShowFailures] = useState(false);
   const contentHashBased = result.sourceUidStrategies['content-hash'] > 0;
 
@@ -67,50 +71,53 @@ export default function SystemImportResultView({ result }: { result: SystemImpor
   );
 }
 
-const styles = StyleSheet.create({
-  box: {
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    padding: 14,
-    gap: 6,
-  },
-  title: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#111',
-  },
-  numberRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 14,
-  },
-  numberItem: {
-    fontSize: 14,
-    color: '#333',
-  },
-  strategy: {
-    fontSize: 12,
-    color: '#888',
-    marginTop: 4,
-  },
-  warn: {
-    fontSize: 12,
-    color: '#b26a00',
-  },
-  failuresBox: {
-    marginTop: 6,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#eee',
-    paddingTop: 6,
-  },
-  failuresToggle: {
-    fontSize: 13,
-    color: '#c62828',
-  },
-  failureLine: {
-    fontSize: 12,
-    color: '#666',
-    marginTop: 4,
-    lineHeight: 18,
-  },
-});
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    box: {
+      backgroundColor: c.card,
+      borderRadius: 8,
+      padding: 14,
+      gap: 6,
+    },
+    title: {
+      fontSize: 16,
+      fontWeight: '600',
+      color: c.text,
+    },
+    numberRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 14,
+    },
+    numberItem: {
+      fontSize: 14,
+      color: c.text,
+    },
+    strategy: {
+      fontSize: 12,
+      color: c.textMuted,
+      marginTop: 4,
+    },
+    warn: {
+      fontSize: 12,
+      // 警示语义归 danger（Token 注释含「过期警示」族；切片 24 禁硬编码 hex）
+      color: c.danger,
+    },
+    failuresBox: {
+      marginTop: 6,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: c.border,
+      paddingTop: 6,
+    },
+    failuresToggle: {
+      fontSize: 13,
+      color: c.danger,
+    },
+    failureLine: {
+      fontSize: 12,
+      color: c.textMuted,
+      marginTop: 4,
+      lineHeight: 18,
+    },
+  });
+}

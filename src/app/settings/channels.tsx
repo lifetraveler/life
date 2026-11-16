@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 
@@ -7,6 +7,8 @@ import type { ChannelPreset, ChannelPresetType } from '../../domain/channelPrese
 import ChannelPresetEditor from '../../ui/ChannelPresetEditor';
 import type { ChannelPresetDraft } from '../../ui/ChannelPresetEditor';
 import { channelPresetSummary } from '../../ui/reminderForm';
+import { useTheme } from '../../ui/theme';
+import type { ThemeColors } from '../../ui/theme';
 
 /**
  * 提醒渠道预设管理页（切片 17 阶段 2，AGENTS.md §7.27 / §7.28）：
@@ -22,6 +24,8 @@ const TYPE_LABELS: Record<ChannelPresetType, string> = {
 };
 
 export default function ChannelPresetSettingsPage() {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [presets, setPresets] = useState<ChannelPreset[] | null>(null);
   const [creating, setCreating] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -242,10 +246,11 @@ export default function ChannelPresetSettingsPage() {
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
   scroll: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: c.background,
   },
   container: {
     padding: 16,
@@ -253,12 +258,12 @@ const styles = StyleSheet.create({
   },
   hint: {
     fontSize: 12,
-    color: '#888',
+    color: c.textMuted,
     lineHeight: 18,
     marginBottom: 10,
   },
   primaryButton: {
-    backgroundColor: '#1e6f5c',
+    backgroundColor: c.primary,
     borderRadius: 8,
     paddingVertical: 12,
     alignItems: 'center',
@@ -266,11 +271,11 @@ const styles = StyleSheet.create({
   },
   primaryText: {
     fontSize: 14,
-    color: '#fff',
+    color: c.textOnPrimary,
     fontWeight: '600',
   },
   card: {
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
     borderRadius: 8,
     padding: 12,
     marginBottom: 10,
@@ -278,7 +283,7 @@ const styles = StyleSheet.create({
   cardTitle: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#111',
+    color: c.text,
     marginBottom: 4,
   },
   row: {
@@ -293,15 +298,15 @@ const styles = StyleSheet.create({
   },
   presetName: {
     fontSize: 15,
-    color: '#111',
+    color: c.text,
   },
   presetMeta: {
     fontSize: 12,
-    color: '#888',
+    color: c.textMuted,
   },
   rowAction: {
     fontSize: 13,
-    color: '#1e6f5c',
+    color: c.primary,
   },
   defaultButton: {
     marginTop: 6,
@@ -309,34 +314,35 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     alignSelf: 'flex-start',
     borderWidth: 1,
-    borderColor: '#1e6f5c',
+    borderColor: c.primary,
     borderRadius: 6,
   },
   defaultText: {
     fontSize: 13,
-    color: '#1e6f5c',
+    color: c.primary,
   },
   deleteButton: {
     marginTop: 8,
     paddingVertical: 8,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#c62828',
+    borderColor: c.danger,
     borderRadius: 6,
   },
   deleteText: {
     fontSize: 13,
-    color: '#c62828',
+    color: c.danger,
   },
   emptyText: {
     fontSize: 13,
-    color: '#9e9e9e',
+    color: c.textMuted,
     textAlign: 'center',
     marginTop: 16,
   },
   errorText: {
     fontSize: 12,
-    color: '#c62828',
+    color: c.danger,
     marginTop: 8,
   },
-});
+  });
+}

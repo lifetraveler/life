@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -20,6 +20,8 @@ import { buildIcs } from '../../domain/ics/buildIcs';
 import type { AppSettings, TagDisplayMode } from '../../domain/settings';
 import TagChip from '../../ui/TagChip';
 import { getDeviceTzid } from '../../ui/timeFormat';
+import { useTheme } from '../../ui/theme';
+import type { ThemeColors } from '../../ui/theme';
 import { refreshWidgetDataNow } from '../../widget';
 import {
   setLastExportResult,
@@ -100,6 +102,9 @@ const WIDGET_TOGGLE_OPTIONS: ReadonlyArray<{
 ];
 
 export default function SettingsPage() {
+  // 切片 24（§7.36）：颜色走全局 Token（夜间模式），深浅色跟随系统。
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const router = useRouter();
   const [busy, setBusy] = useState<'import' | 'export' | null>(null);
   // 切片 12：JSON 导出的页内结果提示（成功/失败都不用 Alert，任务卡实现要求 3）。
@@ -449,7 +454,7 @@ export default function SettingsPage() {
           disabled={busy !== null}
         >
           {busy === 'import' ? (
-            <ActivityIndicator color="#fff" />
+            <ActivityIndicator color={colors.textOnPrimary} />
           ) : (
             <Text style={styles.primaryText}>导入 ICS</Text>
           )}
@@ -479,7 +484,7 @@ export default function SettingsPage() {
           disabled={busy !== null}
         >
           {busy === 'export' ? (
-            <ActivityIndicator color="#fff" />
+            <ActivityIndicator color={colors.textOnPrimary} />
           ) : (
             <Text style={styles.primaryText}>导出 ICS</Text>
           )}
@@ -499,7 +504,7 @@ export default function SettingsPage() {
           disabled={busy !== null}
         >
           {busy === 'export' ? (
-            <ActivityIndicator color="#fff" />
+            <ActivityIndicator color={colors.textOnPrimary} />
           ) : (
             <Text style={styles.primaryText}>导出 JSON</Text>
           )}
@@ -515,127 +520,129 @@ export default function SettingsPage() {
   );
 }
 
-const styles = StyleSheet.create({
-  page: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-    paddingTop: 48,
-  },
-  pageTitle: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#111111',
-    paddingHorizontal: 16,
-    marginBottom: 12,
-  },
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  content: {
-    padding: 16,
-    gap: 20,
-  },
-  section: {
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    padding: 14,
-    gap: 8,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#111',
-  },
-  hint: {
-    fontSize: 12,
-    color: '#888',
-    lineHeight: 18,
-  },
-  errorHint: {
-    fontSize: 12,
-    color: '#b00020',
-    lineHeight: 18,
-  },
-  primaryButton: {
-    backgroundColor: '#1e6f5c',
-    borderRadius: 6,
-    paddingVertical: 10,
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    paddingHorizontal: 22,
-  },
-  primaryText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  disabled: {
-    opacity: 0.5,
-  },
-  // —— 切片 14 阶段 3：分类/标签导航行与标签展示样式单选 ——
-  navRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 10,
-    paddingHorizontal: 4,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#f0f0f0',
-  },
-  navLabel: {
-    fontSize: 14,
-    color: '#333',
-  },
-  navChevron: {
-    fontSize: 16,
-    color: '#bbb',
-  },
-  radioRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 4,
-  },
-  radioOuter: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    borderWidth: 2,
-    borderColor: '#bbb',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  radioOuterActive: {
-    borderColor: '#1e6f5c',
-  },
-  radioInner: {
-    width: 9,
-    height: 9,
-    borderRadius: 4.5,
-    backgroundColor: '#1e6f5c',
-  },
-  radioLabel: {
-    fontSize: 14,
-    color: '#333',
-    flex: 1,
-  },
-  // —— 切片 14 阶段 7a：小组件显示开关行 ——
-  widgetToggleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 8,
-    paddingHorizontal: 4,
-  },
-  widgetToggleText: {
-    flex: 1,
-    paddingRight: 12,
-  },
-  widgetToggleHint: {
-    fontSize: 12,
-    color: '#999',
-    marginTop: 2,
-  },
-});
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    page: {
+      flex: 1,
+      backgroundColor: c.background,
+      paddingTop: 48,
+    },
+    pageTitle: {
+      fontSize: 24,
+      fontWeight: '700',
+      color: c.text,
+      paddingHorizontal: 16,
+      marginBottom: 12,
+    },
+    container: {
+      flex: 1,
+      backgroundColor: c.background,
+    },
+    content: {
+      padding: 16,
+      gap: 20,
+    },
+    section: {
+      backgroundColor: c.card,
+      borderRadius: 8,
+      padding: 14,
+      gap: 8,
+    },
+    sectionTitle: {
+      fontSize: 16,
+      fontWeight: '600',
+      color: c.text,
+    },
+    hint: {
+      fontSize: 12,
+      color: c.textMuted,
+      lineHeight: 18,
+    },
+    errorHint: {
+      fontSize: 12,
+      color: c.danger,
+      lineHeight: 18,
+    },
+    primaryButton: {
+      backgroundColor: c.primary,
+      borderRadius: 6,
+      paddingVertical: 10,
+      alignItems: 'center',
+      alignSelf: 'flex-start',
+      paddingHorizontal: 22,
+    },
+    primaryText: {
+      color: c.textOnPrimary,
+      fontSize: 14,
+      fontWeight: '600',
+    },
+    disabled: {
+      opacity: 0.5,
+    },
+    // —— 切片 14 阶段 3：分类/标签导航行与标签展示样式单选 ——
+    navRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 10,
+      paddingHorizontal: 4,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: c.border,
+    },
+    navLabel: {
+      fontSize: 14,
+      color: c.text,
+    },
+    navChevron: {
+      fontSize: 16,
+      color: c.textMuted,
+    },
+    radioRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      paddingVertical: 8,
+      paddingHorizontal: 4,
+    },
+    radioOuter: {
+      width: 18,
+      height: 18,
+      borderRadius: 9,
+      borderWidth: 2,
+      borderColor: c.border,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    radioOuterActive: {
+      borderColor: c.primary,
+    },
+    radioInner: {
+      width: 9,
+      height: 9,
+      borderRadius: 4.5,
+      backgroundColor: c.primary,
+    },
+    radioLabel: {
+      fontSize: 14,
+      color: c.text,
+      flex: 1,
+    },
+    // —— 切片 14 阶段 7a：小组件显示开关行 ——
+    widgetToggleRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 8,
+      paddingHorizontal: 4,
+    },
+    widgetToggleText: {
+      flex: 1,
+      paddingRight: 12,
+    },
+    widgetToggleHint: {
+      fontSize: 12,
+      color: c.textMuted,
+      marginTop: 2,
+    },
+  });
+}

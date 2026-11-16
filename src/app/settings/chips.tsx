@@ -1,10 +1,12 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 
 import { itemRepository } from '../../data';
 import { validateChipsIncrements } from '../../domain/settings';
 import { formatChipIncrementLabel } from '../../ui/OnceAtField';
+import { useTheme } from '../../ui/theme';
+import type { ThemeColors } from '../../ui/theme';
 
 /**
  * 快捷 Chips 增量设置页（切片 18 阶段 3，AGENTS.md §7.29 / 提案 §7）：
@@ -13,6 +15,8 @@ import { formatChipIncrementLabel } from '../../ui/OnceAtField';
  * 失败展示具体文案，不落库。动态行数：默认两行（对应默认 [10, 60]）。
  */
 export default function ChipsSettingsPage() {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<string[]>(['10', '60']);
   const [saving, setSaving] = useState(false);
@@ -153,10 +157,11 @@ export default function ChipsSettingsPage() {
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
   scroll: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: c.background,
   },
   container: {
     padding: 16,
@@ -169,7 +174,7 @@ const styles = StyleSheet.create({
   },
   hint: {
     fontSize: 12,
-    color: '#888',
+    color: c.textMuted,
     lineHeight: 18,
     marginBottom: 12,
   },
@@ -181,18 +186,18 @@ const styles = StyleSheet.create({
   },
   input: {
     borderWidth: 1,
-    borderColor: '#d0d0d0',
+    borderColor: c.border,
     borderRadius: 6,
     paddingHorizontal: 10,
     paddingVertical: 8,
     width: 120,
     fontSize: 15,
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
   },
   preview: {
     flex: 1,
     fontSize: 12,
-    color: '#888',
+    color: c.textMuted,
   },
   rowButton: {
     width: 32,
@@ -200,7 +205,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: '#c62828',
+    borderColor: c.danger,
     borderRadius: 6,
   },
   rowButtonDisabled: {
@@ -208,40 +213,41 @@ const styles = StyleSheet.create({
   },
   rowButtonText: {
     fontSize: 16,
-    color: '#c62828',
+    color: c.danger,
   },
   addRow: {
     alignSelf: 'flex-start',
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderWidth: 1,
-    borderColor: '#1e6f5c',
+    borderColor: c.primary,
     borderRadius: 6,
     marginBottom: 12,
   },
   addRowText: {
     fontSize: 13,
-    color: '#1e6f5c',
+    color: c.primary,
   },
   saveButton: {
-    backgroundColor: '#1e6f5c',
+    backgroundColor: c.primary,
     borderRadius: 8,
     paddingVertical: 12,
     alignItems: 'center',
   },
   saveText: {
     fontSize: 14,
-    color: '#fff',
+    color: c.textOnPrimary,
     fontWeight: '600',
   },
   savedText: {
     fontSize: 12,
-    color: '#1e6f5c',
+    color: c.primary,
     marginTop: 8,
   },
   errorText: {
     fontSize: 12,
-    color: '#c62828',
+    color: c.danger,
     marginTop: 8,
   },
-});
+  });
+}

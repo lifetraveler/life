@@ -94,12 +94,11 @@ import { MonthCalendarView } from '../../ui/MonthCalendarView';
 import { MonthPickerPopover } from '../../ui/MonthPickerPopover';
 import { DayTimelineView } from '../../ui/DayTimelineView';
 import { formatAgendaTimeRange, getDeviceTzid, WEEKDAY_LABELS } from '../../ui/timeFormat';
+import { useTheme } from '../../ui/theme';
+import type { ThemeColors } from '../../ui/theme';
 
 /** 合法分类色（数据异常回退约定 repository.md v0.14） */
 const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
-
-/** 分类色缺失/非法时卡片色条回退灰 */
-const CARD_STRIPE_FALLBACK = '#DDDDDD';
 
 /**
  * 区块间距标准值（阶段 5d 定档）：顶栏/周条/内容区之间的纵向间距统一 16，
@@ -158,11 +157,14 @@ function AgendaItemCard({
   tzid: string;
   onPress: (itemId: string) => void;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const timeLabel = formatAgendaTimeRange(item, tzid);
+  // 分类色缺失/非法时卡片色条回退 colors.border（切片 24：回退色随主题切换）
   const stripeColor =
     item.category?.color && HEX_COLOR_PATTERN.test(item.category.color)
       ? item.category.color
-      : CARD_STRIPE_FALLBACK;
+      : colors.border;
   const emoji = item.category?.emoji ?? null;
   return (
     <Pressable style={styles.card} onPress={() => onPress(item.id)}>
@@ -181,6 +183,8 @@ function AgendaItemCard({
  * v0.21 注记（用户 2026-11-15 拍板）：快速安排按钮移除——右下角 FAB 已是常驻新建入口
  * （短按 → /item/new、长按 → 闪电录入 tab），卡片仅保留文案提示。 */
 function AgendaEmptyTodayCard() {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   return (
     <View style={styles.emptyTodayCard}>
       <Text style={styles.emptyTodayText}>今日没有安排</Text>
@@ -190,6 +194,8 @@ function AgendaEmptyTodayCard() {
 
 export default function PlanScreen() {
   const router = useRouter();
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const { height: windowHeight } = useWindowDimensions();
   const [items, setItems] = useState<ItemWithRelations[]>([]);
   const [allTags, setAllTags] = useState<Tag[]>([]);
@@ -1072,7 +1078,7 @@ export default function PlanScreen() {
               onPress={() => stepAnchor(-1)}
               accessibilityLabel="上一月"
             >
-              <Ionicons name="chevron-back" size={20} color="#111111" />
+              <Ionicons name="chevron-back" size={20} color={colors.text} />
             </Pressable>
           ) : null}
           <Pressable
@@ -1084,7 +1090,7 @@ export default function PlanScreen() {
             <Ionicons
               name={monthPickerVisible ? 'chevron-up' : 'chevron-down'}
               size={14}
-              color="#666666"
+              color={colors.textMuted}
             />
           </Pressable>
           {viewKind === 'month' ? (
@@ -1094,7 +1100,7 @@ export default function PlanScreen() {
               onPress={() => stepAnchor(1)}
               accessibilityLabel="下一月"
             >
-              <Ionicons name="chevron-forward" size={20} color="#111111" />
+              <Ionicons name="chevron-forward" size={20} color={colors.text} />
             </Pressable>
           ) : null}
         </View>
@@ -1105,7 +1111,7 @@ export default function PlanScreen() {
             onPress={() => router.push('/search')}
             accessibilityLabel="搜索"
           >
-            <Ionicons name="search-outline" size={22} color="#111111" />
+            <Ionicons name="search-outline" size={22} color={colors.text} />
           </Pressable>
           <Pressable
             hitSlop={8}
@@ -1113,11 +1119,11 @@ export default function PlanScreen() {
             onPress={openFilterSheet}
             accessibilityLabel="筛选"
           >
-            <Ionicons name="options-outline" size={22} color="#111111" />
+            <Ionicons name="options-outline" size={22} color={colors.text} />
             {filtersActive ? <View style={styles.filterDot} /> : null}
           </Pressable>
           {viewKind === 'week' ? (
-            /* 「周」pill（阶段 5c 任务 6）：周视图单日态↔整周态，激活态黑底白字区分 */
+            /* 「周」pill（阶段 5c 任务 6）：周视图单日态↔整周态，激活态主色底白字区分 */
             <Pressable
               hitSlop={8}
               style={[styles.weekModePill, weekMode === 'whole' && styles.weekModePillActive]}
@@ -1309,7 +1315,7 @@ export default function PlanScreen() {
         delayLongPress={400}
         hitSlop={4}
       >
-        <Ionicons name="add" size={28} color="#FFFFFF" />
+        <Ionicons name="add" size={28} color={colors.textOnPrimary} />
       </Pressable>
 
       {/* 筛选面板：即时生效（阶段 5b）——点条件/视图立即提交，X/遮罩直接关；
@@ -1350,10 +1356,11 @@ export default function PlanScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#ffffff',
+    backgroundColor: c.background,
     paddingHorizontal: 16,
     paddingTop: 48,
   },
@@ -1379,7 +1386,7 @@ const styles = StyleSheet.create({
   topBarTitle: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#111111',
+    color: c.text,
     marginHorizontal: 2,
   },
   // 阶段 5c：标签可点（弹年月选择器），右侧小箭头指示
@@ -1408,33 +1415,33 @@ const styles = StyleSheet.create({
   todayPill: {
     marginLeft: 4,
     borderRadius: 999,
-    backgroundColor: '#111111',
+    backgroundColor: c.primary,
     paddingHorizontal: 12,
     paddingVertical: 6,
   },
   todayPillText: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#FFFFFF',
+    color: c.textOnPrimary,
   },
-  // 阶段 5c：「周」pill（周视图工具栏），激活态黑底白字与「今天」pill 同款区分
+  // 阶段 5c：「周」pill（周视图工具栏），激活态主色底白字与「今天」pill 同款区分
   weekModePill: {
     marginLeft: 4,
     borderRadius: 999,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: c.card,
     paddingHorizontal: 12,
     paddingVertical: 6,
   },
   weekModePillActive: {
-    backgroundColor: '#111111',
+    backgroundColor: c.primary,
   },
   weekModePillText: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#333333',
+    color: c.text,
   },
   weekModePillTextActive: {
-    color: '#FFFFFF',
+    color: c.textOnPrimary,
   },
   filterDot: {
     position: 'absolute',
@@ -1443,11 +1450,11 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: '#E53935',
+    backgroundColor: c.danger,
   },
-  // 阶段 5i「待」pill：与今天 pill 同款黑底白字，单字提醒
+  // 阶段 5i「待」pill：与今天 pill 同款主色底白字，单字提醒
   todoPill: {
-    backgroundColor: '#111111',
+    backgroundColor: c.primary,
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 5,
@@ -1455,7 +1462,7 @@ const styles = StyleSheet.create({
   todoPillText: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#FFFFFF',
+    color: c.textOnPrimary,
   },
   // 阶段 5b 周条：7 天 chip 行
   weekStrip: {
@@ -1472,31 +1479,31 @@ const styles = StyleSheet.create({
     height: 62,
     borderRadius: 12,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#ECECEC',
-    backgroundColor: '#FAFAFA',
+    borderColor: c.border,
+    backgroundColor: c.card,
   },
   weekStripDaySelected: {
-    backgroundColor: '#111111',
-    borderColor: '#111111',
+    backgroundColor: c.primary,
+    borderColor: c.primary,
   },
   weekStripWeekday: {
     fontSize: 11,
-    color: '#888888',
+    color: c.textMuted,
   },
   weekStripWeekdayToday: {
-    color: '#111111',
+    color: c.text,
     fontWeight: '700',
   },
   weekStripDayNum: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#333333',
+    color: c.text,
   },
   weekStripDayNumToday: {
-    color: '#111111',
+    color: c.text,
   },
   weekStripTextSelected: {
-    color: '#FFFFFF',
+    color: c.textOnPrimary,
   },
   weekStripTodayDot: {
     // 阶段 5e：绝对定位不占布局（chip 已定高），避免今天黑点撑高整行
@@ -1506,7 +1513,7 @@ const styles = StyleSheet.create({
     width: 4,
     height: 4,
     borderRadius: 2,
-    backgroundColor: '#111111',
+    backgroundColor: c.primary,
   },
   // 阶段 5e：agenda 月窗口的月名标题行（每页首行）
   monthHeaderRow: {
@@ -1518,7 +1525,7 @@ const styles = StyleSheet.create({
   monthHeaderText: {
     fontSize: 18,
     fontWeight: '700',
-    color: '#111111',
+    color: c.text,
   },
   // 链接行（阶段 5c 删除：已归档入口移入筛选面板）
   // Agenda 列表
@@ -1544,29 +1551,29 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 3,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: c.card,
   },
   groupHeaderPillToday: {
-    backgroundColor: '#111111',
+    backgroundColor: c.primary,
   },
   groupHeaderText: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#333333',
+    color: c.text,
   },
   groupHeaderTextToday: {
-    color: '#ffffff',
+    color: c.textOnPrimary,
   },
   groupHeaderCount: {
     fontSize: 12,
-    color: '#999999',
+    color: c.textMuted,
   },
   card: {
     flexDirection: 'row',
     borderRadius: 12,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#ECECEC',
-    backgroundColor: '#FAFAFA',
+    borderColor: c.border,
+    backgroundColor: c.card,
     marginBottom: 8,
     overflow: 'hidden',
   },
@@ -1580,12 +1587,12 @@ const styles = StyleSheet.create({
   },
   cardTitle: {
     fontSize: 15,
-    color: '#111111',
+    color: c.text,
     lineHeight: 20,
   },
   cardTime: {
     fontSize: 12,
-    color: '#888888',
+    color: c.textMuted,
     marginTop: 3,
   },
   // FAB（阶段 5）：右下角圆形新建入口，压在列表之上
@@ -1596,7 +1603,7 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: '#111111',
+    backgroundColor: c.primary,
     alignItems: 'center',
     justifyContent: 'center',
     elevation: 4,
@@ -1608,13 +1615,14 @@ const styles = StyleSheet.create({
     paddingVertical: 28,
     paddingHorizontal: 16,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#DDDDDD',
+    borderColor: c.border,
     borderRadius: 12,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: c.card,
     alignItems: 'center',
   },
   emptyTodayText: {
     fontSize: 14,
-    color: '#666666',
+    color: c.textMuted,
   },
-});
+  });
+}

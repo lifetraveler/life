@@ -9,6 +9,7 @@
  *   数据流转与 reconcile 由页面负责（见 src/app/today.tsx / week.tsx）。
  */
 
+import { useMemo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 
@@ -16,6 +17,8 @@ import { formatLocalTime, getZonedParts } from '../domain/recurrence/civilTime';
 import type { ItemWithTags } from '../domain/tag';
 import type { ViewGroupId } from '../domain/views/grouping';
 import { TYPE_LABELS } from './display';
+import { useTheme } from './theme';
+import type { ThemeColors } from './theme';
 import { formatItemTime } from './timeFormat';
 
 interface ViewGroupSectionProps {
@@ -66,6 +69,8 @@ export function ViewGroupSection({
   onToggleStatus,
 }: ViewGroupSectionProps) {
   const router = useRouter();
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   if (items.length === 0) {
     return null;
@@ -107,55 +112,57 @@ export function ViewGroupSection({
   );
 }
 
-const styles = StyleSheet.create({
-  section: {
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#555555',
-    marginBottom: 6,
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#dddddd',
-  },
-  rowTextColumn: {
-    flex: 1,
-    marginRight: 8,
-  },
-  rowTitle: {
-    fontSize: 15,
-    color: '#111111',
-  },
-  rowTitleDone: {
-    color: '#aaaaaa',
-  },
-  rowMeta: {
-    fontSize: 12,
-    color: '#888888',
-    marginTop: 2,
-  },
-  toggleButton: {
-    borderWidth: 1,
-    borderColor: '#2563eb',
-    borderRadius: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
-  toggleButtonDisabled: {
-    borderColor: '#cccccc',
-  },
-  toggleButtonText: {
-    fontSize: 12,
-    color: '#2563eb',
-  },
-  toggleButtonTextDisabled: {
-    color: '#cccccc',
-  },
-});
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    section: {
+      marginBottom: 16,
+    },
+    sectionTitle: {
+      fontSize: 15,
+      fontWeight: '600',
+      color: c.textMuted,
+      marginBottom: 6,
+    },
+    row: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 10,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.border,
+    },
+    rowTextColumn: {
+      flex: 1,
+      marginRight: 8,
+    },
+    rowTitle: {
+      fontSize: 15,
+      color: c.text,
+    },
+    rowTitleDone: {
+      color: c.textMuted,
+    },
+    rowMeta: {
+      fontSize: 12,
+      color: c.textMuted,
+      marginTop: 2,
+    },
+    toggleButton: {
+      borderWidth: 1,
+      borderColor: c.primary,
+      borderRadius: 6,
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+    },
+    toggleButtonDisabled: {
+      borderColor: c.border,
+    },
+    toggleButtonText: {
+      fontSize: 12,
+      color: c.primary,
+    },
+    toggleButtonTextDisabled: {
+      color: c.border,
+    },
+  });
+}

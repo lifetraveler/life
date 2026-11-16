@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
@@ -19,6 +19,8 @@ import { reminderScheduler } from '../../../notifications';
 import ItemFormFields from '../../../ui/ItemFormFields';
 import { useItemForm } from '../../../ui/useItemForm';
 import { getDeviceTzid } from '../../../ui/timeFormat';
+import { useTheme } from '../../../ui/theme';
+import type { ThemeColors } from '../../../ui/theme';
 
 /**
  * Item 编辑页（切片 6，AGENTS.md §4.27 / §4.30；切片 14 阶段 5：字段状态与渲染
@@ -31,6 +33,10 @@ import { getDeviceTzid } from '../../../ui/timeFormat';
  */
 
 export default function ItemEditPage() {
+  // 切片 24（§7.36）：颜色走全局 Token（夜间模式），深浅色跟随系统。
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+
   const params = useLocalSearchParams<{ id?: string }>();
   const id = typeof params.id === 'string' ? params.id : '';
   const router = useRouter();
@@ -234,76 +240,78 @@ export default function ItemEditPage() {
   );
 }
 
-const styles = StyleSheet.create({
-  flex: {
-    flex: 1,
-  },
-  scroll: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  container: {
-    padding: 16,
-    paddingBottom: 32,
-  },
-  row: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    gap: 8,
-  },
-  errorText: {
-    fontSize: 12,
-    color: '#c62828',
-    marginTop: 8,
-  },
-  primaryButton: {
-    backgroundColor: '#1e6f5c',
-    borderRadius: 6,
-    paddingVertical: 10,
-    paddingHorizontal: 18,
-  },
-  primaryText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  secondaryButton: {
-    borderWidth: 1,
-    borderColor: '#d0d0d0',
-    borderRadius: 6,
-    paddingVertical: 9,
-    paddingHorizontal: 14,
-    backgroundColor: '#fff',
-  },
-  secondaryText: {
-    fontSize: 13,
-    color: '#555',
-  },
-  disabled: {
-    opacity: 0.5,
-  },
-  meta: {
-    fontSize: 12,
-    color: '#888',
-  },
-  readonlyBox: {
-    borderWidth: 1,
-    borderColor: '#c7d2fe',
-    backgroundColor: '#eef2ff',
-    borderRadius: 6,
-    padding: 10,
-    marginTop: 8,
-  },
-  readonlyTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#4f46e5',
-  },
-  readonlyText: {
-    fontSize: 12,
-    color: '#555',
-    lineHeight: 18,
-    marginTop: 4,
-  },
-});
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    flex: {
+      flex: 1,
+    },
+    scroll: {
+      flex: 1,
+      backgroundColor: c.background,
+    },
+    container: {
+      padding: 16,
+      paddingBottom: 32,
+    },
+    row: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      gap: 8,
+    },
+    errorText: {
+      fontSize: 12,
+      color: c.danger,
+      marginTop: 8,
+    },
+    primaryButton: {
+      backgroundColor: c.primary,
+      borderRadius: 6,
+      paddingVertical: 10,
+      paddingHorizontal: 18,
+    },
+    primaryText: {
+      color: c.textOnPrimary,
+      fontSize: 14,
+      fontWeight: '600',
+    },
+    secondaryButton: {
+      borderWidth: 1,
+      borderColor: c.border,
+      borderRadius: 6,
+      paddingVertical: 9,
+      paddingHorizontal: 14,
+      backgroundColor: c.card,
+    },
+    secondaryText: {
+      fontSize: 13,
+      color: c.textMuted,
+    },
+    disabled: {
+      opacity: 0.5,
+    },
+    meta: {
+      fontSize: 12,
+      color: c.textMuted,
+    },
+    readonlyBox: {
+      borderWidth: 1,
+      borderColor: c.border,
+      backgroundColor: c.card,
+      borderRadius: 6,
+      padding: 10,
+      marginTop: 8,
+    },
+    readonlyTitle: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: c.text,
+    },
+    readonlyText: {
+      fontSize: 12,
+      color: c.textMuted,
+      lineHeight: 18,
+      marginTop: 4,
+    },
+  });
+}

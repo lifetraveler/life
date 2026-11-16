@@ -28,6 +28,8 @@ export interface ThemeColors {
   border: string;
   /** 危险操作（删除、过期警示） */
   danger: string;
+  /** 填充色控件（primary/danger 按钮、徽章、气泡）上的文字/图标 */
+  textOnPrimary: string;
 }
 
 /** 浅色 token（任务卡 tasks/slice-24.md 阶段 1 规定值） */
@@ -39,6 +41,7 @@ export const LIGHT_COLORS: ThemeColors = {
   primary: '#4C7A5C',
   border: '#E0E0E0',
   danger: '#D32F2F',
+  textOnPrimary: '#FFFFFF',
 };
 
 /** 深色 token（任务卡 tasks/slice-24.md 阶段 1 规定值） */
@@ -50,6 +53,7 @@ export const DARK_COLORS: ThemeColors = {
   primary: '#5D9471',
   border: '#423E38',
   danger: '#F87171',
+  textOnPrimary: '#FFFFFF',
 };
 
 /** colorScheme → Token 集映射（'light' | 'dark'；null/undefined 跟随浅色） */

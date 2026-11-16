@@ -1,8 +1,11 @@
+import { useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 
 import EmptyState from '../ui/EmptyState';
 import { getLastExportResult } from '../ui/transferResultStore';
+import { useTheme } from '../ui/theme';
+import type { ThemeColors } from '../ui/theme';
 
 /**
  * 导出成功页（切片 8，tasks/slice-08.md 实现要求 5）：
@@ -11,6 +14,8 @@ import { getLastExportResult } from '../ui/transferResultStore';
  */
 
 export default function ExportSuccessPage() {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const router = useRouter();
   const result = getLastExportResult();
 
@@ -49,10 +54,11 @@ export default function ExportSuccessPage() {
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
   scroll: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: c.background,
   },
   container: {
     padding: 16,
@@ -60,7 +66,7 @@ const styles = StyleSheet.create({
   },
   emptyContainer: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: c.background,
     alignItems: 'center',
     justifyContent: 'center',
     padding: 16,
@@ -69,40 +75,41 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#111',
+    color: c.text,
   },
   statBox: {
     marginTop: 14,
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
     borderRadius: 8,
     padding: 14,
     gap: 6,
   },
   statLine: {
     fontSize: 14,
-    color: '#333',
+    color: c.text,
   },
   fileUri: {
     fontSize: 12,
-    color: '#555',
+    color: c.textMuted,
   },
   meta: {
     fontSize: 12,
-    color: '#888',
+    color: c.textMuted,
     lineHeight: 18,
   },
   secondaryButton: {
     marginTop: 14,
     borderWidth: 1,
-    borderColor: '#d0d0d0',
+    borderColor: c.border,
     borderRadius: 6,
     paddingVertical: 8,
     paddingHorizontal: 16,
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
     alignSelf: 'flex-start',
   },
   secondaryText: {
     fontSize: 13,
-    color: '#555',
+    color: c.textMuted,
   },
-});
+  });
+}

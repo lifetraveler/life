@@ -27,6 +27,8 @@ import type { DayTimelineLayout } from '../domain/views/dayTimeline';
 import type { ItemWithRelations } from '../domain/relations/itemWithRelations';
 import { formatAgendaTimeRange } from './timeFormat';
 import { stripeColorOf } from './stripeColor';
+import { useTheme } from './theme';
+import type { ThemeColors } from './theme';
 
 /** 每小时像素高度（任务卡阶段 5b-4：64px/小时） */
 const HOUR_PX = 64;
@@ -71,6 +73,8 @@ export function DayTimelineView({
   onSelectItem,
   onShiftDay,
 }: DayTimelineViewProps) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const scrollRef = useRef<ScrollView | null>(null);
 
   // 切日动效（阶段 5d）：dayStartMs 变化时按切换方向平移淡入（40px，200ms）；
@@ -129,7 +133,8 @@ export function DayTimelineView({
           {label}
         </Text>
       )),
-    [],
+    // 切片 24：styles 随 colors 重建，须入依赖否则深浅切换瞬间沿用旧色
+    [styles],
   );
 
   // 右侧画布小时线（absolute，相对画布全宽）
@@ -138,7 +143,7 @@ export function DayTimelineView({
       HOUR_LABELS.map((label, hour) => (
         <View key={label} style={[styles.hourLine, { top: hour * HOUR_PX }]} />
       )),
-    [],
+    [styles],
   );
 
   return (
@@ -226,115 +231,117 @@ export function DayTimelineView({
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-    // 阶段 5d：时间轴顶部与周条拉开一个区块间距（修复 00:00 与上方工具栏重合）
-    paddingTop: SECTION_GAP,
-  },
-  allDayArea: {
-    paddingHorizontal: 16,
-    paddingTop: 6,
-    paddingBottom: 6,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#ECECEC',
-    gap: 4,
-  },
-  allDayChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#F7F7F7',
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-  },
-  chipPressed: {
-    opacity: 0.6,
-  },
-  chipStripe: {
-    width: 3,
-    height: 14,
-    borderRadius: 1.5,
-  },
-  allDayText: {
-    flexShrink: 1,
-    fontSize: 12,
-    color: '#333333',
-  },
-  scroll: {
-    flex: 1,
-  },
-  canvas: {
-    height: DAY_PX,
-  },
-  // 阶段 5c 两列结构：左列固定宽标签，右侧 flex:1 画布（事件块百分比相对画布）
-  canvasRow: {
-    flex: 1,
-    flexDirection: 'row',
-  },
-  gutter: {
-    width: TIME_COLUMN_WIDTH,
-    height: DAY_PX,
-  },
-  canvasInner: {
-    flex: 1,
-    height: DAY_PX,
-    position: 'relative',
-  },
-  hourLabel: {
-    position: 'absolute',
-    left: 0,
-    width: TIME_COLUMN_WIDTH - 6,
-    textAlign: 'right',
-    fontSize: 10,
-    color: '#AAAAAA',
-  },
-  hourLine: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: '#EEEEEE',
-  },
-  nowLine: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    height: 1,
-    backgroundColor: '#E53935',
-  },
-  nowDot: {
-    position: 'absolute',
-    left: -3,
-    top: -2.5,
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#E53935',
-  },
-  eventBlock: {
-    position: 'absolute',
-    backgroundColor: '#F7F7F7',
-    borderRadius: 6,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#ECECEC',
-    padding: 4,
-    flexDirection: 'row',
-    gap: 4,
-    overflow: 'hidden',
-  },
-  eventTextWrap: {
-    flexShrink: 1,
-  },
-  eventTime: {
-    fontSize: 9,
-    color: '#888888',
-  },
-  eventTitle: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#111111',
-  },
-});
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: c.background,
+      // 阶段 5d：时间轴顶部与周条拉开一个区块间距（修复 00:00 与上方工具栏重合）
+      paddingTop: SECTION_GAP,
+    },
+    allDayArea: {
+      paddingHorizontal: 16,
+      paddingTop: 6,
+      paddingBottom: 6,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.border,
+      gap: 4,
+    },
+    allDayChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      backgroundColor: c.card,
+      borderRadius: 8,
+      paddingHorizontal: 8,
+      paddingVertical: 6,
+    },
+    chipPressed: {
+      opacity: 0.6,
+    },
+    chipStripe: {
+      width: 3,
+      height: 14,
+      borderRadius: 1.5,
+    },
+    allDayText: {
+      flexShrink: 1,
+      fontSize: 12,
+      color: c.text,
+    },
+    scroll: {
+      flex: 1,
+    },
+    canvas: {
+      height: DAY_PX,
+    },
+    // 阶段 5c 两列结构：左列固定宽标签，右侧 flex:1 画布（事件块百分比相对画布）
+    canvasRow: {
+      flex: 1,
+      flexDirection: 'row',
+    },
+    gutter: {
+      width: TIME_COLUMN_WIDTH,
+      height: DAY_PX,
+    },
+    canvasInner: {
+      flex: 1,
+      height: DAY_PX,
+      position: 'relative',
+    },
+    hourLabel: {
+      position: 'absolute',
+      left: 0,
+      width: TIME_COLUMN_WIDTH - 6,
+      textAlign: 'right',
+      fontSize: 10,
+      color: c.textMuted,
+    },
+    hourLine: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: c.border,
+    },
+    nowLine: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      height: 1,
+      backgroundColor: c.danger,
+    },
+    nowDot: {
+      position: 'absolute',
+      left: -3,
+      top: -2.5,
+      width: 6,
+      height: 6,
+      borderRadius: 3,
+      backgroundColor: c.danger,
+    },
+    eventBlock: {
+      position: 'absolute',
+      backgroundColor: c.card,
+      borderRadius: 6,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.border,
+      padding: 4,
+      flexDirection: 'row',
+      gap: 4,
+      overflow: 'hidden',
+    },
+    eventTextWrap: {
+      flexShrink: 1,
+    },
+    eventTime: {
+      fontSize: 9,
+      color: c.textMuted,
+    },
+    eventTitle: {
+      fontSize: 11,
+      fontWeight: '600',
+      color: c.text,
+    },
+  });
+}

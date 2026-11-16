@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 
@@ -10,6 +10,8 @@ import {
   REMINDER_CHANNEL_OPTIONS,
   toggleReminderChannel,
 } from '../../ui/reminderForm';
+import { useTheme } from '../../ui/theme';
+import type { ThemeColors } from '../../ui/theme';
 
 /**
  * 默认提醒方式设置页（切片 19 阶段 3，AGENTS.md §7.30 第二条）：
@@ -20,6 +22,8 @@ import {
  *   抛错时展示具体文案、不落库（读宽松、写严格）。
  */
 export default function DefaultChannelsSettingsPage() {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<ReminderChannel[]>(['system-notification']);
   const [saving, setSaving] = useState(false);
@@ -124,10 +128,11 @@ export default function DefaultChannelsSettingsPage() {
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
   scroll: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: c.background,
   },
   container: {
     padding: 16,
@@ -140,7 +145,7 @@ const styles = StyleSheet.create({
   },
   hint: {
     fontSize: 12,
-    color: '#888',
+    color: c.textMuted,
     lineHeight: 18,
     marginBottom: 12,
   },
@@ -152,48 +157,49 @@ const styles = StyleSheet.create({
   },
   chip: {
     borderWidth: 1,
-    borderColor: '#d0d0d0',
+    borderColor: c.border,
     borderRadius: 6,
     paddingVertical: 8,
     paddingHorizontal: 12,
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
   },
   chipSelected: {
-    borderColor: '#1976d2',
-    backgroundColor: '#e3f2fd',
+    borderColor: c.primary,
+    backgroundColor: c.card,
   },
   chipText: {
     fontSize: 13,
-    color: '#555',
+    color: c.textMuted,
   },
   chipTextSelected: {
-    color: '#1976d2',
+    color: c.primary,
     fontWeight: '600',
   },
   meta: {
     fontSize: 12,
-    color: '#888',
+    color: c.textMuted,
     marginBottom: 12,
   },
   saveButton: {
-    backgroundColor: '#1e6f5c',
+    backgroundColor: c.primary,
     borderRadius: 8,
     paddingVertical: 12,
     alignItems: 'center',
   },
   saveText: {
     fontSize: 14,
-    color: '#fff',
+    color: c.textOnPrimary,
     fontWeight: '600',
   },
   savedText: {
     fontSize: 12,
-    color: '#1e6f5c',
+    color: c.primary,
     marginTop: 8,
   },
   errorText: {
     fontSize: 12,
-    color: '#c62828',
+    color: c.danger,
     marginTop: 8,
   },
-});
+  });
+}

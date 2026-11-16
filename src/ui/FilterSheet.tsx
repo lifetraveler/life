@@ -20,7 +20,7 @@
  *   （Alert「即将上线」，任务卡阶段 5c-8，功能留后续切片）。
  */
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   Alert,
   Animated,
@@ -44,13 +44,12 @@ import type { ItemFilters } from '../domain/views/filters';
 import type { Tag } from '../domain/tag';
 import CategoryChip from './CategoryChip';
 import TagChip from './TagChip';
+import { useTheme } from './theme';
+import type { ThemeColors } from './theme';
 import { useTagDisplayMode } from './useTagDisplayMode';
 
 /** 面板进出场动画时长（ms） */
 const ANIMATION_DURATION_MS = 220;
-
-/** 遮罩底色（按不透明度动画驱动） */
-const BACKDROP_COLOR = 'rgba(0, 0, 0, 0.4)';
 
 /** 日历源选项（§7.21「日历源」维度；文案沿用切片 8/9 的来源命名） */
 const SOURCE_TYPE_OPTIONS: readonly { value: ItemSourceType; label: string }[] = [
@@ -104,6 +103,11 @@ export default function FilterSheet({
   onOpenArchived,
   onClose,
 }: FilterSheetProps) {
+  // 切片 24 阶段 2（特例①）：遮罩底色 scheme 感知——深色加深到 0.6 压暗背景，浅色维持 0.4；
+  // Animated 机制不变（opacity 仍由 backdropOpacity 驱动，仅颜色来源随主题重渲）。
+  const { colors, colorScheme } = useTheme();
+  const backdropColor = colorScheme === 'dark' ? 'rgba(0, 0, 0, 0.6)' : 'rgba(0, 0, 0, 0.4)';
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const tagDisplayMode = useTagDisplayMode();
 
   // 初始值即整屏高（面板在屏外）；关闭动画结束后回到屏外，循环打开不闪帧
@@ -243,7 +247,7 @@ export default function FilterSheet({
           <Animated.View
             style={[
               StyleSheet.absoluteFill,
-              { backgroundColor: BACKDROP_COLOR, opacity: backdropOpacity },
+              { backgroundColor: backdropColor, opacity: backdropOpacity },
             ]}
           />
         </Pressable>
@@ -272,7 +276,7 @@ export default function FilterSheet({
                     style={[styles.viewOption, selected && styles.viewOptionSelected]}
                     onPress={() => selectViewKind(option.kind)}
                   >
-                    <Ionicons name={option.icon} size={20} color={selected ? '#111111' : '#999999'} />
+                    <Ionicons name={option.icon} size={20} color={selected ? colors.text : colors.textMuted} />
                     <Text style={[styles.viewOptionText, selected && styles.viewOptionTextSelected]}>
                       {option.label}
                     </Text>
@@ -340,9 +344,9 @@ export default function FilterSheet({
               style={({ pressed }) => [styles.actionRow, pressed && styles.actionRowPressed]}
               onPress={onOpenArchived}
             >
-              <Ionicons name="archive-outline" size={18} color="#555555" />
+              <Ionicons name="archive-outline" size={18} color={colors.textMuted} />
               <Text style={styles.actionText}>已归档</Text>
-              <Ionicons name="chevron-forward" size={16} color="#BBBBBB" />
+              <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
             </Pressable>
             {PLACEHOLDER_ACTIONS.map((label) => (
               <Pressable
@@ -351,7 +355,7 @@ export default function FilterSheet({
                 onPress={() => Alert.alert(label, '即将上线')}
               >
                 <Text style={styles.actionText}>{label}</Text>
-                <Ionicons name="chevron-forward" size={16} color="#BBBBBB" />
+                <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
               </Pressable>
             ))}
           </ScrollView>
@@ -361,7 +365,8 @@ export default function FilterSheet({
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
   root: {
     flex: 1,
   },
@@ -372,7 +377,7 @@ const styles = StyleSheet.create({
     bottom: 0,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: c.card,
     paddingBottom: 16,
   },
   headerRow: {
@@ -386,20 +391,20 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: c.background,
     alignItems: 'center',
     justifyContent: 'center',
   },
   closeText: {
     fontSize: 14,
-    color: '#333333',
+    color: c.text,
   },
   headerTitle: {
     flex: 1,
     textAlign: 'center',
     fontSize: 16,
     fontWeight: '600',
-    color: '#111111',
+    color: c.text,
   },
   resetButton: {
     height: 32,
@@ -410,7 +415,7 @@ const styles = StyleSheet.create({
   },
   resetText: {
     fontSize: 13,
-    color: '#888888',
+    color: c.textMuted,
   },
   scroll: {
     // 内容超出时滚动；上限保证面板整体（头部 ~52）约 80% 屏高以内
@@ -423,7 +428,7 @@ const styles = StyleSheet.create({
   },
   sectionLabel: {
     fontSize: 12,
-    color: '#888888',
+    color: c.textMuted,
     marginTop: 12,
     marginBottom: 8,
   },
@@ -439,19 +444,19 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 12,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E0E0E0',
-    backgroundColor: '#FFFFFF',
+    borderColor: c.border,
+    backgroundColor: c.card,
   },
   viewOptionSelected: {
-    borderColor: '#111111',
-    backgroundColor: '#F5F5F5',
+    borderColor: c.text,
+    backgroundColor: c.background,
   },
   viewOptionText: {
     fontSize: 12,
-    color: '#666666',
+    color: c.textMuted,
   },
   viewOptionTextSelected: {
-    color: '#111111',
+    color: c.text,
     fontWeight: '600',
   },
   chipWrap: {
@@ -463,7 +468,7 @@ const styles = StyleSheet.create({
   actionDivider: {
     marginTop: 14,
     height: StyleSheet.hairlineWidth,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: c.background,
   },
   actionRow: {
     flexDirection: 'row',
@@ -477,10 +482,11 @@ const styles = StyleSheet.create({
   actionText: {
     flex: 1,
     fontSize: 14,
-    color: '#333333',
+    color: c.text,
   },
   emptyHint: {
     fontSize: 13,
-    color: '#999999',
+    color: c.textMuted,
   },
 });
+}

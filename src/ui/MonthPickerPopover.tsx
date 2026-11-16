@@ -1,15 +1,17 @@
 /**
  * 年月选择浮层（切片 14 阶段 5c，tasks/slice-14.md 阶段 5c-0，参考 tasks/年月切换组件.jpg）：
  * - 顶栏年月标签点击后弹出：‹ 年份 › 步进行 + 12 个月宫格（4 列 × 3 行），
- *   当前选中月胶囊高亮（黑底白字，与应用主色一致，不采用参考图红色）；
+ *   当前选中月胶囊高亮（主色底白字，与应用主色一致，不采用参考图红色）；
  * - 浮层定位：锚定在顶栏标签下方（调用方置于容器 absolute 层），点遮罩关闭；
  * - 纯自绘（react-native-calendars 无「年+月宫格」形态，用户确认自绘，零新依赖）；
  * - 本组件不读设备时区、不触碰 Repository。
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useTheme } from './theme';
+import type { ThemeColors } from './theme';
 
 const MONTH_LABELS = [
   '1月', '2月', '3月', '4月', '5月', '6月',
@@ -31,6 +33,8 @@ export function MonthPickerPopover({
   onSelect,
   onClose,
 }: MonthPickerPopoverProps) {
+  const { colors, colorScheme } = useTheme();
+  const styles = useMemo(() => makeStyles(colors, colorScheme), [colors, colorScheme]);
   // 展示年：弹层打开时与锚点年同步；‹ › 在弹层内自由步进
   const [displayYear, setDisplayYear] = useState(anchor.year);
   useEffect(() => {
@@ -59,7 +63,7 @@ export function MonthPickerPopover({
             onPress={() => stepYear(-1)}
             accessibilityLabel="上一年"
           >
-            <Ionicons name="chevron-back" size={20} color="#111111" />
+            <Ionicons name="chevron-back" size={20} color={colors.text} />
           </Pressable>
           <Text style={styles.yearText}>{displayYear}</Text>
           <Pressable
@@ -68,7 +72,7 @@ export function MonthPickerPopover({
             onPress={() => stepYear(1)}
             accessibilityLabel="下一年"
           >
-            <Ionicons name="chevron-forward" size={20} color="#111111" />
+            <Ionicons name="chevron-forward" size={20} color={colors.text} />
           </Pressable>
         </View>
         <View style={styles.grid}>
@@ -92,66 +96,69 @@ export function MonthPickerPopover({
   );
 }
 
-const styles = StyleSheet.create({
-  scrim: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.08)',
-  },
-  card: {
-    position: 'absolute',
-    // 阶段 5d：从顶栏年月标签正下方弹出（topBar paddingTop48 + 标题行高 ≈ 96），
-    // 左对齐页面 padding 16；不再顶到屏幕左上角
-    top: 96,
-    left: 16,
-    width: 268,
-    borderRadius: 16,
-    backgroundColor: '#FFFFFF',
-    paddingVertical: 12,
-    paddingHorizontal: 10,
-    elevation: 8,
-  },
-  yearRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 4,
-  },
-  yearArrow: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  yearText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#111111',
-  },
-  grid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-  },
-  cell: {
-    width: '25%',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 10,
-  },
-  cellText: {
-    fontSize: 15,
-    color: '#333333',
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 16,
-    overflow: 'hidden',
-  },
-  cellTextSelected: {
-    backgroundColor: '#111111',
-    color: '#FFFFFF',
-    fontWeight: '600',
-  },
-  pressed: {
-    opacity: 0.6,
-  },
-});
+function makeStyles(c: ThemeColors, colorScheme: 'light' | 'dark' | null) {
+  return StyleSheet.create({
+    scrim: {
+      ...StyleSheet.absoluteFillObject,
+      // 特例①（tasks/slice-24 阶段 2）：遮罩透明度深色下加深一档
+      backgroundColor: colorScheme === 'dark' ? 'rgba(0, 0, 0, 0.16)' : 'rgba(0, 0, 0, 0.08)',
+    },
+    card: {
+      position: 'absolute',
+      // 阶段 5d：从顶栏年月标签正下方弹出（topBar paddingTop48 + 标题行高 ≈ 96），
+      // 左对齐页面 padding 16；不再顶到屏幕左上角
+      top: 96,
+      left: 16,
+      width: 268,
+      borderRadius: 16,
+      backgroundColor: c.card,
+      paddingVertical: 12,
+      paddingHorizontal: 10,
+      elevation: 8,
+    },
+    yearRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 4,
+    },
+    yearArrow: {
+      width: 34,
+      height: 34,
+      borderRadius: 17,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    yearText: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: c.text,
+    },
+    grid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+    },
+    cell: {
+      width: '25%',
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: 10,
+    },
+    cellText: {
+      fontSize: 15,
+      color: c.text,
+      paddingHorizontal: 12,
+      paddingVertical: 4,
+      borderRadius: 16,
+      overflow: 'hidden',
+    },
+    cellTextSelected: {
+      backgroundColor: c.primary,
+      color: c.textOnPrimary,
+      fontWeight: '600',
+    },
+    pressed: {
+      opacity: 0.6,
+    },
+  });
+}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -14,6 +14,8 @@ import { itemRepository } from '../data';
 import { expoSystemCalendarReader } from '../data/systemCalendarAdapters';
 import type { SystemCalendarInfo } from '../domain/systemCalendar/types';
 import { setLastImportPreview } from '../ui/importPreviewStore';
+import { useTheme } from '../ui/theme';
+import type { ThemeColors } from '../ui/theme';
 
 /**
  * 切片 9：系统日历导入页（tasks/slice-09.md 实现要求 1/4）：
@@ -34,6 +36,8 @@ type Phase = 'loading' | 'permission-denied' | 'select' | 'previewing';
 
 export default function SystemCalendarImportPage() {
   const router = useRouter();
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [phase, setPhase] = useState<Phase>('loading');
   const [calendars, setCalendars] = useState<SystemCalendarInfo[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -196,7 +200,7 @@ export default function SystemCalendarImportPage() {
         disabled={phase === 'previewing'}
       >
         {phase === 'previewing' ? (
-          <ActivityIndicator color="#fff" />
+          <ActivityIndicator color={colors.textOnPrimary} />
         ) : (
           <Text style={styles.primaryText}>预览可导入项</Text>
         )}
@@ -205,10 +209,11 @@ export default function SystemCalendarImportPage() {
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
   scroll: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: c.background,
   },
   container: {
     padding: 16,
@@ -217,14 +222,14 @@ const styles = StyleSheet.create({
   },
   centerBox: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: c.background,
     alignItems: 'center',
     justifyContent: 'center',
     padding: 24,
     gap: 10,
   },
   section: {
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
     borderRadius: 8,
     padding: 14,
     gap: 8,
@@ -232,16 +237,16 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#111',
+    color: c.text,
   },
   hint: {
     fontSize: 12,
-    color: '#888',
+    color: c.textMuted,
     lineHeight: 18,
   },
   meta: {
     fontSize: 12,
-    color: '#999',
+    color: c.textMuted,
   },
   calendarRow: {
     flexDirection: 'row',
@@ -251,14 +256,14 @@ const styles = StyleSheet.create({
   },
   checkbox: {
     fontSize: 18,
-    color: '#1e6f5c',
+    color: c.primary,
   },
   calendarText: {
     flex: 1,
   },
   calendarTitle: {
     fontSize: 14,
-    color: '#333',
+    color: c.text,
   },
   rangeRow: {
     flexDirection: 'row',
@@ -267,31 +272,31 @@ const styles = StyleSheet.create({
   },
   rangeButton: {
     borderWidth: 1,
-    borderColor: '#d0d0d0',
+    borderColor: c.border,
     borderRadius: 6,
     paddingVertical: 6,
     paddingHorizontal: 14,
   },
   rangeButtonActive: {
-    borderColor: '#1e6f5c',
-    backgroundColor: '#e8f3ef',
+    borderColor: c.primary,
+    backgroundColor: c.card,
   },
   rangeText: {
     fontSize: 13,
-    color: '#555',
+    color: c.textMuted,
   },
   rangeTextActive: {
-    color: '#1e6f5c',
+    color: c.primary,
     fontWeight: '600',
   },
   primaryButton: {
-    backgroundColor: '#1e6f5c',
+    backgroundColor: c.primary,
     borderRadius: 6,
     paddingVertical: 10,
     alignItems: 'center',
   },
   primaryText: {
-    color: '#fff',
+    color: c.textOnPrimary,
     fontSize: 14,
     fontWeight: '600',
   },
@@ -300,24 +305,26 @@ const styles = StyleSheet.create({
   },
   secondaryButton: {
     borderWidth: 1,
-    borderColor: '#d0d0d0',
+    borderColor: c.border,
     borderRadius: 6,
     paddingVertical: 8,
     paddingHorizontal: 14,
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
     alignItems: 'center',
   },
   secondaryText: {
     fontSize: 13,
-    color: '#555',
+    color: c.textMuted,
   },
   deniedTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#b26a00',
+    // 警示语义归 danger（Token 注释含「过期警示」族；切片 24 禁硬编码 hex）
+    color: c.danger,
   },
   errorText: {
     fontSize: 12,
-    color: '#c62828',
+    color: c.danger,
   },
-});
+  });
+}

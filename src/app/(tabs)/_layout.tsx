@@ -2,6 +2,8 @@ import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import type { ComponentProps } from 'react';
 
+import { useTheme } from '../../ui/theme';
+
 /** Ionicons 图标名的类型别名（约束 TAB_ICONS 只能取合法字形名）。 */
 type IoniconName = ComponentProps<typeof Ionicons>['name'];
 
@@ -30,8 +32,19 @@ const TAB_ICONS: Record<'flash' | 'items' | 'plan' | 'profile', { selected: Ioni
  *   滚动位置跨 Tab 切换保留（验收 18）。
  */
 export default function TabsLayout() {
+  // 切片 24（§7.36）：Tab 栏与各场景底色走 Token，深浅色跟随系统。
+  const { colors } = useTheme();
   return (
-    <Tabs initialRouteName="plan" screenOptions={{ headerShown: false }}>
+    <Tabs
+      initialRouteName="plan"
+      screenOptions={{
+        headerShown: false,
+        tabBarStyle: { backgroundColor: colors.card, borderTopColor: colors.border },
+        tabBarActiveTintColor: colors.primary,
+        tabBarInactiveTintColor: colors.textMuted,
+        sceneStyle: { backgroundColor: colors.background },
+      }}
+    >
       <Tabs.Screen name="index" options={{ href: null }} />
       <Tabs.Screen
         name="flash"

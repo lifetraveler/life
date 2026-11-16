@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Modal,
   Pressable,
@@ -14,6 +14,8 @@ import type { ParsedItemDraft, ParsedItemType } from '../domain/ai/types';
 import type { Category } from '../domain/category';
 import CategoryChip from './CategoryChip';
 import DateTimeField from './DateTimeField';
+import { useTheme } from './theme';
+import type { ThemeColors } from './theme';
 
 /**
  * 预览卡片编辑弹窗（tasks/slice-15.md 阶段 3，验收 8：点击卡片可手动调整
@@ -49,6 +51,8 @@ export default function FlashEditModal({
   onCancel,
   onConfirm,
 }: FlashEditModalProps) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [title, setTitle] = useState('');
   const [type, setType] = useState<ParsedItemType>('note');
   const [categoryId, setCategoryId] = useState<string | null>(null);
@@ -211,90 +215,92 @@ export default function FlashEditModal({
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#DDDDDD',
-  },
-  headerTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#111111',
-  },
-  cancelText: {
-    fontSize: 15,
-    color: '#666666',
-  },
-  confirmText: {
-    fontSize: 15,
-    color: '#4A90D9',
-    fontWeight: '600',
-  },
-  body: {
-    padding: 16,
-    paddingBottom: 40,
-    gap: 8,
-  },
-  label: {
-    fontSize: 13,
-    color: '#666666',
-    marginTop: 4,
-  },
-  titleInput: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#CCCCCC',
-    borderRadius: 8,
-    padding: 10,
-    fontSize: 15,
-    color: '#111111',
-  },
-  chipRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  chip: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#CCCCCC',
-    borderRadius: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  chipSelected: {
-    borderColor: '#111111',
-    borderWidth: 1.5,
-  },
-  chipText: {
-    fontSize: 13,
-    color: '#444444',
-  },
-  chipTextSelected: {
-    color: '#111111',
-    fontWeight: '600',
-  },
-  switchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 4,
-  },
-  tagChip: {
-    backgroundColor: '#EEEEEE',
-    borderRadius: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
-  tagText: {
-    fontSize: 12,
-    color: '#444444',
-  },
-});
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: c.card,
+    },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.border,
+    },
+    headerTitle: {
+      fontSize: 16,
+      fontWeight: '600',
+      color: c.text,
+    },
+    cancelText: {
+      fontSize: 15,
+      color: c.textMuted,
+    },
+    confirmText: {
+      fontSize: 15,
+      color: c.primary,
+      fontWeight: '600',
+    },
+    body: {
+      padding: 16,
+      paddingBottom: 40,
+      gap: 8,
+    },
+    label: {
+      fontSize: 13,
+      color: c.textMuted,
+      marginTop: 4,
+    },
+    titleInput: {
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.border,
+      borderRadius: 8,
+      padding: 10,
+      fontSize: 15,
+      color: c.text,
+    },
+    chipRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+    },
+    chip: {
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.border,
+      borderRadius: 16,
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+    },
+    chipSelected: {
+      borderColor: c.text,
+      borderWidth: 1.5,
+    },
+    chipText: {
+      fontSize: 13,
+      color: c.text,
+    },
+    chipTextSelected: {
+      color: c.text,
+      fontWeight: '600',
+    },
+    switchRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginTop: 4,
+    },
+    tagChip: {
+      backgroundColor: c.border,
+      borderRadius: 12,
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+    },
+    tagText: {
+      fontSize: 12,
+      color: c.text,
+    },
+  });
+}

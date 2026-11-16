@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import type { ChannelPresetType } from '../domain/channelPreset';
 import { isValidHttpUrl } from './reminderForm';
+import { useTheme } from './theme';
+import type { ThemeColors } from './theme';
 
 /**
  * 渠道预设新建/编辑表单（切片 17 阶段 2，AGENTS.md §7.27 / §7.28）。
@@ -256,6 +258,8 @@ export default function ChannelPresetEditor({
   onSave,
   onCancel,
 }: ChannelPresetEditorProps) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [form, setForm] = useState<FormState>(() => initialForm(initial));
   const [errors, setErrors] = useState<FormErrors>({});
   const isEditing = initial !== null;
@@ -475,31 +479,32 @@ export default function ChannelPresetEditor({
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
   editor: {
     gap: 2,
   },
   fieldLabel: {
     fontSize: 13,
-    color: '#666',
+    color: c.textMuted,
     marginTop: 6,
     marginBottom: 4,
   },
   input: {
     borderWidth: 1,
-    borderColor: '#d0d0d0',
+    borderColor: c.border,
     borderRadius: 6,
     paddingHorizontal: 10,
     paddingVertical: 6,
     fontSize: 15,
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
   },
   multiline: {
     minHeight: 56,
     textAlignVertical: 'top',
   },
   inputError: {
-    borderColor: '#c62828',
+    borderColor: c.danger,
   },
   typeRow: {
     flexDirection: 'row',
@@ -508,27 +513,27 @@ const styles = StyleSheet.create({
   },
   typeLocked: {
     fontSize: 13,
-    color: '#888',
+    color: c.textMuted,
     marginTop: 6,
   },
   typeChip: {
     borderWidth: 1,
-    borderColor: '#d0d0d0',
+    borderColor: c.border,
     borderRadius: 6,
     paddingVertical: 6,
     paddingHorizontal: 10,
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
   },
   typeChipSelected: {
-    borderColor: '#1976d2',
-    backgroundColor: '#e3f2fd',
+    borderColor: c.primary,
+    backgroundColor: c.card,
   },
   typeChipText: {
     fontSize: 13,
-    color: '#555',
+    color: c.textMuted,
   },
   typeChipTextSelected: {
-    color: '#1976d2',
+    color: c.primary,
     fontWeight: '600',
   },
   modeRow: {
@@ -538,13 +543,13 @@ const styles = StyleSheet.create({
   },
   hint: {
     fontSize: 11,
-    color: '#9e9e9e',
+    color: c.textMuted,
     lineHeight: 16,
     marginTop: 4,
   },
   errorText: {
     fontSize: 12,
-    color: '#c62828',
+    color: c.danger,
     marginTop: 2,
   },
   buttonRow: {
@@ -563,20 +568,21 @@ const styles = StyleSheet.create({
     opacity: 0.4,
   },
   secondaryButton: {
-    borderColor: '#d0d0d0',
-    backgroundColor: '#fff',
+    borderColor: c.border,
+    backgroundColor: c.card,
   },
   secondaryText: {
     fontSize: 14,
-    color: '#555',
+    color: c.textMuted,
   },
   primaryButton: {
-    borderColor: '#1e6f5c',
-    backgroundColor: '#1e6f5c',
+    borderColor: c.primary,
+    backgroundColor: c.primary,
   },
   primaryText: {
     fontSize: 14,
-    color: '#fff',
+    color: c.textOnPrimary,
     fontWeight: '600',
   },
 });
+}

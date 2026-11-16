@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { itemRepository } from '../data';
@@ -16,6 +16,8 @@ import {
 } from '../notifications';
 import type { NotificationPermissionState } from '../notifications';
 import { REMINDER_CHANNEL_LABELS } from '../ui/reminderForm';
+import { useTheme } from '../ui/theme';
+import type { ThemeColors } from '../ui/theme';
 
 /**
  * 提醒调试页（AGENTS.md §4.22，仅 __DEV__ 可用）：
@@ -59,6 +61,8 @@ function formatOnceAtText(once: OnceCivilTime): string {
 }
 
 export default function DebugRemindersScreen() {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [items, setItems] = useState<Item[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
@@ -428,10 +432,11 @@ export default function DebugRemindersScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: c.background,
   },
   content: {
     padding: 16,
@@ -447,14 +452,14 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   status: {
-    color: '#0a7',
+    color: c.primary,
   },
   row: {
     paddingVertical: 6,
     gap: 4,
   },
   rowSelected: {
-    backgroundColor: '#eef',
+    backgroundColor: c.card,
   },
   rowWrap: {
     flexDirection: 'row',
@@ -465,10 +470,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 6,
-    backgroundColor: '#eee',
+    // 填充底按语义归 card（与 rowSelected/chipSelected 同口径；切片 24 统一验证裁决）
+    backgroundColor: c.card,
   },
   chipSelected: {
-    backgroundColor: '#cde',
+    backgroundColor: c.card,
   },
   fieldRow: {
     flexDirection: 'row',
@@ -477,7 +483,7 @@ const styles = StyleSheet.create({
   },
   input: {
     borderWidth: 1,
-    borderColor: '#ccc',
+    borderColor: c.border,
     borderRadius: 6,
     paddingHorizontal: 8,
     minWidth: 48,
@@ -486,23 +492,24 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   button: {
-    backgroundColor: '#246',
+    backgroundColor: c.primary,
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 8,
     alignSelf: 'flex-start',
   },
   danger: {
-    backgroundColor: '#a33',
+    backgroundColor: c.danger,
   },
   buttonText: {
-    color: '#fff',
+    color: c.textOnPrimary,
   },
   hint: {
-    color: '#666',
+    color: c.textMuted,
   },
   mono: {
     fontFamily: 'monospace',
     fontSize: 11,
   },
-});
+  });
+}

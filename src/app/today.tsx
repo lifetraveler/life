@@ -21,6 +21,8 @@ import { reminderScheduler } from '../notifications';
 import EmptyState from '../ui/EmptyState';
 import { ViewGroupSection } from '../ui/ViewGroupSection';
 import { getDeviceTzid } from '../ui/timeFormat';
+import { useTheme } from '../ui/theme';
+import type { ThemeColors } from '../ui/theme';
 
 /** 视图坐标：挂载时确定一次（now 与范围不随后续时间流逝漂移；刷新由响应式查询驱动） */
 interface TodayViewState {
@@ -31,6 +33,10 @@ interface TodayViewState {
 }
 
 export default function TodayScreen() {
+  // 切片 24（§7.36）：颜色走全局 Token（夜间模式），深浅色跟随系统。
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+
   const [viewState] = useState<TodayViewState>(() => {
     const tzid = getDeviceTzid();
     const nowMs = Date.now();
@@ -159,44 +165,46 @@ export default function TodayScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    paddingHorizontal: 16,
-    paddingTop: 48,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-  },
-  headerLink: {
-    fontSize: 13,
-    color: '#2563eb',
-  },
-  errorText: {
-    color: '#dc2626',
-    fontSize: 12,
-    marginBottom: 8,
-  },
-  emptyWrap: {
-    alignItems: 'center',
-  },
-  recordButton: {
-    marginTop: 8,
-    borderWidth: 1,
-    borderColor: '#2563eb',
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  recordButtonText: {
-    fontSize: 13,
-    color: '#2563eb',
-  },
-});
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      paddingHorizontal: 16,
+      paddingTop: 48,
+    },
+    headerRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 12,
+    },
+    headerTitle: {
+      fontSize: 20,
+      fontWeight: '600',
+    },
+    headerLink: {
+      fontSize: 13,
+      color: c.primary,
+    },
+    errorText: {
+      color: c.danger,
+      fontSize: 12,
+      marginBottom: 8,
+    },
+    emptyWrap: {
+      alignItems: 'center',
+    },
+    recordButton: {
+      marginTop: 8,
+      borderWidth: 1,
+      borderColor: c.primary,
+      borderRadius: 8,
+      paddingHorizontal: 16,
+      paddingVertical: 8,
+    },
+    recordButtonText: {
+      fontSize: 13,
+      color: c.primary,
+    },
+  });
+}

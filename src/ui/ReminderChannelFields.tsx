@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import ChannelPresetPicker from './ChannelPresetPicker';
@@ -13,6 +13,8 @@ import type { ReminderFormErrors, ReminderFormValues } from './reminderForm';
 import { resolveChannelPreset } from '../domain/channelPreset';
 import type { ChannelPreset } from '../domain/channelPreset';
 import { parseAppriseFormFields } from './reminderForm';
+import { useTheme } from './theme';
+import type { ThemeColors } from './theme';
 
 /**
  * 提醒渠道选择与配置输入（切片 16 阶段 3；切片 17 阶段 2 增加预设选择，§7.27；
@@ -36,6 +38,8 @@ export default function ReminderChannelFields({
   errors,
   onPatch,
 }: ReminderChannelFieldsProps) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const hasNetwork = values.channels.some(isNetworkReminderChannel);
 
   const applyPreset = (preset: ChannelPreset): void => {
@@ -183,65 +187,67 @@ export default function ReminderChannelFields({
   );
 }
 
-const styles = StyleSheet.create({
-  fieldRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 10,
-    flexWrap: 'wrap',
-  },
-  segment: {
-    // 切片 21（AGENTS.md §7.32）：自适应宽度，禁止 flex:1 导致大字体下折行/截断；
-    // 行容器 fieldRow 已有 flexWrap 兜底换行。
-    flexGrow: 0,
-    flexShrink: 1,
-    minWidth: 64,
-    borderWidth: 1,
-    borderColor: '#d0d0d0',
-    borderRadius: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    alignItems: 'center',
-    backgroundColor: '#fff',
-  },
-  segmentSelected: {
-    borderColor: '#1976d2',
-    backgroundColor: '#e3f2fd',
-  },
-  segmentText: {
-    fontSize: 13,
-    color: '#555',
-  },
-  segmentTextSelected: {
-    color: '#1976d2',
-    fontWeight: '600',
-  },
-  label: {
-    fontSize: 13,
-    color: '#666',
-  },
-  boundaryNotice: {
-    fontSize: 12,
-    color: '#9e9e9e',
-    marginBottom: 8,
-  },
-  urlInput: {
-    borderWidth: 1,
-    borderColor: '#d0d0d0',
-    borderRadius: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    fontSize: 15,
-    backgroundColor: '#fff',
-    marginBottom: 8,
-  },
-  inputError: {
-    borderColor: '#c62828',
-  },
-  errorText: {
-    fontSize: 12,
-    color: '#c62828',
-    marginBottom: 8,
-  },
-});
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    fieldRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      marginBottom: 10,
+      flexWrap: 'wrap',
+    },
+    segment: {
+      // 切片 21（AGENTS.md §7.32）：自适应宽度，禁止 flex:1 导致大字体下折行/截断；
+      // 行容器 fieldRow 已有 flexWrap 兜底换行。
+      flexGrow: 0,
+      flexShrink: 1,
+      minWidth: 64,
+      borderWidth: 1,
+      borderColor: c.border,
+      borderRadius: 6,
+      paddingVertical: 8,
+      paddingHorizontal: 12,
+      alignItems: 'center',
+      backgroundColor: c.card,
+    },
+    segmentSelected: {
+      borderColor: c.primary,
+      backgroundColor: c.card,
+    },
+    segmentText: {
+      fontSize: 13,
+      color: c.textMuted,
+    },
+    segmentTextSelected: {
+      color: c.primary,
+      fontWeight: '600',
+    },
+    label: {
+      fontSize: 13,
+      color: c.textMuted,
+    },
+    boundaryNotice: {
+      fontSize: 12,
+      color: c.textMuted,
+      marginBottom: 8,
+    },
+    urlInput: {
+      borderWidth: 1,
+      borderColor: c.border,
+      borderRadius: 6,
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      fontSize: 15,
+      backgroundColor: c.card,
+      marginBottom: 8,
+    },
+    inputError: {
+      borderColor: c.danger,
+    },
+    errorText: {
+      fontSize: 12,
+      color: c.danger,
+      marginBottom: 8,
+    },
+  });
+}

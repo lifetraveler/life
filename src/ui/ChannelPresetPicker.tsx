@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
@@ -10,6 +10,8 @@ import {
   matchesChannelPreset,
 } from './reminderForm';
 import type { ReminderFormValues } from './reminderForm';
+import { useTheme } from './theme';
+import type { ThemeColors } from './theme';
 
 /**
  * 渠道预设选择器（切片 17 阶段 2，AGENTS.md §7.27）：
@@ -35,6 +37,8 @@ export default function ChannelPresetPicker({
   onUseCustom,
 }: ChannelPresetPickerProps) {
   const router = useRouter();
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [presets, setPresets] = useState<ChannelPreset[] | null>(null);
   const [expanded, setExpanded] = useState(false);
 
@@ -142,79 +146,81 @@ export default function ChannelPresetPicker({
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    marginBottom: 10,
-  },
-  label: {
-    fontSize: 13,
-    color: '#666',
-    marginBottom: 4,
-  },
-  selector: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderWidth: 1,
-    borderColor: '#d0d0d0',
-    borderRadius: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    backgroundColor: '#fff',
-  },
-  selectorText: {
-    fontSize: 15,
-    color: '#111',
-    flex: 1,
-    marginRight: 8,
-  },
-  chevron: {
-    fontSize: 13,
-    color: '#888',
-  },
-  optionList: {
-    borderWidth: 1,
-    borderColor: '#d0d0d0',
-    borderRadius: 6,
-    marginTop: 6,
-    backgroundColor: '#fafafa',
-  },
-  optionRow: {
-    paddingVertical: 9,
-    paddingHorizontal: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e0e0e0',
-  },
-  optionRowSelected: {
-    backgroundColor: '#e3f2fd',
-  },
-  optionTextCol: {
-    gap: 2,
-  },
-  optionName: {
-    fontSize: 14,
-    color: '#111',
-  },
-  optionSummary: {
-    fontSize: 12,
-    color: '#888',
-  },
-  emptyText: {
-    fontSize: 12,
-    color: '#9e9e9e',
-    paddingVertical: 9,
-    paddingHorizontal: 10,
-  },
-  manageRow: {
-    paddingVertical: 9,
-    paddingHorizontal: 10,
-  },
-  manageText: {
-    fontSize: 13,
-    color: '#1976d2',
-  },
-  loadingRow: {
-    paddingVertical: 10,
-    alignItems: 'flex-start',
-  },
-});
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      marginBottom: 10,
+    },
+    label: {
+      fontSize: 13,
+      color: c.textMuted,
+      marginBottom: 4,
+    },
+    selector: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      borderWidth: 1,
+      borderColor: c.border,
+      borderRadius: 6,
+      paddingVertical: 8,
+      paddingHorizontal: 10,
+      backgroundColor: c.card,
+    },
+    selectorText: {
+      fontSize: 15,
+      color: c.text,
+      flex: 1,
+      marginRight: 8,
+    },
+    chevron: {
+      fontSize: 13,
+      color: c.textMuted,
+    },
+    optionList: {
+      borderWidth: 1,
+      borderColor: c.border,
+      borderRadius: 6,
+      marginTop: 6,
+      backgroundColor: c.card,
+    },
+    optionRow: {
+      paddingVertical: 9,
+      paddingHorizontal: 10,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.border,
+    },
+    optionRowSelected: {
+      backgroundColor: c.border,
+    },
+    optionTextCol: {
+      gap: 2,
+    },
+    optionName: {
+      fontSize: 14,
+      color: c.text,
+    },
+    optionSummary: {
+      fontSize: 12,
+      color: c.textMuted,
+    },
+    emptyText: {
+      fontSize: 12,
+      color: c.textMuted,
+      paddingVertical: 9,
+      paddingHorizontal: 10,
+    },
+    manageRow: {
+      paddingVertical: 9,
+      paddingHorizontal: 10,
+    },
+    manageText: {
+      fontSize: 13,
+      color: c.primary,
+    },
+    loadingRow: {
+      paddingVertical: 10,
+      alignItems: 'flex-start',
+    },
+  });
+}

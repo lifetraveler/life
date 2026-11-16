@@ -8,6 +8,8 @@ import EmptyState from '../ui/EmptyState';
 import { TYPE_LABELS, formatTimestamp } from '../ui/display';
 import TagChip from '../ui/TagChip';
 import { useTagDisplayMode } from '../ui/useTagDisplayMode';
+import { useTheme } from '../ui/theme';
+import type { ThemeColors } from '../ui/theme';
 
 /**
  * 待办列表（切片 14 阶段 5i）：无时间（startAt === null）条目的独立展示入口，
@@ -16,6 +18,10 @@ import { useTagDisplayMode } from '../ui/useTagDisplayMode';
  * 本页只读，操作（补时间/归档/删除）在详情页完成。
  */
 export default function TodosScreen() {
+  // 切片 24（§7.36）：颜色走全局 Token（夜间模式），深浅色跟随系统。
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+
   const router = useRouter();
   const [items, setItems] = useState<ItemWithRelations[]>([]);
   // 切片 14 阶段 3：标签展示样式（设置页全局切换）
@@ -52,7 +58,7 @@ export default function TodosScreen() {
         ) : null}
       </Pressable>
     ),
-    [router, tagDisplayMode],
+    [router, styles, tagDisplayMode],
   );
 
   return (
@@ -67,30 +73,32 @@ export default function TodosScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#ffffff',
-    paddingHorizontal: 16,
-    paddingTop: 16,
-  },
-  row: {
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e5e5e5',
-  },
-  rowTitle: {
-    fontSize: 15,
-    marginBottom: 2,
-  },
-  rowMeta: {
-    fontSize: 12,
-    color: '#888888',
-    marginBottom: 6,
-  },
-  tagRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-  },
-});
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: c.background,
+      paddingHorizontal: 16,
+      paddingTop: 16,
+    },
+    row: {
+      paddingVertical: 10,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.border,
+    },
+    rowTitle: {
+      fontSize: 15,
+      marginBottom: 2,
+    },
+    rowMeta: {
+      fontSize: 12,
+      color: c.textMuted,
+      marginBottom: 6,
+    },
+    tagRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 6,
+    },
+  });
+}
