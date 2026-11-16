@@ -105,6 +105,17 @@
 - **标题保护块在新意图下会误留旧标题**：聊天实测「起床」标题沿用至「后天下午3点开会」卡
   （内容行正确并入两段原词）——切片 23 既有行为，阶段 1 已记录为已知观察，超本卡范围未动。
   后续如做对话式新建流（切片 25 认真模式同域）可一并处理。
+- **手动深浅色切换（用户 2026-11-16 提出「做一个可以切换深色、浅色的配置」，当场决定记档不立项）**：
+  切片 24「明确不做」项转正式需求。范围确认时已定的设计草案：
+  ①存储——`app_settings` 新列 `theme_mode`（`'system' | 'light' | 'dark'`，默认 `'system'`），
+  schema v12 addColumns 迁移（沿 v10/v11 惯例，旧数据平滑回退，不清库，不引新依赖）；
+  ②解析——`src/ui/theme.ts` 加模块级偏好 store（`useSyncExternalStore` 订阅，根布局启动时
+  经 Repository 读入），`useTheme()` 返回 resolved scheme（手动偏好覆盖系统值），本切片全部
+  50+ 消费点（含 StatusBar、FilterSheet 遮罩、MonthPickerPopover）零改动自动跟随；
+  ③UI——`profile.tsx` 新增「外观」区块，三选 radio（跟随系统/浅色/深色，沿标签展示样式区先例），
+  即点即生效、重启保持；④验收——三档即时生效、重启保持、「跟随系统」档与切片 24 行为一致、
+  expo-doctor 确认 v12 迁移真机执行。约束：UI 不碰 WatermelonDB（数据走 Repository），
+  不碰冻结区，widget 深色适配仍不做。立项时编号待定（建议插为下一切片，backlog §2 顺延）。
 - rgba 2 处非 hex 值按任务卡口径接受（见 §2 审计节）。
 - backlog U1/U2/U3 手验项不受本切片影响，仍开放；L1–L13 未动。
 - 契约文档无变更：§7.36 落在 AGENTS.md，docs/contracts/ui.md 正文未动（本切片是 v0.26
