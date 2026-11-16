@@ -6,9 +6,9 @@
 
 ## 1. 已立项未开工
 
-- **切片 24：夜间模式与视觉清理**——任务卡 `tasks/slice-24.md` 已建（未提交）；AGENTS.md v0.26（§7.36 主题与视觉规范）随切片 24 一并提交（用户 2026-11-16 决定）。
-  - 阶段 1 `src/ui/theme.ts` Token + `useTheme()` + 两个逻辑修复；阶段 2 全局硬编码色替换 + StatusBar 跟随；阶段 3 `adb shell cmd uimode night yes/no` 真机验收。
-  - 打包修复：FlashPreviewCard 时间行日期重复（slice-23 遗留 5）；AI 上下文合并带入上一轮 tags（slice-23 遗留 2）。
+- ~~**切片 24：夜间模式与视觉清理**~~（✅ 已完成，关闭于切片 24，见 `tasks/slice-24-closeout.md`）
+  - ~~阶段 1 `src/ui/theme.ts` Token + `useTheme()` + 两个逻辑修复；阶段 2 全局硬编码色替换 + StatusBar 跟随；阶段 3 `adb shell cmd uimode night yes/no` 真机验收。~~
+  - ~~打包修复：FlashPreviewCard 时间行日期重复（slice-23 遗留 5）；AI 上下文合并带入上一轮 tags（slice-23 遗留 2）。~~
 
 ## 2. 待编号路线（用户 2026-11-16 委托按进度/复杂度排序；每切片开工仍按 §7.1 逐切片确认）
 

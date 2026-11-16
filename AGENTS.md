@@ -298,5 +298,5 @@ schema 版本 5→6，新增/修改如下：
 ## 8. 当前切片
 
 - **已完成**：切片 1–23 全部收尾合并（main，最新 merge `7a414e6`；schema v11，版本 0.23.0/versionCode 10）。切片 23 详情见 `tasks/slice-23-closeout.md` 与 `tasks/slice-23-phase2-3-feedback.md`，各切片历史见对应 `tasks/slice-NN.md` / `tasks/slice-NN-closeout.md`。
-- **当前/下一切片**：切片 24 夜间模式与视觉清理（任务卡 `tasks/slice-24.md`，契约依据 §7.36）。`tasks/slice-24.md` 与本文件 v0.26 修订（§7.36 + 本节精简）随切片 24 一并提交。
+- **当前切片**：切片 24 夜间模式与视觉清理已完成合并（提交索引与验收详见 `tasks/slice-24-closeout.md`；v0.26 修订与任务卡已随切片入库）。下一未完成项以 `tasks/backlog.md` 为准。
 - **未完成项以 `tasks/backlog.md` 为准**（2026-11-16 起的惯例）：候选排序（切片 25 认真模式 → 26 AI 透明度 → 27 系统日历 live 直读【先回答调研报告的 4 个开放问题】→ 28 备份/同步 WebDAV【设计讨论先行】+ 插队候选「变更 B 网络渠道后台送达」）、遗留 L1–L13、手验项 U1–U3、契约化已知限制均记录在 backlog，本节不再罗列候选清单。每切片 closeout 同步更新 backlog.md（划掉完成项并注明关闭切片号）并保持本节精简。
