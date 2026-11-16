@@ -233,17 +233,24 @@ export function useFlashChat() {
   }, [messages]);
 
   const push = useCallback((role: 'user' | 'assistant', text: string): void => {
-    setMessages((prev) => [...prev, { id: nextIdRef.current, role, text, kind: 'text' }]);
+    // 切片 25 阶段 2 修补（真机缺陷，m00248）：id 必须在 updater 外捕获为常量。
+    // 旧写法在 updater 内读 nextIdRef.current（自增在外）——React 18 并发重放
+    // 队列时（MuMu fabric 真机已复现 FlatList 重复 key '.$2'，澄清轮两条相邻
+    // push 撞 id）两条消息会读到同一 id；捕获为闭包常量后重放复用同一常量，
+    // id 永不相撞。pushCard/pushConfirm 同模式。
+    const id = nextIdRef.current;
     nextIdRef.current += 1;
+    setMessages((prev) => [...prev, { id, role, text, kind: 'text' }]);
   }, []);
 
   /** 追加结果卡片消息（切片 22 阶段 1，AGENTS.md §7.34）。 */
   const pushCard = useCallback((text: string, cardPayload: FlashCardPayload): void => {
+    const id = nextIdRef.current;
+    nextIdRef.current += 1;
     setMessages((prev) => [
       ...prev,
-      { id: nextIdRef.current, role: 'assistant', text, kind: 'card', cardPayload },
+      { id, role: 'assistant', text, kind: 'card', cardPayload },
     ]);
-    nextIdRef.current += 1;
   }, []);
 
   /** 原地刷新指定条目的结果卡片快照（阶段 3：推迟/编辑后时间与提醒联动可见）。 */
@@ -463,8 +470,8 @@ export function useFlashChat() {
 
   /**
    * 追加认真模式确认消息（拦截轮专用）。消息 id 在 setMessages updater 外先
-   * 捕获：push() 既有模式在 updater 内读 nextIdRef.current，相邻两次 push 存在
-   * updater 惰性重放导致重复 id 的隐患——新代码不扩散该模式（旧 push 不动）。
+   * 捕获（切片 25 阶段 2 已把 push()/pushCard() 一并改为该模式）——updater 内
+   * 读 nextIdRef.current 在 React 18 并发重放下会让相邻消息撞 id（真机已复现）。
    */
   const pushConfirm = useCallback(
     (

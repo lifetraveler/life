@@ -22,7 +22,7 @@
  * bufferedHistory 的提交（应用）与丢弃（放弃）及 title+content 双改合并。
  */
 
-import { createElement } from 'react';
+import { StrictMode, createElement } from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 
 import { itemRepository } from '../../data';
@@ -642,5 +642,73 @@ describe('useFlashChat：认真模式 history 提交（远端路径）', () => {
       { field: 'title', label: '标题', from: '项目周会', to: '项目评审会' },
       { field: 'content', label: '内容', from: '', to: '地点改为线上会议' },
     ]);
+  });
+});
+
+describe('useFlashChat：消息 id 唯一性（切片 25 阶段 2 真机缺陷修补）', () => {
+  /**
+   * 真机缺陷回归（m00248，MuMu fabric 实测）：push()/pushCard() 旧写法在
+   * setMessages updater 内读 nextIdRef.current（自增在外），React 18 并发重放
+   * 更新队列时相邻两条消息读到同一 id，FlatList 报「two children with the same
+   * key '.$2'」（澄清轮 user + 反问两条相邻 push 必现，logcat 15:17 两次复现）。
+   * jest 环境不触发 fabric 的队列重放路径（无法红绿复现），本 describe 以
+   * StrictMode 施压并固化不变量：任意轮次后全部消息 id 唯一——结构性修复
+   * （id 在 updater 外捕获为闭包常量）在任何重放语义下均成立。
+   */
+  let latestStrict: ReturnType<typeof useFlashChat> | undefined;
+
+  function StrictProbe(): null {
+    latestStrict = useFlashChat();
+    return null;
+  }
+
+  async function mountStrict(): Promise<void> {
+    latestStrict = undefined;
+    await act(async () => {
+      TestRenderer.create(createElement(StrictMode, null, createElement(StrictProbe)));
+    });
+  }
+
+  function strictHook(): ReturnType<typeof useFlashChat> {
+    if (latestStrict === undefined) throw new Error('hook 未挂载');
+    return latestStrict;
+  }
+
+  function expectUniqueIds(): void {
+    const ids = strictHook().messages.map((message) => message.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  }
+
+  it('澄清轮（相邻 user+assistant push）：全部消息 id 唯一', async () => {
+    await mountStrict();
+    await act(async () => {
+      await strictHook().send('提醒我吃药');
+    });
+    expect(strictHook().messages).toHaveLength(3); // user + 反问 + 降级说明
+    expectUniqueIds();
+  });
+
+  it('出卡轮（push + pushCard 相邻）：全部消息 id 唯一', async () => {
+    await mountStrict();
+    await act(async () => {
+      await strictHook().send('明天上午8点叫我起床');
+    });
+    expect(strictHook().messages).toHaveLength(2);
+    expectUniqueIds();
+  });
+
+  it('拦截轮（push + pushConfirm 相邻）：全部消息 id 唯一且 confirm 载荷正常', async () => {
+    repo.getSettings.mockResolvedValue(CAREFUL_SETTINGS);
+    await mountStrict();
+    await act(async () => {
+      await strictHook().send('明天开会');
+    });
+    await act(async () => {
+      await strictHook().send('地点在第三会议室');
+    });
+    const messages = strictHook().messages;
+    expect(messages).toHaveLength(4);
+    expectUniqueIds();
+    expect(messages.filter((message) => message.kind === 'confirm')).toHaveLength(1);
   });
 });

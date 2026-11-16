@@ -3,17 +3,17 @@
 - 日期：2026-11-16
 - 阶段：Phase 2 / 共 3（阶段 1 为 schema v12 + 设置管道 + 域修复；阶段 3 为真机验收矩阵）
 - 分支：`task/slice-25`（基点 main @ 3685e52；阶段 1 提交 `0dc462c` + 反馈文档 `9351297`）
-- 阶段提交：`feat(s25): 阶段2 认真模式 Chat 确认交互 + 设置页开关`（5 文件，+868/-15；本反馈文件随该提交入库，hash 见 git log）
-- 状态：⏸ 暂停等待阶段 3 真机验收（无遗留缺陷；已披露边界见 §三）
+- 阶段提交：`feat(s25): 阶段2 认真模式 Chat 确认交互 + 设置页开关`（dc3377c，6 文件 +916/-15）+ 真机缺陷修补提交（见 §六，hash 见 git log）
+- 状态：⏸ 暂停等待阶段 3 真机验收矩阵（MuMu 模拟器冒烟验收已完成，见 §六；已披露边界见 §三）
 
 ## 一、成果定性：达标
 
 | 维度 | 结果 |
 | --- | --- |
 | 类型安全 | `npx tsc --noEmit` 0 error |
-| 测试 | `npx jest --runInBand` 79 套件 / 1084 用例全过（基线 79/1073 → +0 套件 +11 用例，只增不减） |
+| 测试 | `npx jest --runInBand` 79 套件 / 1087 用例全过（基线 79/1073 → +0 套件 +14 用例：阶段 2 用例 11 + 修补回归 3，只增不减） |
 | expo-doctor | 16/18，2 失败均为预存基线（android/ CNG 同步提示 + RN Directory 元数据），无新增 |
-| 真机 | 未做（阶段 3 场景矩阵） |
+| 真机 | MuMu 模拟器（SM-S9260 profile / Android 15 / fabric）冒烟验收完成：v11→v12 迁移实测 + 缺陷修补回归 + 核心场景通过（§六）；阶段 3 完整矩阵待做 |
 
 ## 二、范围落点（阶段提交，5 文件）
 
@@ -29,7 +29,7 @@
 
 1. **「编辑轮」谓词补齐**：阶段 2 指令字面只写「carefulMode 开 && 当前有展示中的卡片 && diffDraftChanges 命中 title/content」，缺「编辑轮」谓词。按任务卡阶段 2-2 措辞（「编辑轮 diffDraftChanges 命中」）与 §7.37 拦截范围冻结补齐：`isEditTurn = matchesEditIntent(input) || !diff.timeChanged`——hook 层拿不到 `parsed.expressed`，以「编辑词轮 ∨ 本轮未表达新时刻」代理 chat.ts 标题保护三支中的前两支；「带新时刻又带新主题词 = 全新意图不拦」（任务卡阶段 3 矩阵 #2/#4）天然成立。
 2. **已知边界（阶段 3 真机观察点，非缺陷）**：① 远端路径一轮同时改时间+标题/内容会被代理判为全新意图不拦（误放行 = 切片 24 旧行为，可接受）；② 同时间重述+新标题（如远端把 10:00 重发一遍但改了标题）会被误拦（误拦截可「放弃修改」恢复旧卡）。两者均为代理谓词的固有代价，待 backlog 评估是否上收 expressed 集合到 hook 层。
-3. **超字面披露（防御性扩展）**：`applyEdit`（编辑弹窗回写）与 `confirmSave`（保存落地）入口也取消未决 pending——否则保存后应用 stale pendingDraft 会用旧数据覆盖刚保存的状态；`pushConfirm` 的消息 id 在 setMessages updater 外先捕获再自增，不扩散既有 `push()` 在 updater 内读 `nextIdRef.current` 的模式（相邻两次 push 存在 updater 惰性重放导致重复 id 的隐患，旧代码不动）。
+3. **超字面披露（防御性扩展）**：`applyEdit`（编辑弹窗回写）与 `confirmSave`（保存落地）入口也取消未决 pending——否则保存后应用 stale pendingDraft 会用旧数据覆盖刚保存的状态；`pushConfirm` 的消息 id 在 setMessages updater 外先捕获再自增。该隐患后在 MuMu 真机实锤为必然缺陷，既有 `push()`/`pushCard()` 已同模式修复——见 §六。
 4. **设置页互斥键扩权**：profile.tsx 小组件区块的 `widgetSavingKey` 改名 `settingsSavingKey` 并覆盖认真模式行——app_settings 为单行读改写，两个区块并发写会丢字段（另一区块的 patch 不含对方键值）。
 
 ## 四、关键设计落点（阶段 3 消费面）
@@ -40,13 +40,36 @@
 - **拦截范围**：仅 title/content；时间（窄规则与解析轮）、提醒、渠道、标签均不拦；carefulMode 读取失败回退 false = 默认模式行为与切片 24 完全一致。
 - **冻结面零 diff 核实**：`AiParser.parse` 签名零改动、`docs/contracts/ai.md` 零改动、`src/notifications/` 与 `src/domain/recurrence/` 零 diff、零新依赖、无 `any`/`as any`。
 
-## 五、真机验收清单（阶段 3 执行，本阶段预置）
+## 五、真机验收清单（阶段 3 执行，本阶段预置；前三条已在 MuMu 冒烟中覆盖，见 §六）
 
 - 设置页开关：AI 配置区块「认真模式」可开可关、即时生效、重启保持；与小组件开关互斥（保存中另一行 Switch disabled）
 - 任务卡阶段 3 场景矩阵 6 条（默认关回归 → 开启拦截/应用/放弃/新输入取消 → 域修复回归）
 - Chat 确认卡深浅色对比度（Token 化）；busy 转圈期间确认卡 chips 呈禁用态
 
-## 六、教训（closeout 时汇总）
+## 六、真机缺陷修补（用户报告 m00248）与 MuMu 模拟器验收
 
+**缺陷**：「闪电录入 提醒我吃药，提交后，系统报错。无法继续录入其他内容」。MuMu 模拟器 logcat 实锤：澄清轮（user + 反问两条相邻 push）必现 `Encountered two children with the same key '.$2'`（15:17 两次复现，reload 后旧 bundle 仍再报），dev 构建 LogBox 报错遮挡全屏 → 用户感知「系统报错、无法继续」。
+
+**根因**：`push()`/`pushCard()` 在 `setMessages` updater 内读 `nextIdRef.current`（自增在 updater 外）——React 18 并发队列重放时相邻两条消息读到同一 id；阶段 2 新增的 `pushConfirm` 已规避该模式，旧 push/pushCard 为切片 22/23 遗留。
+
+**修补**（3 文件，随本反馈文件提交）：
+- `src/ui/useFlashChat.ts`：`push`/`pushCard` 的消息 id 改为 updater 外捕获为闭包常量再自增（任何重放语义下 id 恒不相撞），注释说明真机缺陷；`pushConfirm` 注释同步。
+- `src/ui/__tests__/useFlashChat.test.ts`：+describe「消息 id 唯一性（切片 25 阶段 2 真机缺陷修补）」3 用例（StrictMode 施压：澄清轮/出卡轮/拦截轮全消息 id 唯一）。jest 环境不触发 fabric 队列重放路径，无法红绿复现真机缺陷——本 describe 固化不变量，结构性修复在任意重放语义下成立。
+
+**MuMu 模拟器验收记录**（127.0.0.1:7555，SM-S9260 profile / Android 15 / fabric，bundle 由本机 Metro 经 `adb reverse tcp:8081 tcp:8081` 提供）：
+- 新 bundle 启动：`Migrating from version 11 to 12... Migration successful`——v12 迁移真库实测通过。
+- 澄清轮（缺陷回归）：`提醒我吃药` → 反问 + 降级注，**无重复 key 报错**；续答 `明天上午10点` 出卡（吃药 2026-11-17 10:00）——「无法继续录入」消除。
+- 默认模式（关）：`地点在第三会议室` → 直接更新卡片（标题保护生效、内容行可见），无确认卡。
+- 认真模式（开）：`地点在第五会议室` → 拦截出确认卡（内容 旧→新 摘要 + 应用修改/放弃修改 chips）且旧预览卡不动；应用 → 卡片更新、chips 原地消失（resolved）；二次拦截 diff 基线 = 已应用草稿；放弃 → 「已放弃本次修改，卡片保持原样。」草稿不动。
+- 时间修改不拦：`改成明天上午11点` → 「已改为 2026-11-17 11:00（请核对卡片）」。
+- 待确认新输入取消：拦截未决时输入 `明天下午3点开会` → pending 原地 resolved（0 残留 chips）、新意图出卡（开会 15:00）且标题不被旧卡污染（§7.37 域修复实测）。已知观察项：新卡 content 随 merge 携带旧卡内容（切片 24 merge 语义，content 非 expressed 字段，阶段 2 范围外，backlog 评估）。
+- 保存链路：确认添加 → 结果卡（分类/时间/内容/+15分钟/+1小时 chips）→ 计划页明天分组可见。
+- 开关持久化：认真模式开 → force-stop 重启 → Switch 仍为开。
+- 全程 logcat（15:41 起）0 次 same key / FATAL / Uncaught / UnableToResolve；验收后测试数据已删除。
+- 环境注记：Metro（`npx expo start --dev-client`）+ `adb reverse tcp:8081 tcp:8081` 需在位；adb server 曾被 wedged 进程占死 5037（`Stop-Process` 后重连 MuMu 127.0.0.1:7555 恢复）；Android 15 模拟器 `adb shell input text` 支持中文直输。
+
+## 七、教训（closeout 时汇总）
+
+- **setMessages updater 必须是纯函数、不得读可变 ref**：id 这类「生成即定」的值要在 updater 外捕获为常量——React 18 并发重放会多次执行 updater，updater 内读 `nextIdRef.current` 会让相邻消息撞 id；jsdom/jest 测不出来，真机 fabric 才现形，logcat 是这类缺陷的唯一观测面。
 - **jest.clearAllMocks 不清 mockImplementation**：跨 describe 共用 store/fetch mock 时，每个 beforeEach 必须显式复位默认 implementation（无 Key），否则远端用例配置泄漏到后续本地用例（全走远端路径，失败模式隐蔽）。
 - **helper 提升到模块级**：describe 内定义的断言 helper 对后续 describe 不可见（测试文件按 describe 分块追加时的固定坑），沿用既有 `assistantTexts()` 模块级先例。
