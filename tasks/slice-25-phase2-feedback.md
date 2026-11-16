@@ -67,6 +67,7 @@
 - 开关持久化：认真模式开 → force-stop 重启 → Switch 仍为开。
 - 全程 logcat（15:41 起）0 次 same key / FATAL / Uncaught / UnableToResolve；验收后测试数据已删除。
 - 环境注记：Metro（`npx expo start --dev-client`）+ `adb reverse tcp:8081 tcp:8081` 需在位；adb server 曾被 wedged 进程占死 5037（`Stop-Process` 后重连 MuMu 127.0.0.1:7555 恢复）；Android 15 模拟器 `adb shell input text` 支持中文直输。
+- **用户报告场景复现（2026-11-16 17:0x，用户截图 m00504 + MuMu 复现实锤，非缺陷、设计边界）**：保存（确认添加）后 `historyRef=[]`+`draftRef=null`（切片 22 设计），随后「吃烤鸭吧」被解析为**全新条目**（远端注记「已解析，请核对卡片」实锤 previousDraft=null——AI 收到的上下文里根本没有已保存条目，提示词无法补救）；后续澄清轮触发认真模式确认卡为正常拦截。与 §7.37「待确认期间任何新输入取消待确认」叠加，用户体感「想改已保存那条的内容，却新建了条目」。已保存条目目前仅支持时间修改（窄规则）与快捷顺延，content/category/tags 修改只能走详情页编辑。backlog 候选：①保存后上下文保留或保存后提示语「已保存，继续输入将新建条目」；②已保存条目内容的对话式编辑（新切片）；③待确认期间补充语义合并（与 §7.37 冻结交互冲突，需变更提案）。
 
 ## 七、教训（closeout 时汇总）
 
