@@ -313,5 +313,20 @@ export default schemaMigrations({
         }),
       ],
     },
+    {
+      // 切片 26 阶段 1（AGENTS.md §7.38 AI 透明度）：v13 app_settings 加列；
+      // v2–v12 step 保持原样，不得修改。
+      // - 单条 addColumns，零 unsafeExecuteSql、零 UPDATE：show_ai_usage 非可选
+      //   boolean 列，addColumns 对既有行自动回填类型零值 false（= 不显示，
+      //   v12 careful_mode 同款先例，无需 UPDATE）；
+      // - 列定义与 schema.ts 的 tableSchema 严格一致（漂移会被模式不匹配检测抛错）。
+      toVersion: 13,
+      steps: [
+        addColumns({
+          table: 'app_settings',
+          columns: [{ name: 'show_ai_usage', type: 'boolean' }],
+        }),
+      ],
+    },
   ],
 });

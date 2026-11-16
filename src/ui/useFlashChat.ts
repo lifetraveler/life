@@ -53,6 +53,8 @@ import { buildFlashCardPayload } from '../domain/ai/cardPayload';
 import { runFlashTurn } from '../domain/ai/chat';
 import { diffDraftChanges } from '../domain/ai/editDiff';
 import type { DraftFieldChanges } from '../domain/ai/editDiff';
+import { formatAiUsageLine } from '../domain/ai/usage';
+import type { AiUsageSnapshot } from '../domain/ai/usage';
 import type { AiConfig } from '../domain/ai/configStore';
 import {
   computePostponedOnceAt,
@@ -430,16 +432,42 @@ export function useFlashChat() {
   // 切片 25 阶段 2（AGENTS.md §7.37）：认真模式确认流。
   // ---------------------------------------------------------------------------
 
-  /** 每轮拦截判定前重读认真模式开关（设置页即时生效）；读取失败回退默认模式=不拦。 */
-  const readCarefulMode = useCallback(async (): Promise<boolean> => {
+  /**
+   * 切片 26 阶段 2（AGENTS.md §7.38）：每轮解析后一次读取本轮生效设置——
+   * carefulMode 供认真模式拦截判定、showAiUsage 供用量摘要行。开关即时生效：
+   * 每轮重读（设置页改动下一轮即生效），重启保持由 app_settings 持久层保证。
+   * 读取失败回退默认：carefulMode=false（不拦）、showAiUsage=false（不显示）。
+   */
+  const readTurnSettings = useCallback(async (): Promise<{
+    carefulMode: boolean;
+    showAiUsage: boolean;
+  }> => {
     try {
       const settings = await itemRepository.getSettings();
-      return settings.carefulMode === true;
+      return {
+        carefulMode: settings.carefulMode === true,
+        showAiUsage: settings.showAiUsage === true,
+      };
     } catch (error) {
-      console.warn('[slice-25] 认真模式开关读取失败，回退默认模式', error);
-      return false;
+      console.warn('[slice-25/26] 本轮设置读取失败，回退默认', error);
+      return { carefulMode: false, showAiUsage: false };
     }
   }, []);
+
+  /**
+   * 切片 26 阶段 2（AGENTS.md §7.38）：用量摘要行——仅远端解析轮携带 usage
+   * （本地降级/无 Key 轮恒 null，不展示）且开关开启时，在 AI 回复消息尾追加
+   * 一行用量摘要（formatAiUsageLine 缺段自动省略；单价未配齐则无费用段）。
+   * 认真模式拦截轮无 AI 回复消息（send 内 pushConfirm 分支提前 return），
+   * 不追加用量行。
+   */
+  const pushUsageLine = useCallback(
+    (usage: AiUsageSnapshot | null, showAiUsage: boolean): void => {
+      if (usage === null || !showAiUsage) return;
+      push('assistant', formatAiUsageLine(usage));
+    },
+    [push],
+  );
 
   /**
    * 取消全部未决确认（resolved 原地标记，消息 id/FlatList key 稳定）。
@@ -535,6 +563,10 @@ export function useFlashChat() {
           history: historyRef.current,
           previousDraft: draftRef.current,
         });
+        // 切片 26 阶段 2（§7.38）：本轮生效设置一次读取（认真模式 + 用量展示两
+        // 开关；每轮重读即时生效，读取失败回退默认不拦/不显示）。原切片 25 的
+        // 拦截分支内懒读取并入此处——getSettings 由每轮最多两次降为一次。
+        const turnSettings = await readTurnSettings();
         // 切片 25 阶段 2（§7.37 认真模式）：仅拦「编辑意图导致 title 或 content
         // 变化」的轮次。守卫谓词——「当前有展示中的卡片」= 本轮开始 draftRef
         // 非空且非澄清待补（澄清轮无展示卡；澄清分支在下方先行处理，不受影响）；
@@ -549,9 +581,8 @@ export function useFlashChat() {
         ) {
           const diff = diffDraftChanges(turnStartDraft, result.draft);
           if (diff.titleChanged || diff.contentChanged) {
-            const carefulMode = await readCarefulMode();
             const isEditTurn = matchesEditIntent(input) || !diff.timeChanged;
-            if (carefulMode && isEditTurn) {
+            if (turnSettings.carefulMode && isEditTurn) {
               // 拦截：不出新卡（assistantNote 不进消息流）、不提交草稿与 history
               //（缓冲进确认载荷，应用确认时才提交），旧预览卡保持可见。
               pushConfirm(turnStartDraft, result.draft, result.historyAppend, diff);
@@ -575,10 +606,15 @@ export function useFlashChat() {
             // 降级说明不丢（§7.25 验收 5）：本地解析轮的反问也要能看出没走远端。
             push('assistant', result.assistantNote);
           }
+          // 切片 26（§7.38）：远端澄清轮同样在回复尾追加用量行（降级轮 usage
+          // 恒 null，不展示）。
+          pushUsageLine(result.usage, turnSettings.showAiUsage);
           return;
         }
         setDraft(result.draft);
         push('assistant', result.assistantNote);
+        // 切片 26（§7.38）：远端解析轮在 AI 回复消息尾追加一行用量摘要。
+        pushUsageLine(result.usage, turnSettings.showAiUsage);
       } catch (error) {
         console.warn('[slice-15] 解析失败', error);
         push(
@@ -589,7 +625,7 @@ export function useFlashChat() {
         setBusy(false);
       }
     },
-    [busy, push, applyEditToCard, applyEditToDraft, cancelPendingConfirm, readCarefulMode, pushConfirm],
+    [busy, push, applyEditToCard, applyEditToDraft, cancelPendingConfirm, readTurnSettings, pushUsageLine, pushConfirm],
   );
 
   /**

@@ -26,6 +26,9 @@ import { AiParseError } from './errors';
 import { isRecurrenceRule, isReminderChannelArray } from './guard';
 import { nextOccurrenceInstant } from './localFallback';
 import { AI_SYSTEM_PROMPT, buildHistoryBriefing, buildNowFacts } from './prompt';
+import { positivePriceOrNull, readAiUsageSnapshot, readAiUsageSnapshotTiered } from './usage';
+import type { AiUsageSnapshot } from './usage';
+import type { AiPlatform } from './configStore';
 import { daysInMonth, getZonedParts, resolveCivilTimeToInstant } from '../recurrence/civilTime';
 import type { RecurrenceRule } from '../recurrence/types';
 import type { ReminderChannel } from '../reminder';
@@ -38,6 +41,26 @@ export interface OpenAiCompatibleConfig {
   model: string;
   /** 请求超时毫秒数；缺省 20000 */
   timeoutMs?: number;
+  /**
+   * 每百万 tokens 输入/输出单价（切片 26 / §7.38，可选；正数才有效）。
+   * 两价齐备时按全价上界估算费用（不区分缓存折扣）；留空/非正数只出 token 段。
+   * platform === 'deepseek' 时改用下方峰谷分层六价（阶段 2b / v0.21）。
+   */
+  priceInputPerMillion?: number;
+  priceOutputPerMillion?: number;
+  /** 平台标识（阶段 2b / v0.21）；缺省/undefined 等价 custom（走全价上界路径）。 */
+  platform?: AiPlatform;
+  /**
+   * DeepSeek 峰谷分层单价（元/百万 tokens，可选；正数才有效）——
+   * 缓存命中/缓存未命中/输出 × 高峰/空闲 六档；仅 platform === 'deepseek'
+   * 时参与估算，非正数丢弃（守卫已在 configStore 层做，这里只取数）。
+   */
+  priceCachedPeak?: number;
+  priceCachedOffPeak?: number;
+  priceUncachedPeak?: number;
+  priceUncachedOffPeak?: number;
+  priceOutputPeak?: number;
+  priceOutputOffPeak?: number;
 }
 
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -307,8 +330,15 @@ export function wireToParsedItemDraft(
 export class OpenAICompatibleProvider implements AiParser {
   private readonly config: OpenAiCompatibleConfig;
   private readonly fetchImpl: FetchLike;
+  /** 峰谷分层判峰用时钟（阶段 2b；默认 Date.now，测试注入冻结时刻）。 */
+  private readonly nowImpl: () => number;
+  /**
+   * 切片 26（§7.38 D1）：usage 副通道存值——初始 null；parse() 进入即清空，
+   * 成功路径返回前才赋值，任何抛错点保持 null（不残留上一轮数值）。
+   */
+  private lastUsageSnapshot: AiUsageSnapshot | null = null;
 
-  constructor(config: OpenAiCompatibleConfig, fetchImpl: FetchLike = fetch) {
+  constructor(config: OpenAiCompatibleConfig, fetchImpl: FetchLike = fetch, now: () => number = Date.now) {
     if (
       config.baseUrl.trim().length === 0 ||
       config.apiKey.trim().length === 0 ||
@@ -318,6 +348,12 @@ export class OpenAICompatibleProvider implements AiParser {
     }
     this.config = config;
     this.fetchImpl = fetchImpl;
+    this.nowImpl = now;
+  }
+
+  /** 切片 26（§7.38）：usage 副通道只读暴露；chat.ts 经 FlashTurnResult 携带到 hook。 */
+  get lastUsage(): AiUsageSnapshot | null {
+    return this.lastUsageSnapshot;
   }
 
   /**
@@ -370,6 +406,9 @@ export class OpenAICompatibleProvider implements AiParser {
   }
 
   async parse(input: string, context: AiParseContext): Promise<ParsedItemDraft> {
+    // 切片 26（§7.38）：进入即清空上轮用量；本轮成功路径返回前才赋值，
+    // 任何抛错点（AiParseError 等）lastUsage 保持 null。
+    this.lastUsageSnapshot = null;
     if (input.trim().length === 0) {
       throw new AiParseError('empty-input', 'AI 解析输入为空');
     }
@@ -431,6 +470,29 @@ export class OpenAICompatibleProvider implements AiParser {
         throw new AiParseError('invalid-json', 'AI 响应体不是合法 JSON（已拦截，不做补救）');
       }
 
+      // 切片 26（§7.38）：usage 副通道提取——defensive 读取，形状偏差一律
+      // null（不炸解析主链）。阶段 2b（v0.21）：platform === 'deepseek' 走
+      // 峰谷分层六价估算（isPeakBeijing 判当前时段）；其余平台（含 undefined/
+      // custom/无效值）走 v0.20 全价上界两价路径。单价非正数在守卫层已丢弃。
+      const usageSnapshot =
+        this.config.platform === 'deepseek'
+          ? readAiUsageSnapshotTiered(
+              envelope,
+              {
+                cachedPeak: positivePriceOrNull(this.config.priceCachedPeak),
+                cachedOffPeak: positivePriceOrNull(this.config.priceCachedOffPeak),
+                uncachedPeak: positivePriceOrNull(this.config.priceUncachedPeak),
+                uncachedOffPeak: positivePriceOrNull(this.config.priceUncachedOffPeak),
+                outputPeak: positivePriceOrNull(this.config.priceOutputPeak),
+                outputOffPeak: positivePriceOrNull(this.config.priceOutputOffPeak),
+              },
+              this.nowImpl(),
+            )
+          : readAiUsageSnapshot(envelope, {
+              input: positivePriceOrNull(this.config.priceInputPerMillion),
+              output: positivePriceOrNull(this.config.priceOutputPerMillion),
+            });
+
       const content = extractContent(envelope);
       const candidateText = stripCodeFence(content);
       let candidate: unknown;
@@ -445,6 +507,9 @@ export class OpenAICompatibleProvider implements AiParser {
         throw new AiParseError('schema-mismatch', 'AI 返回 JSON 未通过 isRemoteDraftWire 校验（已拦截）');
       }
       const draft = wireToParsedItemDraft(wire, context);
+      // 切片 26（§7.38）：成功路径返回前赋值（两个 return 点都在其后——
+      // recurrence 分支与普通分支观察等价）。
+      this.lastUsageSnapshot = usageSnapshot;
       // 重复项的下一次发生完全由 (rule, now, tzid) 决定，模型给的时刻不携带
       // 额外信息——一律本地确定性重算，与 LocalFallbackProvider 语义对齐。
       if (draft.recurrence !== null) {

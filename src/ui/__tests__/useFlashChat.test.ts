@@ -30,6 +30,8 @@ import type { ItemRepository } from '../../data';
 import { SecureAiConfigStore } from '../../data/SecureAiConfigStore';
 import type { AiConfig } from '../../domain/ai/configStore';
 import type { RemoteDraftWire } from '../../domain/ai/openAiCompatible';
+import { formatAiUsageLine } from '../../domain/ai/usage';
+import type { AiUsageSnapshot } from '../../domain/ai/usage';
 import { useFlashChat } from '../useFlashChat';
 import type { ConfirmSaveResult, FlashChatMessage } from '../useFlashChat';
 import { formatItemDate, formatItemTime } from '../timeFormat';
@@ -710,5 +712,170 @@ describe('useFlashChat：消息 id 唯一性（切片 25 阶段 2 真机缺陷�
     expect(messages).toHaveLength(4);
     expectUniqueIds();
     expect(messages.filter((message) => message.kind === 'confirm')).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 切片 26 阶段 2（AGENTS.md §7.38）：AI 用量展示——远端解析轮在 AI 回复消息尾
+// 追加一行用量摘要（formatAiUsageLine）；开关关闭/本地降级轮/设置读取失败不
+// 展示；认真模式拦截轮无 AI 回复消息故无用量行（首轮的行不受影响）。
+// ---------------------------------------------------------------------------
+
+const USAGE_SNAPSHOT: AiUsageSnapshot = {
+  promptTokens: 1000,
+  completionTokens: 200,
+  cachedPromptTokens: 600,
+  estimatedCost: null,
+};
+
+/** 信封顶层 usage（切片 26 契约：usage 取自 chat-completions 信封，非模型 JSON）。 */
+const RAW_USAGE = {
+  prompt_tokens: 1000,
+  completion_tokens: 200,
+  prompt_tokens_details: { cached_tokens: 600 },
+};
+
+function makeEnvelopeWithUsage(wire: RemoteDraftWire, usage: unknown): string {
+  return JSON.stringify({
+    choices: [{ message: { content: JSON.stringify(wire) } }],
+    usage,
+  });
+}
+
+describe('useFlashChat：AI 用量展示（切片 26 阶段 2，§7.38）', () => {
+  /** 带 usage 的远端 fetch mock（轮次按序消费，全部回 200 + 同一 usage）。 */
+  function installUsageFetchMock(wires: RemoteDraftWire[]): void {
+    globalScope.fetch = jest.fn(async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(typeof init?.body === 'string' ? init.body : '{}') as CapturedRequest;
+      fetchBodies.push(body);
+      const wire = wires.shift() ?? makeWire({});
+      return {
+        ok: true,
+        status: 200,
+        text: async () => makeEnvelopeWithUsage(wire, RAW_USAGE),
+      } as unknown as Response;
+    });
+  }
+
+  /** 远端配置 + 指定开关状态（默认开启用量展示）。 */
+  function enableRemote(showAiUsage = true, extraSettings: Record<string, unknown> = {}): void {
+    SecureStoreClass.mockImplementation(() => ({
+      load: jest.fn(async () => REMOTE_CONFIG),
+    }));
+    repo.getSettings.mockResolvedValue({
+      ...DEFAULT_APP_SETTINGS,
+      showAiUsage,
+      ...extraSettings,
+    });
+  }
+
+  function usageLines(): string[] {
+    return assistantTexts().filter((text) => text.startsWith('📊 用量'));
+  }
+
+  afterEach(() => {
+    globalScope.fetch = originalFetch;
+  });
+
+  it('远端成功轮 + 开关开启：AI 回复后追加用量行（无费用段，紧跟解析说明）', async () => {
+    enableRemote();
+    installUsageFetchMock([makeWire({})]);
+    await mountHook();
+    await act(async () => {
+      await hook().send('明天上午十点项目周会');
+    });
+
+    const lines = usageLines();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toBe(formatAiUsageLine(USAGE_SNAPSHOT));
+    expect(lines[0]).toContain('输入 1000 tokens');
+    expect(lines[0]).toContain('缓存 600');
+    expect(lines[0]).toContain('输出 200');
+    expect(lines[0]).not.toContain('≈'); // 单价未配 → 无费用段
+    // 顺序：用量行是最后一条消息（紧跟解析说明之后），仍是普通文本消息。
+    const messages = hook().messages;
+    expect(messages[messages.length - 1]?.text).toBe(lines[0]);
+    expect(messages[messages.length - 1]?.kind).toBe('text');
+    // 主链不受影响：卡片照常出。
+    expect(hook().draft?.title).toBe('项目周会');
+  });
+
+  it('开关默认关闭（旧数据回退 false）：远端成功轮不追加用量行', async () => {
+    enableRemote(false);
+    installUsageFetchMock([makeWire({})]);
+    await mountHook();
+    await act(async () => {
+      await hook().send('明天上午十点项目周会');
+    });
+
+    expect(usageLines()).toHaveLength(0);
+    expect(hook().draft).not.toBeNull();
+  });
+
+  it('本地降级轮（远端 500）：无 usage 不展示，开关开启也不显示', async () => {
+    enableRemote();
+    globalScope.fetch = jest.fn(async () => ({
+      ok: false,
+      status: 500,
+      text: async () => 'boom',
+    })) as unknown as typeof globalThis.fetch;
+    await mountHook();
+    await act(async () => {
+      await hook().send('明天上午十点项目周会');
+    });
+
+    expect(usageLines()).toHaveLength(0);
+    expect(hook().draft).not.toBeNull();
+  });
+
+  it('设置读取失败回退默认（不展示），主链照常出卡', async () => {
+    enableRemote();
+    repo.getSettings.mockRejectedValue(new Error('settings unavailable'));
+    installUsageFetchMock([makeWire({})]);
+    await mountHook();
+    await act(async () => {
+      await hook().send('明天上午十点项目周会');
+    });
+
+    expect(usageLines()).toHaveLength(0);
+    expect(hook().draft).not.toBeNull();
+  });
+
+  it('单价齐备：用量行含估算费用段（1000×2+200×8 → ≈0.003600）', async () => {
+    SecureStoreClass.mockImplementation(() => ({
+      load: jest.fn(async () => ({
+        active: {
+          ...REMOTE_CONFIG.active,
+          priceInputPerMillion: 2,
+          priceOutputPerMillion: 8,
+        },
+      })),
+    }));
+    repo.getSettings.mockResolvedValue({ ...DEFAULT_APP_SETTINGS, showAiUsage: true });
+    installUsageFetchMock([makeWire({})]);
+    await mountHook();
+    await act(async () => {
+      await hook().send('明天上午十点项目周会');
+    });
+
+    expect(usageLines()).toEqual([
+      '📊 用量：输入 1000 tokens（缓存 600） · 输出 200 · ≈0.003600',
+    ]);
+  });
+
+  it('认真模式拦截轮：无 AI 回复消息故无新增用量行（首轮用量行保留）', async () => {
+    enableRemote(true, { carefulMode: true });
+    installUsageFetchMock([makeWire({}), makeWire({ content: '改为线上会议' })]);
+    await mountHook();
+    await act(async () => {
+      await hook().send('明天上午十点项目周会');
+    });
+    await act(async () => {
+      await hook().send('会议地点在第三会议室');
+    });
+
+    expect(confirmMessages()).toHaveLength(1);
+    // turn1 出卡轮的用量行仍在；拦截轮（turn2）不追加第二条。
+    expect(usageLines()).toHaveLength(1);
   });
 });

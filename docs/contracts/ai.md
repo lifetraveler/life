@@ -1,4 +1,4 @@
-# AI 解析层契约（v0.17）
+# AI 解析层契约（v0.22）
 
 ## 接口定义
 ```typescript
@@ -228,3 +228,100 @@ Reminder 模型中没有落库位置：data-model.md §4.1 冻结
   （alarm → ⏰ 闹钟 / system-notification → 🔔 通知 / 网络渠道按标签列出 / 未表达不渲染）、
   FlashResultCard 提醒行改 describeCardReminderLine（图标 + 「渠道 · 规则摘要」，
   规则摘要保留）。展示为纯 UI 消费，不改变 wire 契约与落库语义。
+
+## 用量展示副通道（v0.20，切片 26 阶段 1，AGENTS.md §7.38，非破坏性条目）
+- OpenAICompatibleProvider 新增只读 getter `lastUsage: AiUsageSnapshot | null`：
+  取自 chat-completions **信封** `usage` 字段（非模型 JSON content），defensive
+  读取（usage 缺失/非对象、tokens 非有限数值或为负、cached_tokens 越界等形状
+  偏差 → 整体回退 null，不炸解析主链）；失败轮恒 null，每轮重置不残留。
+- FlashTurnResult 新增域内字段 `usage: AiUsageSnapshot | null`（runFlashTurn 成功
+  轮携带 provider.lastUsage；fallbackTurn / 无 Key / 降级轮恒 null），由
+  src/domain/ai/usage.ts（新文件）定义 AiUsageSnapshot / AiUsagePrices /
+  formatAiUsageLine。
+- **传输边界（冻结）**：usage 不进入 ParsedItemDraft、不进入 history JSON、
+  不触碰 RemoteDraftWire / isRemoteDraftWire；AiParser.parse 冻结签名与返回
+  类型不变。本条目对契约接口为零改动（纯新增旁路字段）。
+- AiProviderConfig 新增可选 `priceInputPerMillion` / `priceOutputPerMillion`
+  （正数有效；非正数/非数值由 isAiProviderConfig 丢弃为 undefined、不整包拒绝
+  ——旧版本写入的配置不能因强校验整条失效）；两价齐备才按全价上界估算
+  estimatedCost（不区分缓存命中折扣，不做币种换算）。
+- 原因：tasks/slice-26.md 阶段 1（AI 透明度）要求远端解析轮可展示每轮输入/
+  输出 tokens、缓存命中数与估算费用；开关存储走 app_settings.show_ai_usage
+  （schema v13，UI 开关在阶段 2 接线）。
+- 影响范围：src/domain/ai/usage.ts（新）、openAiCompatible.ts、chat.ts、
+  configStore.ts；src/db/schema.ts（v13）、migrations.ts、AppSettingsModel.ts、
+  src/domain/settings.ts、WatermelonItemRepository.ts（settings 读写的 v13 列
+  接线）；相关测试。不涉及任何冻结签名变更。
+- 迁移方案：schema v12→v13 addColumns（app_settings.show_ai_usage，boolean
+  非可选默认 false，旧数据回退 false，v12 careful_mode 先例，零
+  unsafeExecuteSql）；usage 本身无持久化（每轮内存即弃），无兼容路径需要。
+
+## AI 配置平台化与 DeepSeek 峰谷分层计价（v0.21，切片 26 阶段 2b，AGENTS.md §7.38 注记，非破坏性条目）
+- AiProviderConfig 新增可选 `platform`（'deepseek' | 'volcano' | 'bailian' |
+  'xiaomi' | 'custom'；守卫集合校验，集合外/非字符串丢弃为 undefined——
+  undefined 与 'custom' 等价，均按自定义平台消费，不整包拒绝）与
+  `priceCachedPeak / priceCachedOffPeak / priceUncachedPeak /
+  priceUncachedOffPeak / priceOutputPeak / priceOutputOffPeak` 六价字段
+  （元/百万 tokens，正数有效；非正数/非数值丢弃为 undefined，不整包拒绝，
+  口径同 v0.20 两价）。
+- 预设表 `AI_PLATFORM_PRESETS`（configStore，纯数据）：deepseek =
+  https://api.deepseek.com + deepseek-flash / deepseek-v4-pro（官方价格页
+  2026-11 口径）；volcano = ark.cn-beijing.volces.com/api/v3 + doubao 系；
+  bailian = dashscope.aliyuncs.com/compatible-mode/v1 + qwen 系；xiaomi
+  占位（暂无公开 OpenAI 兼容端点，不预填）；custom 空。预设只供设置页 UI
+  预填（BaseURL 随平台预填、Model 点 chip 填入，输入框始终可自由编辑），
+  域层不做平台分支默认值。
+- 估算路径分叉（OpenAICompatibleProvider，构造器新增可选 clock 注入
+  `now: () => number` 供测试冻结判峰时刻，缺省 Date.now）：platform ===
+  'deepseek' → readAiUsageSnapshotTiered（输入段拆缓存命中/未命中两截，
+  各按 isPeakBeijing(now) 取价；**逐段规则：非零 token 段必须有其档位单价，
+  缺价 → estimatedCost null 只出 token 段**；cached_tokens 缺省（null）时
+  输入段全按未命中价计（保持上界语义）；cached=0 / 全缓存命中（未命中段
+  金额 0）不要求对应档位价）；其余平台 → v0.20 全价上界两价路径不变。
+  estimatedCost 均除 1e6 并 round 到 6 位小数；usage 行格式（formatAiUsageLine）
+  不变。
+- **isPeakBeijing 口径**：北京时间（UTC+8 固定偏移，Asia/Shanghai 无夏令时）
+  周一至周五 [9:00,12:00) ∪ [14:00,18:00) 为高峰，其余空闲。**已知限制（冻结
+  的简化）**：法定节假日不做识别——节假日工作时段会按高峰计价（官方口径
+  节假日全天空闲），误差方向为高估费用；节假日表随官方每年公布变动、且无
+  内置更新通道，不做。已记 tasks/backlog.md 待定候选。
+- 传输边界（v0.20 冻结条款）不变：usage 不进 ParsedItemDraft / history JSON /
+  RemoteDraftWire；AiParser.parse 冻结签名不变（OpenAICompatibleProvider 类
+  构造器新增参数不属于冻结接口）。
+- 原因：用户提出按平台完善 AI 配置（预设 BaseURL/Model）并按 DeepSeek 官方
+  价格页做峰谷分层计价（含缓存命中档）；提案
+  docs/proposals/slice-26-ai-config-enhancement.md 经用户确认（阶段 2b 并入
+  切片 26；四平台+自定义；节假日 auto 工作日窗口）。
+- 影响范围：src/domain/ai/configStore.ts（platform/六价/预设表）、usage.ts
+  （AiDeepSeekTierPrices / isPeakBeijing / readAiUsageSnapshotTiered）、
+  openAiCompatible.ts（config 类型六价/platform、clock 注入、估算分叉）、
+  src/app/settings/ai.tsx（平台 chips / Model 预设 chips / 单价区按平台切换 /
+  DeepSeek 官方价预填）；相关测试。契约接口零改动。
+- 迁移方案：纯可选字段新增，旧 SecureStore JSON 缺键照常通过守卫（undefined
+  = custom 平台 / 无价），无数据迁移。
+
+## AI 配置每平台独立配置槽（v0.22，切片 26 阶段 2c，AGENTS.md §7.38 注记，非破坏性条目）
+
+- **存储模型**：AiConfig 扩展为槽模型——`slots: Record<AiPlatform,
+  AiProviderConfig | null>`（每平台独立保存 BaseURL/API Key/Model/单价，
+  含 DeepSeek 分层六价）+ `activePlatform: AiPlatform`（使用中平台）。
+  `active` 恒等于 `slots[activePlatform]`（不变式；isAiConfig 归一化时按槽
+  重算 active，忽略传入值）。闪电录入消费面不变：runFlashTurn 仍读
+  `config.active`。
+- **v1 旧格式迁移（读取时归一化）**：SecureStore 旧 JSON 无 slots 键时，
+  isAiConfig 将 active 按 platform（缺省 custom）归入对应槽、activePlatform
+  置为该平台、其余槽为 null——零独立迁移步骤，写回即 v2 格式。v2 格式
+  （slots/activePlatform 任一键存在）：逐槽守卫校验，损坏槽配置或
+  activePlatform 非集合内 → 整包 null（走本地降级，不抛错）。
+- **UI 交互（保存即激活，用户确认）**：平台 chips 点选仅切换**编辑视图**
+  （从该平台槽回填表单；空槽按预设默认值初始化；未保存编辑直接丢弃不提示，
+  MVP 口径）；「保存配置」写入当前编辑平台槽并将「使用中」徽标切到该平台；
+  使用中徽标实时标注 activePlatform。切换编辑视图时保存按钮状态一并重置。
+- **回滚**：v2 JSON 在旧代码下多余键被忽略、active 仍可读，无锁死。
+- 原因：用户指出切换平台后 API Key 不分平台（单槽设计）；要求每平台保存
+  自己的数据并标出使用中平台。
+- 影响范围：src/domain/ai/configStore.ts（slots/activePlatform/createEmptyAiSlots/
+  isAiConfig 归一化）、src/app/settings/ai.tsx（槽化 state/applySlotToForm/
+  保存激活/徽标）；相关测试（configStore.test.ts / SecureAiConfigStore.test.ts）。
+  消费面（chat.ts / openAiCompatible.ts / usage.ts）零改动。
+- 迁移方案：无独立迁移（读取时归一化）；SecureStore JSON v1→v2 自动升级。

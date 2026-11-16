@@ -63,6 +63,14 @@ export interface AppSettings {
    * 语义、无独立 parse/validate 函数。
    */
   carefulMode: boolean;
+  /**
+   * AI 用量展示开关（切片 26，AGENTS.md §7.38）：开启后，远端解析轮在 AI
+   * 回复消息尾追加一行用量摘要（输入/输出 tokens、缓存命中数、按配置单价
+   * 估算费用）；本地降级轮无 usage 不展示。默认 false = 不显示。非可选
+   * boolean 存 show_ai_usage 列；读层防御归一（非 boolean 回退 false），
+   * boolean 无枚举语义、无独立 parse/validate 函数（carefulMode 同款）。
+   */
+  showAiUsage: boolean;
 }
 
 /** chips_increments 约束（提案 §7，已确认）：最少 1 项、最多 4 项、每项 1–10080 分钟（7 天） */
@@ -75,6 +83,7 @@ export const CHIPS_MAX_MINUTES = 10080;
  * 默认设置（§7.22：tagDisplayMode 默认 'text'；阶段 7a：过期组默认展示、
  * 待办/分类 emoji/标签默认不展示；切片 18：chips 默认 [10,60] 与切片 16 硬编码一致；
  * 切片 25：carefulMode 默认 false = 默认模式（AGENTS.md §7.37）；
+ * 切片 26：showAiUsage 默认 false = 不显示（AGENTS.md §7.38）；
  * getSettings 无记录时的兜底返回值）。
  */
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -86,6 +95,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   chipsIncrements: [10, 60],
   defaultChannels: [...DEFAULT_REMINDER_CHANNELS],
   carefulMode: false,
+  showAiUsage: false,
 };
 
 /** app_settings 单行主键（§7.22） */
