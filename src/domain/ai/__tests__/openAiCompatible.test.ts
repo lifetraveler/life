@@ -693,3 +693,112 @@ describe('OpenAICompatibleProvider.lastUsage（切片 26 / AGENTS.md §7.38）',
     expect(provider.lastUsage).toBeNull();
   });
 });
+
+describe('OpenAICompatibleProvider DeepSeek 峰谷分层（阶段 2b / v0.21）', () => {
+  /** 信封带 usage 的 200 响应（本 describe 本地副本；上一块的 helper 不跨 describe 可见）。 */
+  function okEnvelopeWithUsage(content: string, usage: unknown): Response {
+    return new Response(
+      JSON.stringify({
+        choices: [{ message: { role: 'assistant', content } }],
+        usage,
+      }),
+      { status: 200 },
+    );
+  }
+
+  const TIER_USAGE = {
+    prompt_tokens: 1000,
+    completion_tokens: 200,
+    prompt_tokens_details: { cached_tokens: 600 },
+  };
+  const TIER_PRICES = {
+    priceCachedPeak: 0.04,
+    priceCachedOffPeak: 0.02,
+    priceUncachedPeak: 2,
+    priceUncachedOffPeak: 1,
+    priceOutputPeak: 8,
+    priceOutputOffPeak: 4,
+  };
+  /** 北京时间（UTC+8）民用时刻 → epoch（测试冻结判峰时钟用）。 */
+  function atBeijing(year: number, month: number, day: number, hour: number, minute: number): number {
+    return Date.UTC(year, month - 1, day, hour, minute) - 8 * 60 * 60 * 1000;
+  }
+
+  function makeTieredProvider(
+    fetchImpl: (url: string, init?: RequestInit) => Promise<Response>,
+    now: () => number,
+  ): OpenAICompatibleProvider {
+    return new OpenAICompatibleProvider(
+      {
+        baseUrl: 'https://api.deepseek.com',
+        apiKey: API_KEY,
+        model: 'deepseek-flash',
+        platform: 'deepseek',
+        ...TIER_PRICES,
+      },
+      fetchImpl,
+      now,
+    );
+  }
+
+  it('platform=deepseek + 六价齐备：高峰时刻走高峰档（clock 注入冻结周一 10:00）', async () => {
+    const MON_1000 = atBeijing(2026, 11, 16, 10, 0);
+    const { fetchImpl } = makeFetch(() => okEnvelopeWithUsage(validWireJson, TIER_USAGE));
+    const provider = makeTieredProvider(fetchImpl, () => MON_1000);
+    await provider.parse('明天下午3点开会', CONTEXT);
+    // (600*0.04 + 400*2 + 200*8)/1e6 = 0.002424（peak 档）
+    expect(provider.lastUsage).toEqual({
+      promptTokens: 1000,
+      completionTokens: 200,
+      cachedPromptTokens: 600,
+      estimatedCost: 0.002424,
+    });
+  });
+
+  it('同配置周六 10:00（空闲档）换空闲价', async () => {
+    const SAT_1000 = atBeijing(2026, 11, 21, 10, 0);
+    const { fetchImpl } = makeFetch(() => okEnvelopeWithUsage(validWireJson, TIER_USAGE));
+    const provider = makeTieredProvider(fetchImpl, () => SAT_1000);
+    await provider.parse('明天下午3点开会', CONTEXT);
+    // (600*0.02 + 400*1 + 200*4)/1e6 = 0.001212（off-peak 档）
+    expect(provider.lastUsage?.estimatedCost).toBe(0.001212);
+  });
+
+  it('platform=deepseek 但六价全缺：estimatedCost null，token 段照常', async () => {
+    const MON_1000 = atBeijing(2026, 11, 16, 10, 0);
+    const { fetchImpl } = makeFetch(() => okEnvelopeWithUsage(validWireJson, TIER_USAGE));
+    const provider = new OpenAICompatibleProvider(
+      {
+        baseUrl: 'https://api.deepseek.com',
+        apiKey: API_KEY,
+        model: 'deepseek-flash',
+        platform: 'deepseek',
+      },
+      fetchImpl,
+      () => MON_1000,
+    );
+    await provider.parse('明天下午3点开会', CONTEXT);
+    expect(provider.lastUsage?.promptTokens).toBe(1000);
+    expect(provider.lastUsage?.estimatedCost).toBeNull();
+  });
+
+  it('platform 缺省（undefined）即使带六价也走 v0.20 全价两价路径', async () => {
+    const MON_1000 = atBeijing(2026, 11, 16, 10, 0);
+    const { fetchImpl } = makeFetch(() => okEnvelopeWithUsage(validWireJson, TIER_USAGE));
+    const provider = new OpenAICompatibleProvider(
+      {
+        baseUrl: 'https://api.deepseek.com',
+        apiKey: API_KEY,
+        model: 'deepseek-flash',
+        ...TIER_PRICES,
+        priceInputPerMillion: 1,
+        priceOutputPerMillion: 4,
+      },
+      fetchImpl,
+      () => MON_1000,
+    );
+    await provider.parse('明天下午3点开会', CONTEXT);
+    // 全价上界：(1000*1 + 200*4)/1e6 = 0.0018（不拆缓存段）
+    expect(provider.lastUsage?.estimatedCost).toBe(0.0018);
+  });
+});

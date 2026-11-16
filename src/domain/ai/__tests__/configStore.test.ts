@@ -62,6 +62,53 @@ describe('isAiProviderConfig', () => {
     expect(isAiProviderConfig(validConfig)?.priceInputPerMillion).toBeUndefined();
     expect(isAiProviderConfig(validConfig)?.priceOutputPerMillion).toBeUndefined();
   });
+
+  it('平台标识（阶段 2b / v0.21）：集合内透传，集合外/非字符串丢弃为 undefined，不整包拒绝', () => {
+    for (const id of ['deepseek', 'volcano', 'bailian', 'xiaomi', 'custom'] as const) {
+      expect(isAiProviderConfig({ ...validConfig, platform: id })?.platform).toBe(id);
+    }
+    for (const bad of ['azure', 'DEEPSEEK', 1, null, {}]) {
+      const guarded = isAiProviderConfig({ ...validConfig, platform: bad });
+      expect(guarded).not.toBeNull();
+      expect(guarded?.platform).toBeUndefined();
+    }
+    expect(isAiProviderConfig(validConfig)?.platform).toBeUndefined();
+  });
+
+  it('DeepSeek 分层六价（阶段 2b / v0.21）：正数透传，非正数/非数值丢弃为 undefined，不整包拒绝', () => {
+    const tiered = {
+      ...validConfig,
+      platform: 'deepseek' as const,
+      priceCachedPeak: 0.04,
+      priceCachedOffPeak: 0.02,
+      priceUncachedPeak: 2,
+      priceUncachedOffPeak: 1,
+      priceOutputPeak: 8,
+      priceOutputOffPeak: 4,
+    };
+    expect(isAiProviderConfig(tiered)).toEqual(tiered);
+    for (const bad of [0, -1, '2', Number.NaN, Number.POSITIVE_INFINITY, null, {}]) {
+      const guarded = isAiProviderConfig({
+        ...validConfig,
+        priceCachedPeak: bad,
+        priceCachedOffPeak: bad,
+        priceUncachedPeak: bad,
+        priceUncachedOffPeak: bad,
+        priceOutputPeak: bad,
+        priceOutputOffPeak: bad,
+      });
+      expect(guarded).not.toBeNull();
+      expect(guarded?.priceCachedPeak).toBeUndefined();
+      expect(guarded?.priceCachedOffPeak).toBeUndefined();
+      expect(guarded?.priceUncachedPeak).toBeUndefined();
+      expect(guarded?.priceUncachedOffPeak).toBeUndefined();
+      expect(guarded?.priceOutputPeak).toBeUndefined();
+      expect(guarded?.priceOutputOffPeak).toBeUndefined();
+    }
+    // 旧 JSON 无六价键：undefined（向后兼容）
+    expect(isAiProviderConfig(validConfig)?.priceCachedPeak).toBeUndefined();
+    expect(isAiProviderConfig(validConfig)?.priceOutputOffPeak).toBeUndefined();
+  });
 });
 
 describe('isAiConfig', () => {

@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.28
+版本：v0.29
 
 ## 1. 项目概览
 
@@ -328,6 +328,17 @@ schema 版本 5→6，新增/修改如下：
 - **单价配置**：AiProviderConfig 新增可选 `priceInputPerMillion` /
   `priceOutputPerMillion`（正数有效，留空不估算）；估算为全价上界（不区分缓存
   命中折扣），不做币种换算。开关与单价即时生效（每轮重读），重启保持。
+- **平台预设与峰谷分层（v0.29 注记，切片 26 阶段 2b，提案
+  docs/proposals/slice-26-ai-config-enhancement.md 已确认）**：AiProviderConfig
+  新增可选 `platform`（deepseek / volcano / bailian / xiaomi / custom，集合外
+  丢弃为 undefined 等价 custom，不整包拒绝）与 DeepSeek 峰谷分层六价字段；
+  `AI_PLATFORM_PRESETS` 预设表供设置页预填 BaseURL/Model（零新依赖 chips）。
+  platform === 'deepseek' 时估算走 `isPeakBeijing`（北京时间周一至周五
+  9:00–12:00、14:00–18:00 高峰）+ `readAiUsageSnapshotTiered`（输入段拆缓存
+  命中/未命中，逐段取价，非零段缺价只出 token 段；cached 缺省全按未命中价）；
+  其余平台维持全价上界两价。**已知限制**：法定节假日不做识别（节假日工作
+  时段按高峰计，误差方向为高估），记 backlog 待定候选。usage 行格式与
+  v0.20 传输边界冻结条款不变。
 
 ## 8. 当前切片
 

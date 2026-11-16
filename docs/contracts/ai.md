@@ -1,4 +1,4 @@
-# AI 解析层契约（v0.20；头部此前停在 v0.17 而变更记录已推进至 v0.19——文档缺陷已报告，随切片 26 阶段 1 顺带修正至 v0.20）
+# AI 解析层契约（v0.21）
 
 ## 接口定义
 ```typescript
@@ -255,3 +255,47 @@ Reminder 模型中没有落库位置：data-model.md §4.1 冻结
 - 迁移方案：schema v12→v13 addColumns（app_settings.show_ai_usage，boolean
   非可选默认 false，旧数据回退 false，v12 careful_mode 先例，零
   unsafeExecuteSql）；usage 本身无持久化（每轮内存即弃），无兼容路径需要。
+
+## AI 配置平台化与 DeepSeek 峰谷分层计价（v0.21，切片 26 阶段 2b，AGENTS.md §7.38 注记，非破坏性条目）
+- AiProviderConfig 新增可选 `platform`（'deepseek' | 'volcano' | 'bailian' |
+  'xiaomi' | 'custom'；守卫集合校验，集合外/非字符串丢弃为 undefined——
+  undefined 与 'custom' 等价，均按自定义平台消费，不整包拒绝）与
+  `priceCachedPeak / priceCachedOffPeak / priceUncachedPeak /
+  priceUncachedOffPeak / priceOutputPeak / priceOutputOffPeak` 六价字段
+  （元/百万 tokens，正数有效；非正数/非数值丢弃为 undefined，不整包拒绝，
+  口径同 v0.20 两价）。
+- 预设表 `AI_PLATFORM_PRESETS`（configStore，纯数据）：deepseek =
+  https://api.deepseek.com + deepseek-flash / deepseek-v4-pro（官方价格页
+  2026-11 口径）；volcano = ark.cn-beijing.volces.com/api/v3 + doubao 系；
+  bailian = dashscope.aliyuncs.com/compatible-mode/v1 + qwen 系；xiaomi
+  占位（暂无公开 OpenAI 兼容端点，不预填）；custom 空。预设只供设置页 UI
+  预填（BaseURL 随平台预填、Model 点 chip 填入，输入框始终可自由编辑），
+  域层不做平台分支默认值。
+- 估算路径分叉（OpenAICompatibleProvider，构造器新增可选 clock 注入
+  `now: () => number` 供测试冻结判峰时刻，缺省 Date.now）：platform ===
+  'deepseek' → readAiUsageSnapshotTiered（输入段拆缓存命中/未命中两截，
+  各按 isPeakBeijing(now) 取价；**逐段规则：非零 token 段必须有其档位单价，
+  缺价 → estimatedCost null 只出 token 段**；cached_tokens 缺省（null）时
+  输入段全按未命中价计（保持上界语义）；cached=0 / 全缓存命中（未命中段
+  金额 0）不要求对应档位价）；其余平台 → v0.20 全价上界两价路径不变。
+  estimatedCost 均除 1e6 并 round 到 6 位小数；usage 行格式（formatAiUsageLine）
+  不变。
+- **isPeakBeijing 口径**：北京时间（UTC+8 固定偏移，Asia/Shanghai 无夏令时）
+  周一至周五 [9:00,12:00) ∪ [14:00,18:00) 为高峰，其余空闲。**已知限制（冻结
+  的简化）**：法定节假日不做识别——节假日工作时段会按高峰计价（官方口径
+  节假日全天空闲），误差方向为高估费用；节假日表随官方每年公布变动、且无
+  内置更新通道，不做。已记 tasks/backlog.md 待定候选。
+- 传输边界（v0.20 冻结条款）不变：usage 不进 ParsedItemDraft / history JSON /
+  RemoteDraftWire；AiParser.parse 冻结签名不变（OpenAICompatibleProvider 类
+  构造器新增参数不属于冻结接口）。
+- 原因：用户提出按平台完善 AI 配置（预设 BaseURL/Model）并按 DeepSeek 官方
+  价格页做峰谷分层计价（含缓存命中档）；提案
+  docs/proposals/slice-26-ai-config-enhancement.md 经用户确认（阶段 2b 并入
+  切片 26；四平台+自定义；节假日 auto 工作日窗口）。
+- 影响范围：src/domain/ai/configStore.ts（platform/六价/预设表）、usage.ts
+  （AiDeepSeekTierPrices / isPeakBeijing / readAiUsageSnapshotTiered）、
+  openAiCompatible.ts（config 类型六价/platform、clock 注入、估算分叉）、
+  src/app/settings/ai.tsx（平台 chips / Model 预设 chips / 单价区按平台切换 /
+  DeepSeek 官方价预填）；相关测试。契约接口零改动。
+- 迁移方案：纯可选字段新增，旧 SecureStore JSON 缺键照常通过守卫（undefined
+  = custom 平台 / 无价），无数据迁移。

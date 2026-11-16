@@ -71,4 +71,7 @@
 - 时区伪影 `getDeviceTzid` 返回 UTC（§7.15 明文接受 UTC 坐标系自洽）。
 - 「上午9点」无钟点粒度 → allDay 全天（schema 无半天粒度）。
 - expo-doctor 2 项预存基线失败（app config 非 CNG、RN Directory 元数据）——closeout 明文不修。
+- DeepSeek 峰谷分层计价不做法定节假日识别（切片 26 阶段 2b，ai.md v0.21
+  明文）：节假日恰逢工作日时段时按高峰价计，误差方向为高估（估算上界语义
+  不变）；如需精确需接入节假日历表，待定候选。
 - 鸿蒙适配：现阶段不投入，三个重估触发条件见 `docs/proposals/harmony-assessment.md` §7。

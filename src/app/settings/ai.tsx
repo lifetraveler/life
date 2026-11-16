@@ -15,7 +15,8 @@ import { router } from 'expo-router';
 import { SecureAiConfigStore } from '../../data/SecureAiConfigStore';
 import { OpenAICompatibleProvider } from '../../domain/ai/openAiCompatible';
 import type { TestConnectionResult } from '../../domain/ai/openAiCompatible';
-import type { AiProviderConfig } from '../../domain/ai/configStore';
+import { AI_PLATFORM_IDS, AI_PLATFORM_PRESETS } from '../../domain/ai/configStore';
+import type { AiPlatform, AiProviderConfig } from '../../domain/ai/configStore';
 import { useTheme } from '../../ui/theme';
 import type { ThemeColors } from '../../ui/theme';
 
@@ -32,6 +33,50 @@ const store = new SecureAiConfigStore();
 
 const DEFAULT_BASE_URL = 'https://api.deepseek.com/v1';
 const DEFAULT_MODEL = 'deepseek-chat';
+
+/**
+ * DeepSeek 官方分层单价（元/百万 tokens，阶段 2b / v0.21，来源：官方价格页
+ * 2026-11 口径）——选平台 deepseek 且点选预设 Model 时预填六价输入框。
+ * deepseek-flash：缓存命中 0.02（空闲）/0.04（高峰）、未命中 1/2、输出 4/8；
+ * deepseek-v4-pro：0.15/0.30、4.5/9.0、13.5/27.0。
+ */
+const DEEPSEEK_MODEL_TIER_PRICES: Record<string, Record<string, string>> = {
+  'deepseek-flash': {
+    priceCachedPeak: '0.04',
+    priceCachedOffPeak: '0.02',
+    priceUncachedPeak: '2',
+    priceUncachedOffPeak: '1',
+    priceOutputPeak: '8',
+    priceOutputOffPeak: '4',
+  },
+  'deepseek-v4-pro': {
+    priceCachedPeak: '0.3',
+    priceCachedOffPeak: '0.15',
+    priceUncachedPeak: '9',
+    priceUncachedOffPeak: '4.5',
+    priceOutputPeak: '27',
+    priceOutputOffPeak: '13.5',
+  },
+};
+
+/** 峰谷分层六价输入框的文本状态（保存时逐项经 parsePriceInput 归一）。 */
+type TierPriceInputs = {
+  priceCachedPeak: string;
+  priceCachedOffPeak: string;
+  priceUncachedPeak: string;
+  priceUncachedOffPeak: string;
+  priceOutputPeak: string;
+  priceOutputOffPeak: string;
+};
+
+const EMPTY_TIER_PRICES: TierPriceInputs = {
+  priceCachedPeak: '',
+  priceCachedOffPeak: '',
+  priceUncachedPeak: '',
+  priceUncachedOffPeak: '',
+  priceOutputPeak: '',
+  priceOutputOffPeak: '',
+};
 
 type TestState =
   | { phase: 'idle' }
@@ -62,6 +107,9 @@ export default function AiSettingsPage() {
   // 输入框持有原始文本，保存时经 parsePriceInput 归一；留空 = 不估算费用。
   const [priceInput, setPriceInput] = useState<string>('');
   const [priceOutput, setPriceOutput] = useState<string>('');
+  // 阶段 2b（v0.21）：平台预设 + DeepSeek 峰谷分层六价（仅 deepseek 平台用）。
+  const [platform, setPlatform] = useState<AiPlatform>('custom');
+  const [tierPrices, setTierPrices] = useState<TierPriceInputs>(EMPTY_TIER_PRICES);
   const [showKey, setShowKey] = useState<boolean>(false);
   const [saving, setSaving] = useState<boolean>(false);
   const [savedTick, setSavedTick] = useState<number>(0);
@@ -87,6 +135,34 @@ export default function AiSettingsPage() {
             ? String(config.active.priceOutputPerMillion)
             : '',
         );
+        // 阶段 2b（v0.21）：平台与分层六价回显（未配置→空串/自定义）。
+        setPlatform(config.active.platform ?? 'custom');
+        setTierPrices({
+          priceCachedPeak:
+            config.active.priceCachedPeak !== undefined
+              ? String(config.active.priceCachedPeak)
+              : '',
+          priceCachedOffPeak:
+            config.active.priceCachedOffPeak !== undefined
+              ? String(config.active.priceCachedOffPeak)
+              : '',
+          priceUncachedPeak:
+            config.active.priceUncachedPeak !== undefined
+              ? String(config.active.priceUncachedPeak)
+              : '',
+          priceUncachedOffPeak:
+            config.active.priceUncachedOffPeak !== undefined
+              ? String(config.active.priceUncachedOffPeak)
+              : '',
+          priceOutputPeak:
+            config.active.priceOutputPeak !== undefined
+              ? String(config.active.priceOutputPeak)
+              : '',
+          priceOutputOffPeak:
+            config.active.priceOutputOffPeak !== undefined
+              ? String(config.active.priceOutputOffPeak)
+              : '',
+        });
       }
       setLoaded(true);
     })();
@@ -105,20 +181,50 @@ export default function AiSettingsPage() {
       //（已知 quirk 维持现状：本函数原本就丢 timeoutMs，切片 26 不修。）
       const parsedPriceInput = parsePriceInput(priceInput);
       const parsedPriceOutput = parsePriceInput(priceOutput);
+      // 阶段 2b（v0.21）：deepseek 平台写分层六价；其余平台写全价两价。
+      //（未配置的档位不写入该键——估算时段缺价只出 token 段。）
+      const tier = {
+        priceCachedPeak: parsePriceInput(tierPrices.priceCachedPeak),
+        priceCachedOffPeak: parsePriceInput(tierPrices.priceCachedOffPeak),
+        priceUncachedPeak: parsePriceInput(tierPrices.priceUncachedPeak),
+        priceUncachedOffPeak: parsePriceInput(tierPrices.priceUncachedOffPeak),
+        priceOutputPeak: parsePriceInput(tierPrices.priceOutputPeak),
+        priceOutputOffPeak: parsePriceInput(tierPrices.priceOutputOffPeak),
+      };
       return {
         provider: 'openai-compatible',
         baseUrl: url,
         apiKey: key,
         model: name,
-        ...(parsedPriceInput !== undefined
-          ? { priceInputPerMillion: parsedPriceInput }
-          : {}),
-        ...(parsedPriceOutput !== undefined
-          ? { priceOutputPerMillion: parsedPriceOutput }
-          : {}),
+        ...(platform === 'deepseek'
+          ? {
+              ...(tier.priceCachedPeak !== undefined ? { priceCachedPeak: tier.priceCachedPeak } : {}),
+              ...(tier.priceCachedOffPeak !== undefined
+                ? { priceCachedOffPeak: tier.priceCachedOffPeak }
+                : {}),
+              ...(tier.priceUncachedPeak !== undefined
+                ? { priceUncachedPeak: tier.priceUncachedPeak }
+                : {}),
+              ...(tier.priceUncachedOffPeak !== undefined
+                ? { priceUncachedOffPeak: tier.priceUncachedOffPeak }
+                : {}),
+              ...(tier.priceOutputPeak !== undefined ? { priceOutputPeak: tier.priceOutputPeak } : {}),
+              ...(tier.priceOutputOffPeak !== undefined
+                ? { priceOutputOffPeak: tier.priceOutputOffPeak }
+                : {}),
+            }
+          : {
+              ...(parsedPriceInput !== undefined
+                ? { priceInputPerMillion: parsedPriceInput }
+                : {}),
+              ...(parsedPriceOutput !== undefined
+                ? { priceOutputPerMillion: parsedPriceOutput }
+                : {}),
+            }),
+        ...(platform !== 'custom' ? { platform } : {}),
       };
     },
-    [baseUrl, apiKey, model, priceInput, priceOutput],
+    [baseUrl, apiKey, model, priceInput, priceOutput, platform, tierPrices],
   );
 
   const handleSave = useCallback(async (): Promise<void> => {
@@ -171,6 +277,8 @@ export default function AiSettingsPage() {
             setModel(DEFAULT_MODEL);
             setPriceInput('');
             setPriceOutput('');
+            setPlatform('custom');
+            setTierPrices(EMPTY_TIER_PRICES);
             setTestState({ phase: 'idle' });
             setSavedTick((n) => n + 1);
           })();
@@ -179,10 +287,63 @@ export default function AiSettingsPage() {
     ]);
   }, []);
 
+  // 阶段 2b（v0.21）：选平台——预填该平台预设 BaseURL（空串不覆盖），
+  // Model 不自动改（由 Model 预设 chips 点选填入，输入框始终可自由编辑）。
+  const handlePlatformPress = useCallback(
+    (id: AiPlatform): void => {
+      setPlatform(id);
+      const preset = AI_PLATFORM_PRESETS[id];
+      if (preset.baseURL.length > 0) {
+        setBaseUrl(preset.baseURL);
+      }
+    },
+    [],
+  );
+
+  // 阶段 2b（v0.21）：点 Model 预设 chip 填入输入框；deepseek 平台的官方
+  // 预设模型顺手预填六价输入框（覆盖当前分层价文本——显式点选才触发）。
+  const handleModelPresetPress = useCallback(
+    (name: string): void => {
+      setModel(name);
+      const presetPrices = platform === 'deepseek' ? DEEPSEEK_MODEL_TIER_PRICES[name] : undefined;
+      if (presetPrices !== undefined) {
+        setTierPrices({
+          priceCachedPeak: presetPrices.priceCachedPeak,
+          priceCachedOffPeak: presetPrices.priceCachedOffPeak,
+          priceUncachedPeak: presetPrices.priceUncachedPeak,
+          priceUncachedOffPeak: presetPrices.priceUncachedOffPeak,
+          priceOutputPeak: presetPrices.priceOutputPeak,
+          priceOutputOffPeak: presetPrices.priceOutputOffPeak,
+        });
+      }
+    },
+    [platform],
+  );
+
   return (
     <ScrollView style={styles.page} contentContainerStyle={styles.content}>
       <Text style={styles.sectionTitle}>连接配置</Text>
       <Text style={styles.hint}>兼容 OpenAI / DeepSeek 等 OpenAI 兼容端点。Key 仅存于系统安全存储。</Text>
+
+      {/* 阶段 2b（v0.21）：平台 chips——预设 BaseURL/Model 预填，零新依赖。 */}
+      <Text style={styles.label}>平台</Text>
+      <View style={styles.chipRow}>
+        {AI_PLATFORM_IDS.map((id) => (
+          <Pressable
+            key={id}
+            style={({ pressed }) => [
+              styles.chip,
+              platform === id && styles.chipActive,
+              pressed && styles.pressed,
+            ]}
+            onPress={() => handlePlatformPress(id)}
+          >
+            <Text style={[styles.chipText, platform === id && styles.chipTextActive]}>
+              {AI_PLATFORM_PRESETS[id].label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
 
       <Text style={styles.label}>BaseURL</Text>
       <TextInput
@@ -213,6 +374,19 @@ export default function AiSettingsPage() {
       />
 
       <Text style={styles.label}>Model</Text>
+      {AI_PLATFORM_PRESETS[platform].models.length > 0 ? (
+        <View style={styles.chipRow}>
+          {AI_PLATFORM_PRESETS[platform].models.map((name) => (
+            <Pressable
+              key={name}
+              style={({ pressed }) => [styles.chip, pressed && styles.pressed]}
+              onPress={() => handleModelPresetPress(name)}
+            >
+              <Text style={styles.chipText}>{name}</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
       <TextInput
         style={styles.input}
         value={model}
@@ -222,30 +396,105 @@ export default function AiSettingsPage() {
         autoCorrect={false}
       />
 
-      {/* 切片 26 阶段 2（AGENTS.md §7.38）：用量单价（可选）。两项都填（正数）
-          才在用量行估算费用；留空不估算；非法/非正数保存时静默丢弃。 */}
-      <Text style={styles.label}>用量单价（每百万 tokens，可选）</Text>
-      <Text style={styles.hint}>
-        用于 AI 回复的用量费用估算（按全价上界计，不区分缓存折扣，不做币种换算）。两项都填才估算费用；留空则不显示费用段。
-      </Text>
-      <TextInput
-        style={styles.input}
-        value={priceInput}
-        onChangeText={setPriceInput}
-        placeholder="输入单价，如 2"
-        autoCapitalize="none"
-        autoCorrect={false}
-        keyboardType="decimal-pad"
-      />
-      <TextInput
-        style={styles.input}
-        value={priceOutput}
-        onChangeText={setPriceOutput}
-        placeholder="输出单价，如 8"
-        autoCapitalize="none"
-        autoCorrect={false}
-        keyboardType="decimal-pad"
-      />
+      {/* 用量单价（可选）。阶段 2b（v0.21）：按平台切换计价形态——
+          deepseek 走峰谷分层六价（缓存命中/未命中/输出 × 高峰/空闲），
+          其余平台维持全价上界两价（v0.20 口径）。非法/非正数保存时静默丢弃。 */}
+      {platform === 'deepseek' ? (
+        <>
+          <Text style={styles.label}>用量单价（每百万 tokens，可选，DeepSeek 分层）</Text>
+          <Text style={styles.hint}>
+            高峰=北京时间周一至周五 9:00–12:00、14:00–18:00（法定节假日按空闲计）；其余时段空闲。费用按缓存命中/未命中/输出三段分别计价；某段未填价则该轮只显示 tokens。
+          </Text>
+          <Text style={styles.priceGroupLabel}>缓存命中（高峰 / 空闲）</Text>
+          <View style={styles.pricePairRow}>
+            <TextInput
+              style={styles.input}
+              value={tierPrices.priceCachedPeak}
+              onChangeText={(t) => setTierPrices((p) => ({ ...p, priceCachedPeak: t }))}
+              placeholder="高峰，如 0.04"
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="decimal-pad"
+            />
+            <TextInput
+              style={styles.input}
+              value={tierPrices.priceCachedOffPeak}
+              onChangeText={(t) => setTierPrices((p) => ({ ...p, priceCachedOffPeak: t }))}
+              placeholder="空闲，如 0.02"
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="decimal-pad"
+            />
+          </View>
+          <Text style={styles.priceGroupLabel}>缓存未命中（高峰 / 空闲）</Text>
+          <View style={styles.pricePairRow}>
+            <TextInput
+              style={styles.input}
+              value={tierPrices.priceUncachedPeak}
+              onChangeText={(t) => setTierPrices((p) => ({ ...p, priceUncachedPeak: t }))}
+              placeholder="高峰，如 2"
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="decimal-pad"
+            />
+            <TextInput
+              style={styles.input}
+              value={tierPrices.priceUncachedOffPeak}
+              onChangeText={(t) => setTierPrices((p) => ({ ...p, priceUncachedOffPeak: t }))}
+              placeholder="空闲，如 1"
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="decimal-pad"
+            />
+          </View>
+          <Text style={styles.priceGroupLabel}>输出（高峰 / 空闲）</Text>
+          <View style={styles.pricePairRow}>
+            <TextInput
+              style={styles.input}
+              value={tierPrices.priceOutputPeak}
+              onChangeText={(t) => setTierPrices((p) => ({ ...p, priceOutputPeak: t }))}
+              placeholder="高峰，如 8"
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="decimal-pad"
+            />
+            <TextInput
+              style={styles.input}
+              value={tierPrices.priceOutputOffPeak}
+              onChangeText={(t) => setTierPrices((p) => ({ ...p, priceOutputOffPeak: t }))}
+              placeholder="空闲，如 4"
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="decimal-pad"
+            />
+          </View>
+        </>
+      ) : (
+        <>
+          <Text style={styles.label}>用量单价（每百万 tokens，可选）</Text>
+          <Text style={styles.hint}>
+            用于 AI 回复的用量费用估算（按全价上界计，不区分缓存折扣，不做币种换算）。两项都填才估算费用；留空则不显示费用段。
+          </Text>
+          <TextInput
+            style={styles.input}
+            value={priceInput}
+            onChangeText={setPriceInput}
+            placeholder="输入单价，如 2"
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="decimal-pad"
+          />
+          <TextInput
+            style={styles.input}
+            value={priceOutput}
+            onChangeText={setPriceOutput}
+            placeholder="输出单价，如 8"
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="decimal-pad"
+          />
+        </>
+      )}
 
       <Pressable
         style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
@@ -351,6 +600,44 @@ function makeStyles(c: ThemeColors) {
     paddingVertical: 10,
     fontSize: 15,
     color: c.text,
+  },
+  // 阶段 2b（v0.21）：平台/Model 预设 chips（flexWrap 防挤爆，§7.32）。
+  chipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 4,
+  },
+  chip: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: c.border,
+    backgroundColor: c.card,
+    borderRadius: 999,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  chipActive: {
+    borderColor: c.primary,
+    borderWidth: 1,
+  },
+  chipText: {
+    fontSize: 13,
+    color: c.text,
+  },
+  chipTextActive: {
+    color: c.primary,
+    fontWeight: '600',
+  },
+  priceGroupLabel: {
+    fontSize: 12,
+    color: c.textMuted,
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  pricePairRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
   },
   primaryButton: {
     marginTop: 24,

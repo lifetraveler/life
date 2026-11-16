@@ -20,7 +20,10 @@ export interface AiUsageSnapshot {
   completionTokens: number;
   /** 信封 usage.prompt_tokens_details.cached_tokens（缓存命中数）；缺省/无效 → null。 */
   cachedPromptTokens: number | null;
-  /** 按配置单价估算的费用（全价上界，不区分缓存折扣）；单价未配齐 → null。 */
+  /**
+   * 按配置单价估算的费用（元）；单价未配齐 → null。
+   * deepseek 平台为峰谷分层估算（阶段 2b，v0.21）；其余平台为全价上界（v0.20）。
+   */
   estimatedCost: number | null;
 }
 
@@ -28,6 +31,42 @@ export interface AiUsageSnapshot {
 export interface AiUsagePrices {
   input: number | null;
   output: number | null;
+}
+
+/**
+ * DeepSeek 峰谷分层单价（元/百万 tokens，阶段 2b / v0.21）。
+ * 仅 platform === 'deepseek' 时由 provider 传入；三段（缓存命中/未命中/输出）
+ * 各按当前时段取价，非零 token 段缺价 → estimatedCost null。
+ */
+export interface AiDeepSeekTierPrices {
+  /** 输入·缓存命中·高峰。 */
+  cachedPeak: number | null;
+  /** 输入·缓存命中·空闲。 */
+  cachedOffPeak: number | null;
+  /** 输入·缓存未命中·高峰。 */
+  uncachedPeak: number | null;
+  /** 输入·缓存未命中·空闲。 */
+  uncachedOffPeak: number | null;
+  /** 输出·高峰。 */
+  outputPeak: number | null;
+  /** 输出·空闲。 */
+  outputOffPeak: number | null;
+}
+
+/**
+ * DeepSeek 高峰时段判定（阶段 2b，官方口径）：北京时间周一至周五 9:00–12:00、
+ * 14:00–18:00 为高峰；其余（含周末与法定节假日——节假日表不做，已知限制记
+ * ai.md v0.21）为空闲。北京时间为固定 UTC+8（Asia/Shanghai 无夏令时）。
+ * 边界：[9:00,12:00) 与 [14:00,18:00) 左闭右开。
+ */
+export function isPeakBeijing(now: number): boolean {
+  const beijing = new Date(now + 8 * 60 * 60 * 1000);
+  const day = beijing.getUTCDay();
+  if (day < 1 || day > 5) {
+    return false;
+  }
+  const minuteOfDay = beijing.getUTCHours() * 60 + beijing.getUTCMinutes();
+  return (minuteOfDay >= 540 && minuteOfDay < 720) || (minuteOfDay >= 840 && minuteOfDay < 1080);
 }
 
 /** 有限正数 → 原值；否则 null（「非正数丢弃」守卫语义的单一实现）。 */
@@ -39,20 +78,20 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
+interface UsageEnvelopeShape {
+  promptTokens: number;
+  completionTokens: number;
+  cachedPromptTokens: number | null;
+}
+
 /**
- * defensive 读取 chat-completions 信封 usage（切片 26 / §7.38）：
+ * 信封 usage 的 defensive 校验与提取（全价/分层两条 reader 共用）：
  * - usage 缺失（非对象）→ null；
  * - prompt_tokens / completion_tokens 非有限数值或为负 → null；
  * - prompt_tokens_details 存在但非对象 → null；cached_tokens 非有限数值、
- *   为负或越界（> prompt_tokens）→ null；details/cached 缺省或 null → 该段省略；
- * - prices 两个单价齐备（非 null）时估算 estimatedCost =
- *   输入×in/1e6 + 输出×out/1e6，round 到 6 位小数（全价上界，不区分缓存
- *   折扣，ai.md v0.20）；任一单价缺失 → null（展示只出 token 段）。
+ *   为负或越界（> prompt_tokens）→ null；details/cached 缺省或 null → 该段省略。
  */
-export function readAiUsageSnapshot(
-  envelope: unknown,
-  prices: AiUsagePrices,
-): AiUsageSnapshot | null {
+function readUsageEnvelope(envelope: unknown): UsageEnvelopeShape | null {
   if (typeof envelope !== 'object' || envelope === null || Array.isArray(envelope)) {
     return null;
   }
@@ -83,12 +122,87 @@ export function readAiUsageSnapshot(
       cachedPromptTokens = cached;
     }
   }
-  let estimatedCost: number | null = null;
-  if (prices.input !== null && prices.output !== null) {
-    const raw = (promptTokens * prices.input + completionTokens * prices.output) / 1_000_000;
-    estimatedCost = Math.round(raw * 1_000_000) / 1_000_000;
+  return { promptTokens, completionTokens, cachedPromptTokens };
+}
+
+function roundCost(raw: number): number {
+  return Math.round(raw * 1_000_000) / 1_000_000;
+}
+
+/**
+ * 全价上界估算（ai.md v0.20）：两单价齐备（非 null）→ 输入×in + 输出×out
+ * （÷1e6，round 6 位）；任一单价缺失 → null（展示只出 token 段）。
+ */
+function estimateFlatCost(
+  promptTokens: number,
+  completionTokens: number,
+  prices: AiUsagePrices,
+): number | null {
+  if (prices.input === null || prices.output === null) {
+    return null;
   }
-  return { promptTokens, completionTokens, cachedPromptTokens, estimatedCost };
+  return roundCost((promptTokens * prices.input + completionTokens * prices.output) / 1_000_000);
+}
+
+/**
+ * defensive 读取 chat-completions 信封 usage（切片 26 / §7.38，全价上界路径）：
+ * estimatedCost = 输入×in/1e6 + 输出×out/1e6（round 6 位，不区分缓存折扣）。
+ */
+export function readAiUsageSnapshot(
+  envelope: unknown,
+  prices: AiUsagePrices,
+): AiUsageSnapshot | null {
+  const shape = readUsageEnvelope(envelope);
+  if (shape === null) {
+    return null;
+  }
+  return {
+    ...shape,
+    estimatedCost: estimateFlatCost(shape.promptTokens, shape.completionTokens, prices),
+  };
+}
+
+/**
+ * DeepSeek 峰谷分层估算（阶段 2b / v0.21）：输入段拆缓存命中 + 未命中两截，
+ * 各按 isPeakBeijing(now) 取价。逐段规则——非零 token 段必须有其档位单价，
+ * 缺价 → estimatedCost null（只出 token 段）；cached_tokens 缺省（null）时
+ * 输入段全按未命中价计（保持「上界」语义，缓存段照旧省略）。
+ */
+export function readAiUsageSnapshotTiered(
+  envelope: unknown,
+  prices: AiDeepSeekTierPrices,
+  now: number,
+): AiUsageSnapshot | null {
+  const shape = readUsageEnvelope(envelope);
+  if (shape === null) {
+    return null;
+  }
+  const peak = isPeakBeijing(now);
+  const cachedPrice = peak ? prices.cachedPeak : prices.cachedOffPeak;
+  const uncachedPrice = peak ? prices.uncachedPeak : prices.uncachedOffPeak;
+  const outputPrice = peak ? prices.outputPeak : prices.outputOffPeak;
+  const cachedAmount = shape.cachedPromptTokens ?? 0;
+  const uncachedAmount = shape.promptTokens - cachedAmount;
+  let raw = 0;
+  if (cachedAmount > 0) {
+    if (cachedPrice === null) {
+      return { ...shape, estimatedCost: null };
+    }
+    raw += cachedAmount * cachedPrice;
+  }
+  if (uncachedAmount > 0) {
+    if (uncachedPrice === null) {
+      return { ...shape, estimatedCost: null };
+    }
+    raw += uncachedAmount * uncachedPrice;
+  }
+  if (shape.completionTokens > 0) {
+    if (outputPrice === null) {
+      return { ...shape, estimatedCost: null };
+    }
+    raw += shape.completionTokens * outputPrice;
+  }
+  return { ...shape, estimatedCost: roundCost(raw / 1_000_000) };
 }
 
 /**

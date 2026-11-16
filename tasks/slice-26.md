@@ -105,6 +105,27 @@ closeout 教训 2，逐套件过账）。
 false 不含 / 拦截轮确认卡后独立用量文本 / 降级轮无用量行 / getSettings 失败
 回退不炸；profile 开关行为如既有 carefulMode 测试先例（若有）补 aiUsageDisplay。
 
+### 阶段 2b：AI 配置平台化 + DeepSeek 峰谷分层计价（追加阶段，v0.29）
+
+> 来源：用户 2026-11-17 需求（官方价格截图）；提案
+> `docs/proposals/slice-26-ai-config-enhancement.md` 已确认（并入本切片、
+> 四平台+自定义预设、节假日按空闲 auto 工作日窗口）。AGENTS §7.38 v0.29 注记。
+
+| 文件 | 改动 |
+| --- | --- |
+| `src/domain/ai/usage.ts` | `AiDeepSeekTierPrices`（六价全 number\|null）、`isPeakBeijing(now)`（UTC+8 固定偏移；周一至周五 9:00–12:00 / 14:00–18:00 高峰，周末节假日按空闲——法定节假日不做识别，已知限制记 backlog）、内部 `readUsageEnvelope`/`estimateFlatCost`/`roundCost` 重构、`readAiUsageSnapshotTiered(envelope, prices, now)`（输入段拆缓存命中/未命中，逐段取价；非零段缺价只出 token 段；cached 缺省全按未命中价） |
+| `src/domain/ai/configStore.ts` | `AiPlatform` 五值类型 + `AiPlatformPreset` + `AI_PLATFORM_PRESETS`（deepseek/volcano/bailian/xiaomi/custom）；`AiProviderConfig` + `platform?` 与六价可选字段；守卫透传（集合外丢弃为 undefined 等价 custom，不整包拒绝） |
+| `src/domain/ai/openAiCompatible.ts` | `OpenAiCompatibleConfig` + platform/六价；构造器第三参 clock 注入 `now: () => number = Date.now`（测试用）；parse() usage 提取分叉：platform==='deepseek' → tiered，否则 flat（v0.20 原路径） |
+| `src/app/settings/ai.tsx` | 平台 chips 行（零新依赖）+ Model chips（随平台预设）+ deepseek 单价区按三组（缓存命中/未命中/输出，各高峰/空闲双输入）切换、非 deepseek 维持 v0.20 两价；选 deepseek 模型 chip 预填官方价（flash 0.04/0.02/2/1/8/4、v4-pro 0.3/0.15/9/4.5/27/13.5） |
+| `docs/contracts/ai.md` | 头部 v0.20→v0.21；文末追加 v0.21 非破坏性条目（九条：platform/六价/预设表/估算分叉/isPeakBeijing 口径+已知限制/传输边界不变/原因/影响范围/迁移方案=纯可选字段零迁移） |
+| `AGENTS.md` | v0.28→v0.29；§7.38 末尾「平台预设与峰谷分层」注记段 |
+
+测试：`usage.test.ts`（isPeakBeijing 窗口边界/周末/国庆已知限制实证 +
+readAiUsageSnapshotTiered 高峰/空闲/cached 缺省/非零段缺价/全缓存命中/形状偏差）、
+`configStore.test.ts`（platform 集合透传与丢弃、六价透传）、
+`openAiCompatible.test.ts`（tiered 峰谷两值、deepseek 全缺价 null、
+platform 缺省走 flat）。
+
 ### 阶段 3：真机验收 + 收尾
 
 - 验收矩阵（MuMu 或 dev client，见 §4）。
@@ -123,7 +144,9 @@ false 不含 / 拦截轮确认卡后独立用量文本 / 降级轮无用量行 /
   2. 开关开、未配单价：assistant 消息尾 `📊 用量：输入 N tokens · 输出 M`
      （无缓存段/无费用段时形态正确）。
   3. 开关开、配单价：行尾 `≈0.00xxxx`；改单价后下一轮生效（config 每轮重读）。
-  4. DeepSeek 缓存命中轮：缓存段 cached>0 显示正确。
+     deepseek 平台走峰谷分层估算（阶段 2b），其余平台全价上界。
+  4. DeepSeek 缓存命中轮：缓存段 cached>0 显示正确；分层估算按缓存命中价 +
+     未命中价 + 输出价分段计算（阶段 2b）。
   5. 澄清轮：反问消息同样带用量行。
   6. 认真模式拦截轮：确认卡后独立用量文本；应用/放弃均不影响该行。
   7. 降级轮（无 Key/断网）：无用量行，降级说明照旧。
@@ -141,7 +164,8 @@ false 不含 / 拦截轮确认卡后独立用量文本 / 降级轮无用量行 /
 - 不引入任何新依赖（无复制按钮；usage 展示纯文本合成）。
 - 不支持流式响应（本应用固定 stream:false）；仅解析 chat-completions 信封
   usage（DeepSeek/OpenAI 兼容形态）。
-- 估算不区分缓存命中折扣（全价上界，hint 注明）；不做汇率/币种换算。
+- 估算不做汇率/币种换算（币种由用户按账户计价填写）；deepseek 平台按峰谷分层
+  （阶段 2b，缓存命中/未命中/输出分段），其余平台全价上界（hint 注明）。
 - 不修 `buildConfig` 丢 `timeoutMs` 的既有 quirk。
 - 提示词只读：不编辑、不复制、不导出。
 - 不碰 `src/notifications/`、`src/domain/recurrence/` 冻结区；不闪改其他候选
