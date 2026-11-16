@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -19,6 +19,8 @@ import FlashResultCard from '../../ui/FlashResultCard';
 import { useFlashChat } from '../../ui/useFlashChat';
 import type { FlashChatMessage } from '../../ui/useFlashChat';
 import { getDeviceTzid } from '../../ui/timeFormat';
+import { useTheme } from '../../ui/theme';
+import type { ThemeColors } from '../../ui/theme';
 
 /**
  * 闪电添加 Chat 页（tasks/slice-15.md 阶段 3；AGENTS.md §7.25）：
@@ -33,6 +35,9 @@ import { getDeviceTzid } from '../../ui/timeFormat';
  */
 
 function MessageRow({ message }: { message: FlashChatMessage }) {
+  // 切片 24（§7.36）：颜色走全局 Token（夜间模式），深浅色跟随系统。
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const isUser = message.role === 'user';
   return (
     <View style={[styles.row, isUser ? styles.rowUser : styles.rowAssistant]}>
@@ -44,6 +49,9 @@ function MessageRow({ message }: { message: FlashChatMessage }) {
 }
 
 export default function FlashScreen() {
+  // 切片 24（§7.36）：颜色走全局 Token（夜间模式），深浅色跟随系统。
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const chat = useFlashChat();
   const [input, setInput] = useState('');
   const [editVisible, setEditVisible] = useState(false);
@@ -184,7 +192,7 @@ export default function FlashScreen() {
           value={input}
           onChangeText={setInput}
           placeholder="输入事项，或继续纠正上面的卡片…"
-          placeholderTextColor="#999999"
+          placeholderTextColor={colors.textMuted}
           multiline
         />
         <Pressable
@@ -193,7 +201,7 @@ export default function FlashScreen() {
           disabled={chat.busy || input.trim().length === 0}
         >
           {chat.busy ? (
-            <ActivityIndicator size="small" color="#FFFFFF" />
+            <ActivityIndicator size="small" color={colors.textOnPrimary} />
           ) : (
             <Text style={styles.sendText}>发送</Text>
           )}
@@ -214,136 +222,139 @@ export default function FlashScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  flex: {
-    flex: 1,
-    backgroundColor: '#F5F5F5',
-  },
-  list: {
-    flex: 1,
-  },
-  listContent: {
-    padding: 12,
-    gap: 8,
-  },
-  emptyWrap: {
-    alignItems: 'center',
-    marginTop: 64,
-    gap: 10,
-    paddingHorizontal: 24,
-  },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#111111',
-  },
-  emptyHint: {
-    fontSize: 13,
-    color: '#444444',
-    lineHeight: 22,
-    textAlign: 'left',
-  },
-  emptyFoot: {
-    fontSize: 12,
-    color: '#999999',
-  },
-  row: {
-    flexDirection: 'row',
-  },
-  rowUser: {
-    justifyContent: 'flex-end',
-  },
-  rowAssistant: {
-    justifyContent: 'flex-start',
-  },
-  bubbleTextUser: {
-    backgroundColor: '#4A90D9',
-    color: '#FFFFFF',
-    fontSize: 14,
-    borderRadius: 12,
-    borderTopRightRadius: 2,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    maxWidth: 280,
-  },
-  bubbleTextAssistant: {
-    backgroundColor: '#E8E8E8',
-    color: '#333333',
-    fontSize: 12,
-    borderRadius: 12,
-    borderTopLeftRadius: 2,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    maxWidth: 300,
-  },
-  cardWrap: {
-    paddingHorizontal: 12,
-    paddingBottom: 4,
-  },
-  actionRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 8,
-  },
-  primaryButton: {
-    flex: 1,
-    backgroundColor: '#4A90D9',
-    borderRadius: 8,
-    paddingVertical: 10,
-    alignItems: 'center',
-  },
-  secondaryButton: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#CCCCCC',
-    borderRadius: 8,
-    paddingVertical: 10,
-    alignItems: 'center',
-  },
-  primaryText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  secondaryText: {
-    color: '#444444',
-    fontSize: 14,
-  },
-  disabled: {
-    opacity: 0.5,
-  },
-  inputRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 8,
-    padding: 12,
-    backgroundColor: '#FFFFFF',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#DDDDDD',
-  },
-  input: {
-    flex: 1,
-    maxHeight: 96,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#CCCCCC',
-    borderRadius: 20,
-    paddingHorizontal: 14,
-    paddingTop: 8,
-    paddingBottom: 8,
-    fontSize: 14,
-    color: '#111111',
-    backgroundColor: '#FAFAFA',
-  },
-  sendButton: {
-    backgroundColor: '#4A90D9',
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-  },
-  sendText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-});
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    flex: {
+      flex: 1,
+      backgroundColor: c.background,
+    },
+    list: {
+      flex: 1,
+    },
+    listContent: {
+      padding: 12,
+      gap: 8,
+    },
+    emptyWrap: {
+      alignItems: 'center',
+      marginTop: 64,
+      gap: 10,
+      paddingHorizontal: 24,
+    },
+    emptyTitle: {
+      fontSize: 18,
+      fontWeight: '600',
+      color: c.text,
+    },
+    emptyHint: {
+      fontSize: 13,
+      color: c.text,
+      lineHeight: 22,
+      textAlign: 'left',
+    },
+    emptyFoot: {
+      fontSize: 12,
+      color: c.textMuted,
+    },
+    row: {
+      flexDirection: 'row',
+    },
+    rowUser: {
+      justifyContent: 'flex-end',
+    },
+    rowAssistant: {
+      justifyContent: 'flex-start',
+    },
+    bubbleTextUser: {
+      backgroundColor: c.primary,
+      color: c.textOnPrimary,
+      fontSize: 14,
+      borderRadius: 12,
+      borderTopRightRadius: 2,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      maxWidth: 280,
+    },
+    bubbleTextAssistant: {
+      // 淡色填充底 → card（阶段 2 规则 3 按语义就近归类）
+      backgroundColor: c.card,
+      color: c.text,
+      fontSize: 12,
+      borderRadius: 12,
+      borderTopLeftRadius: 2,
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      maxWidth: 300,
+    },
+    cardWrap: {
+      paddingHorizontal: 12,
+      paddingBottom: 4,
+    },
+    actionRow: {
+      flexDirection: 'row',
+      gap: 8,
+      marginTop: 8,
+    },
+    primaryButton: {
+      flex: 1,
+      backgroundColor: c.primary,
+      borderRadius: 8,
+      paddingVertical: 10,
+      alignItems: 'center',
+    },
+    secondaryButton: {
+      flex: 1,
+      backgroundColor: c.card,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.border,
+      borderRadius: 8,
+      paddingVertical: 10,
+      alignItems: 'center',
+    },
+    primaryText: {
+      color: c.textOnPrimary,
+      fontSize: 14,
+      fontWeight: '600',
+    },
+    secondaryText: {
+      color: c.text,
+      fontSize: 14,
+    },
+    disabled: {
+      opacity: 0.5,
+    },
+    inputRow: {
+      flexDirection: 'row',
+      alignItems: 'flex-end',
+      gap: 8,
+      padding: 12,
+      backgroundColor: c.card,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: c.border,
+    },
+    input: {
+      flex: 1,
+      maxHeight: 96,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.border,
+      borderRadius: 20,
+      paddingHorizontal: 14,
+      paddingTop: 8,
+      paddingBottom: 8,
+      fontSize: 14,
+      color: c.text,
+      backgroundColor: c.card,
+    },
+    sendButton: {
+      backgroundColor: c.primary,
+      borderRadius: 20,
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+    },
+    sendText: {
+      color: c.textOnPrimary,
+      fontSize: 14,
+      fontWeight: '600',
+    },
+  });
+}

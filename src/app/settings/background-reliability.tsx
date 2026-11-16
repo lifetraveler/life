@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   AppState,
@@ -17,6 +17,8 @@ import {
   requestIgnoreBatteryOptimizations,
   type BatteryOptimizationRequestResult,
 } from '../../system/batteryOptimization';
+import { useTheme } from '../../ui/theme';
+import type { ThemeColors } from '../../ui/theme';
 
 /**
  * 后台运行保障设置页（切片 20 阶段 2，AGENTS.md §7.31 第三条）：
@@ -45,6 +47,8 @@ const RESULT_NOTICES: Record<BatteryOptimizationRequestResult, string> = {
 };
 
 export default function BackgroundReliabilitySettingsPage() {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [checking, setChecking] = useState(true);
   /** null = 状态读取失败（读取错误见 error） */
   const [ignoring, setIgnoring] = useState<boolean | null>(null);
@@ -226,10 +230,11 @@ export default function BackgroundReliabilitySettingsPage() {
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
   scroll: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: c.background,
   },
   container: {
     padding: 16,
@@ -242,12 +247,12 @@ const styles = StyleSheet.create({
   },
   hint: {
     fontSize: 12,
-    color: '#888',
+    color: c.textMuted,
     lineHeight: 18,
     marginBottom: 8,
   },
   statusCard: {
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
     borderRadius: 8,
     padding: 14,
     marginTop: 8,
@@ -255,27 +260,27 @@ const styles = StyleSheet.create({
   },
   statusLabel: {
     fontSize: 14,
-    color: '#333',
+    color: c.text,
     marginBottom: 6,
   },
   statusOn: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#1e6f5c',
+    color: c.primary,
     marginBottom: 6,
   },
   statusOff: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#b00020',
+    color: c.danger,
     marginBottom: 6,
   },
   recheckText: {
     fontSize: 12,
-    color: '#1976d2',
+    color: c.primary,
   },
   primaryButton: {
-    backgroundColor: '#1e6f5c',
+    backgroundColor: c.primary,
     borderRadius: 8,
     paddingVertical: 12,
     alignItems: 'center',
@@ -283,12 +288,12 @@ const styles = StyleSheet.create({
   },
   primaryText: {
     fontSize: 14,
-    color: '#fff',
+    color: c.textOnPrimary,
     fontWeight: '600',
   },
   secondaryButton: {
     borderWidth: 1,
-    borderColor: '#1e6f5c',
+    borderColor: c.primary,
     borderRadius: 8,
     paddingVertical: 12,
     alignItems: 'center',
@@ -296,21 +301,22 @@ const styles = StyleSheet.create({
   },
   secondaryText: {
     fontSize: 14,
-    color: '#1e6f5c',
+    color: c.primary,
     fontWeight: '600',
   },
   noticeText: {
     fontSize: 12,
-    color: '#555',
+    color: c.textMuted,
     lineHeight: 18,
     marginTop: 4,
   },
   errorText: {
     fontSize: 12,
-    color: '#c62828',
+    color: c.danger,
     marginTop: 8,
   },
   disabled: {
     opacity: 0.5,
   },
-});
+  });
+}

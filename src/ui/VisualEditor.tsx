@@ -1,10 +1,12 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import CategoryChip from './CategoryChip';
 import ColorPalette from './ColorPalette';
 import EmojiPicker from './EmojiPicker';
 import TagChip from './TagChip';
+import { useTheme } from './theme';
+import type { ThemeColors } from './theme';
 
 interface VisualEditorProps {
   /** 'category' 用 CategoryChip 预览；'tag' 用 TagChip（both 模式）预览 */
@@ -37,6 +39,8 @@ export default function VisualEditor({
   onSave,
   onCancel,
 }: VisualEditorProps) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [color, setColor] = useState<string | null>(initialColor);
   const [emoji, setEmoji] = useState<string | null>(initialEmoji);
 
@@ -69,7 +73,7 @@ export default function VisualEditor({
           disabled={!changed || saving}
         >
           {saving ? (
-            <ActivityIndicator color="#fff" size="small" />
+            <ActivityIndicator color={colors.textOnPrimary} size="small" />
           ) : (
             <Text style={styles.primaryText}>保存</Text>
           )}
@@ -84,60 +88,62 @@ export default function VisualEditor({
   );
 }
 
-const styles = StyleSheet.create({
-  box: {
-    marginTop: 10,
-    paddingTop: 10,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#e0e0e0',
-    gap: 4,
-  },
-  label: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#555',
-    marginTop: 6,
-  },
-  previewRow: {
-    flexDirection: 'row',
-    marginTop: 4,
-  },
-  hint: {
-    fontSize: 11,
-    color: '#aaa',
-    marginTop: 2,
-  },
-  buttonRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 12,
-  },
-  primaryButton: {
-    backgroundColor: '#1e6f5c',
-    borderRadius: 6,
-    paddingVertical: 9,
-    paddingHorizontal: 22,
-    alignItems: 'center',
-  },
-  primaryText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  secondaryButton: {
-    borderWidth: 1,
-    borderColor: '#d0d0d0',
-    borderRadius: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    backgroundColor: '#fff',
-  },
-  secondaryText: {
-    fontSize: 13,
-    color: '#555',
-  },
-  disabled: {
-    opacity: 0.5,
-  },
-});
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    box: {
+      marginTop: 10,
+      paddingTop: 10,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: c.border,
+      gap: 4,
+    },
+    label: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: c.textMuted,
+      marginTop: 6,
+    },
+    previewRow: {
+      flexDirection: 'row',
+      marginTop: 4,
+    },
+    hint: {
+      fontSize: 11,
+      color: c.textMuted,
+      marginTop: 2,
+    },
+    buttonRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      marginTop: 12,
+    },
+    primaryButton: {
+      backgroundColor: c.primary,
+      borderRadius: 6,
+      paddingVertical: 9,
+      paddingHorizontal: 22,
+      alignItems: 'center',
+    },
+    primaryText: {
+      color: c.textOnPrimary,
+      fontSize: 14,
+      fontWeight: '600',
+    },
+    secondaryButton: {
+      borderWidth: 1,
+      borderColor: c.border,
+      borderRadius: 6,
+      paddingVertical: 8,
+      paddingHorizontal: 14,
+      backgroundColor: c.card,
+    },
+    secondaryText: {
+      fontSize: 13,
+      color: c.textMuted,
+    },
+    disabled: {
+      opacity: 0.5,
+    },
+  });
+}

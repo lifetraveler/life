@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -16,6 +16,8 @@ import { SecureAiConfigStore } from '../../data/SecureAiConfigStore';
 import { OpenAICompatibleProvider } from '../../domain/ai/openAiCompatible';
 import type { TestConnectionResult } from '../../domain/ai/openAiCompatible';
 import type { AiProviderConfig } from '../../domain/ai/configStore';
+import { useTheme } from '../../ui/theme';
+import type { ThemeColors } from '../../ui/theme';
 
 /**
  * AI 配置页（tasks/slice-15.md 阶段 2 / AGENTS.md §7.24）：
@@ -37,6 +39,8 @@ type TestState =
   | { phase: 'done'; result: TestConnectionResult };
 
 export default function AiSettingsPage() {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [loaded, setLoaded] = useState<boolean>(false);
   const [baseUrl, setBaseUrl] = useState<string>(DEFAULT_BASE_URL);
   const [apiKey, setApiKey] = useState<string>('');
@@ -179,7 +183,7 @@ export default function AiSettingsPage() {
         disabled={saving || !loaded}
       >
         {saving ? (
-          <ActivityIndicator color="#FFFFFF" />
+          <ActivityIndicator color={colors.textOnPrimary} />
         ) : (
           <Text style={styles.primaryText}>{savedTick > 0 ? '已保存' : '保存配置'}</Text>
         )}
@@ -191,7 +195,7 @@ export default function AiSettingsPage() {
         disabled={testState.phase === 'testing'}
       >
         {testState.phase === 'testing' ? (
-          <ActivityIndicator color="#111111" />
+          <ActivityIndicator color={colors.text} />
         ) : (
           <Text style={styles.secondaryText}>测试连接</Text>
         )}
@@ -226,10 +230,11 @@ export default function AiSettingsPage() {
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
   page: {
     flex: 1,
-    backgroundColor: '#F5F5F5',
+    backgroundColor: c.background,
   },
   content: {
     padding: 16,
@@ -238,12 +243,12 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#111111',
+    color: c.text,
     marginBottom: 6,
   },
   hint: {
     fontSize: 13,
-    color: '#888888',
+    color: c.textMuted,
     lineHeight: 19,
     marginBottom: 20,
   },
@@ -259,47 +264,47 @@ const styles = StyleSheet.create({
   },
   showKeyText: {
     fontSize: 12,
-    color: '#888888',
+    color: c.textMuted,
   },
   label: {
     fontSize: 13,
-    color: '#555555',
+    color: c.textMuted,
     marginTop: 14,
     marginBottom: 6,
   },
   input: {
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#DDDDDD',
+    borderColor: c.border,
     borderRadius: 10,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: c.card,
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 15,
-    color: '#111111',
+    color: c.text,
   },
   primaryButton: {
     marginTop: 24,
-    backgroundColor: '#1E6F5C',
+    backgroundColor: c.primary,
     borderRadius: 12,
     alignItems: 'center',
     paddingVertical: 13,
   },
   primaryText: {
-    color: '#FFFFFF',
+    color: c.textOnPrimary,
     fontSize: 15,
     fontWeight: '600',
   },
   secondaryButton: {
     marginTop: 12,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: c.card,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#DDDDDD',
+    borderColor: c.border,
     borderRadius: 12,
     alignItems: 'center',
     paddingVertical: 13,
   },
   secondaryText: {
-    color: '#111111',
+    color: c.text,
     fontSize: 15,
     fontWeight: '600',
   },
@@ -310,14 +315,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   resultOk: {
-    backgroundColor: '#E6F4EF',
+    backgroundColor: c.card,
   },
   resultFail: {
-    backgroundColor: '#FBEAEA',
+    backgroundColor: c.card,
   },
   resultText: {
     fontSize: 13,
-    color: '#111111',
+    color: c.text,
     lineHeight: 18,
   },
   dangerButton: {
@@ -327,7 +332,7 @@ const styles = StyleSheet.create({
   },
   dangerText: {
     fontSize: 14,
-    color: '#C0392B',
+    color: c.danger,
   },
   backButton: {
     marginTop: 8,
@@ -337,4 +342,5 @@ const styles = StyleSheet.create({
   pressed: {
     opacity: 0.6,
   },
-});
+  });
+}

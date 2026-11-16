@@ -1,5 +1,8 @@
+import { useMemo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { useTheme } from './theme';
+import type { ThemeColors } from './theme';
 import { EMOJI_CHOICES } from './visualOptions';
 
 interface EmojiPickerProps {
@@ -16,6 +19,8 @@ interface EmojiPickerProps {
  * 纯展示组件：不接触 Repository / 数据库。
  */
 export default function EmojiPicker({ selected, onSelect, disabled = false }: EmojiPickerProps) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   return (
     <View style={styles.grid}>
       {EMOJI_CHOICES.map((emoji) => {
@@ -44,40 +49,39 @@ export default function EmojiPicker({ selected, onSelect, disabled = false }: Em
   );
 }
 
-/** 主题绿（与项目既有 primaryButton #1e6f5c 一致），选中描边色 */
-const SELECTED_RING = '#1e6f5c';
-
-const styles = StyleSheet.create({
-  grid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-  },
-  cell: {
-    width: 42,
-    height: 42,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#f5f5f5',
-    borderWidth: 2,
-    borderColor: 'transparent',
-  },
-  cellSelected: {
-    borderColor: SELECTED_RING,
-    backgroundColor: '#e6f4ef',
-  },
-  emoji: {
-    fontSize: 22,
-  },
-  clearCell: {
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#d0d0d0',
-  },
-  clearText: {
-    fontSize: 16,
-    color: '#999',
-    fontWeight: '600',
-  },
-});
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    grid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 6,
+    },
+    cell: {
+      width: 42,
+      height: 42,
+      borderRadius: 8,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: c.card,
+      borderWidth: 2,
+      borderColor: 'transparent',
+    },
+    cellSelected: {
+      borderColor: c.primary,
+      backgroundColor: c.card,
+    },
+    emoji: {
+      fontSize: 22,
+    },
+    clearCell: {
+      backgroundColor: c.card,
+      borderWidth: 1,
+      borderColor: c.border,
+    },
+    clearText: {
+      fontSize: 16,
+      color: c.textMuted,
+      fontWeight: '600',
+    },
+  });
+}

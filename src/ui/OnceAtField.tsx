@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import DateTimePicker, {
   type DateTimePickerEvent,
 } from '@react-native-community/datetimepicker';
@@ -7,6 +7,8 @@ import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { CHIPS_MAX_MINUTES, CHIPS_MIN_MINUTES } from '../domain/settings';
 import { getDeviceTzid } from './timeFormat';
 import { onceAtPlusMinutes, onceAtTomorrowMorningNine } from './onceAtChips';
+import { useTheme } from './theme';
+import type { ThemeColors } from './theme';
 
 /** 快捷 Chips 默认增量（与 DEFAULT_APP_SETTINGS.chipsIncrements 一致；父级未传时兜底） */
 const DEFAULT_CHIPS_INCREMENTS: readonly number[] = [10, 60];
@@ -85,6 +87,8 @@ export default function OnceAtField({
   onChange,
   error,
 }: OnceAtFieldProps) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [step, setStep] = useState<PickerStep>('idle');
   // 切片 19 阶段 3（§7.30 第三条）：长按快捷 Chip 临时改增量——仅本次生效（本组件
   // 实例的局部 state），不调用 updateSettings、不写回全局；表单关闭即组件卸载，
@@ -267,13 +271,14 @@ export default function OnceAtField({
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
   field: {
     marginBottom: 10,
   },
   label: {
     fontSize: 13,
-    color: '#666',
+    color: c.textMuted,
     marginBottom: 4,
   },
   valueRow: {
@@ -285,23 +290,23 @@ const styles = StyleSheet.create({
   valueButton: {
     flex: 1,
     borderWidth: 1,
-    borderColor: '#d0d0d0',
+    borderColor: c.border,
     borderRadius: 6,
     paddingVertical: 8,
     paddingHorizontal: 10,
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
   },
   valueText: {
     fontSize: 15,
-    color: '#111',
+    color: c.text,
   },
   valuePlaceholder: {
     fontSize: 15,
-    color: '#999',
+    color: c.textMuted,
   },
   clearText: {
     fontSize: 13,
-    color: '#c62828',
+    color: c.danger,
   },
   chipRow: {
     flexDirection: 'row',
@@ -311,27 +316,27 @@ const styles = StyleSheet.create({
   },
   chip: {
     borderWidth: 1,
-    borderColor: '#d0d0d0',
+    borderColor: c.border,
     borderRadius: 6,
     paddingVertical: 6,
     paddingHorizontal: 10,
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
   },
   chipText: {
     fontSize: 13,
-    color: '#555',
+    color: c.textMuted,
   },
   chipEditBox: {
     borderWidth: 1,
-    borderColor: '#1976d2',
+    borderColor: c.primary,
     borderRadius: 6,
     padding: 8,
     marginBottom: 6,
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
   },
   chipEditLabel: {
     fontSize: 12,
-    color: '#555',
+    color: c.textMuted,
     marginBottom: 6,
   },
   chipEditRow: {
@@ -341,50 +346,51 @@ const styles = StyleSheet.create({
   },
   chipEditInput: {
     borderWidth: 1,
-    borderColor: '#d0d0d0',
+    borderColor: c.border,
     borderRadius: 6,
     paddingHorizontal: 10,
     paddingVertical: 6,
     width: 80,
     fontSize: 15,
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
   },
   chipEditSave: {
-    backgroundColor: '#1976d2',
+    backgroundColor: c.primary,
     borderRadius: 6,
     paddingVertical: 6,
     paddingHorizontal: 14,
   },
   chipEditSaveText: {
     fontSize: 13,
-    color: '#fff',
+    color: c.textOnPrimary,
     fontWeight: '600',
   },
   chipEditCancel: {
     borderWidth: 1,
-    borderColor: '#d0d0d0',
+    borderColor: c.border,
     borderRadius: 6,
     paddingVertical: 6,
     paddingHorizontal: 14,
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
   },
   chipEditCancelText: {
     fontSize: 13,
-    color: '#555',
+    color: c.textMuted,
   },
   chipEditError: {
     fontSize: 12,
-    color: '#c62828',
+    color: c.danger,
     marginTop: 6,
   },
   tzHint: {
     fontSize: 12,
-    color: '#9e9e9e',
+    color: c.textMuted,
     marginBottom: 4,
   },
   errorText: {
     fontSize: 12,
-    color: '#c62828',
+    color: c.danger,
     marginBottom: 8,
   },
 });
+}

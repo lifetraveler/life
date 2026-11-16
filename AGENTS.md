@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.25
+版本：v0.26
 
 ## 1. 项目概览
 
@@ -290,5 +290,13 @@ schema 版本 5→6，新增/修改如下：
 - **远端编辑意图**：远端 AI 路径必须支持上下文编辑（如“把刚才那个改成7点半”）。Prompt 中需明确告知 AI 如何处理 `history` 中的上一张卡片状态。
 - **本地解析边界**：本地降级解析层必须补全“叫我起床 / 响铃”等关键词，并默认生成 `once` 提醒 + `alarm` 渠道。
 
+### 7.36 主题与视觉规范（v0.26）
+- **夜间模式**：新建 `src/ui/theme.ts` 定义全局颜色 Token（背景、卡片、主/次要文字、边框、危险色）。所有页面和组件必须使用 Token 或 `useColorScheme()` 适配深浅色，禁止硬编码十六进制颜色。
+- **全局 UI 一致性**：输入框、按钮、弹窗在深色模式下必须有足够的对比度。StatusBar 需跟随主题动态切换。
+- **遗留修复**：修复 FlashPreviewCard 时间行的日期重复问题；修复 AI 上下文合并时，非修改意图的新输入不应携带上一轮的 Tags。
+
 ## 8. 当前切片
-tasks/slice-23.md（已完成阶段 1–4 全部 + 验收反馈修补：闪电录入意图澄清与渠道智能推荐。分支 task/slice-23 基点 main@8827699。阶段 1（上一会话）commit e51ac5b——AiParseContext/parse 返回值加 needsClarification/clarificationPrompt、AI_SYSTEM_PROMPT 强提醒场景节（起床/吃药/开会/抢购→alarm 渠道，未指定时默认）、localFallback 强提醒关键词（叫我/起床/响铃→once+alarm）、§7.35 成文（v0.25）；阶段 2 commit 9a83956——prompt.ts buildHistoryBriefing（从 history 末尾取最近 assistant 草稿 JSON 渲染「上一张卡片草稿摘要（修改时以此为准，禁止新建条目）：」块，民用时间经 getZonedParts 换算）+ 多轮节摘要块基准与毫秒禁令（startAt/endAt 毫秒仅供程序读取、禁止反算日期）+ openAiCompatible.parse 注入 system + appendEditHistory 契约回正（assistant=编辑后草稿 JSON）；阶段 3 commit 0430fb0——useFlashChat 澄清分支（needsClarification→setDraft(null) 不出卡+clarificationPrompt 反问+降级补充文案）、窄规则 guard（澄清待补轮「改成X点」return false）、FlashCardReminderSnapshot.channels + describeDraftChannelLine/describeCardReminderLine（⏰ 闹钟/🔔 通知）；验收反馈修补 commit 44dca30+3ffe293（flash.tsx 滚动遮挡三轮收敛：v6 scrollToEnd animated:false + onScroll 近底守卫 120px，防上翻拽回）、2f3bded（主动澄清扩展至预约/预订/安排类缺时间输入，反问先问时间可顺带问医院/机构等自然相伴细节，防误伤边界：note/纯感叹不反问）、a618171（标题保留主题词、机构/医院细节进 content：prompt 语义反转 + chat.ts fallbackTurn 降级纠正合并标题保护——expressed title≠上一轮则沿用上一轮 title、原词并入 content「；」衔接 + FlashPreviewCard 内容行）、5c1abe4（结果卡内容行：FlashCardPayload.content 快照 + FlashResultCard 📝 行非空显示）。验证终态：tsc 0 错、jest 76 套件/1042 用例全过（切片前基线 74/1012）、expo-doctor 2 项预存基线失败无新增、无新依赖无 as any、src/notifications/ 与 src/domain/recurrence/ 零 diff（冻结区未触碰）、schema 停留 v11。MuMu 实测（0.23.0/versionCode 10，设备已配置 Key 全程远端路径为主）：叫我起床→⏰ 闹钟全链（预览卡/结果卡/详情页渠道 闹钟）✓、提醒我吃药→澄清反问→下午2点出卡+alarm 推荐 ✓、明天开会→改成7点半窄规则原地改 ✓、时间改一下到8点（非窄规则动词）briefing 远端编辑未新建 ✓、我要预约我的体检→澄清「哪一天、去哪家医院」→补时间出卡（预约体检/全天）→补医院→卡片 title 不变「内容：西安交通大学第二附属医院」直接可见+结果卡 📝 行+详情页 content 同值 ✓、灵感输入（记指标/散步放松）不反问 ✓；滚动遮挡 5 轮连发复验 ✓（用户 m00634 确认）。遗留披露：远端间歇「AI 服务暂不可用（返回结构异常）」降级（isRemoteDraftWire 整体拒绝，当晚复现率高，独立问题待排查）、上下文合并带入上一轮 tags、上午无钟点→allDay（已知限制）。反馈文件 tasks/slice-23-phase2-3-feedback.md（Phase 2–3/共 4 + 验收修补滚动记录）、closeout 见 tasks/slice-23-closeout.md（§6 下一候选）。push/merge 按 §7.9 执行（merge commit 见 git log），分支 task/slice-23 保留。下一候选（本次用户提出，归属已定）：①认真模式——修改标题/内容前给选项确认（agent 式交互），默认模式按预设直接处理，需 app_settings 迁移+wire 选项字段+守卫+Chat 选项交互+设置页开关，完整切片量先出任务卡/提案；②AI 透明度——提示词查看界面（读 AI_SYSTEM_PROMPT 静态串）+ AI 回答可选显示 token 消耗/缓存命中率/大致价格（usage 管道+设置开关+迁移），两者打包一候选；③夜间模式 → ④数据备份 JSON+WebDAV（提案先行）；变更B 网络渠道后台送达插队候选，确认前不修改 src/notifications/ 实现文件；开工按 §7.1 逐切片确认。
+
+- **已完成**：切片 1–23 全部收尾合并（main，最新 merge `7a414e6`；schema v11，版本 0.23.0/versionCode 10）。切片 23 详情见 `tasks/slice-23-closeout.md` 与 `tasks/slice-23-phase2-3-feedback.md`，各切片历史见对应 `tasks/slice-NN.md` / `tasks/slice-NN-closeout.md`。
+- **当前切片**：切片 24 夜间模式与视觉清理已完成合并（提交索引与验收详见 `tasks/slice-24-closeout.md`；v0.26 修订与任务卡已随切片入库）。下一未完成项以 `tasks/backlog.md` 为准。
+- **未完成项以 `tasks/backlog.md` 为准**（2026-11-16 起的惯例）：候选排序（切片 25 认真模式 → 26 AI 透明度 → 27 系统日历 live 直读【先回答调研报告的 4 个开放问题】→ 28 备份/同步 WebDAV【设计讨论先行】+ 插队候选「变更 B 网络渠道后台送达」）、遗留 L1–L13、手验项 U1–U3、契约化已知限制均记录在 backlog，本节不再罗列候选清单。每切片 closeout 同步更新 backlog.md（划掉完成项并注明关闭切片号）并保持本节精简。

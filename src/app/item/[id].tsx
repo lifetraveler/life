@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 
@@ -31,6 +31,8 @@ import {
   formatReminderRuleSummary,
   getDeviceTzid,
 } from '../../ui/timeFormat';
+import { useTheme } from '../../ui/theme';
+import type { ThemeColors } from '../../ui/theme';
 
 /**
  * Item 详情页（切片 6，AGENTS.md §4.26 / §4.27）：
@@ -57,6 +59,9 @@ function reconcileBrief(result: ReconcileResult | null): string {
 type FormMode = { kind: 'create' } | { kind: 'edit'; reminder: Reminder } | null;
 
 export default function ItemDetailPage() {
+  // 切片 24（§7.36）：颜色走全局 Token（夜间模式），深浅色跟随系统。
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const params = useLocalSearchParams<{ id?: string }>();
   const id = typeof params.id === 'string' ? params.id : '';
   const router = useRouter();
@@ -454,147 +459,152 @@ export default function ItemDetailPage() {
   );
 }
 
-const styles = StyleSheet.create({
-  scroll: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  container: {
-    padding: 16,
-    paddingBottom: 32,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 10,
-  },
-  title: {
-    flex: 1,
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#111',
-  },
-  meta: {
-    fontSize: 12,
-    color: '#888',
-    marginTop: 4,
-  },
-  itemActionsRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 10,
-  },
-  content: {
-    fontSize: 15,
-    color: '#333',
-    marginTop: 10,
-    lineHeight: 22,
-  },
-  tagRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    marginTop: 10,
-  },
-  priorityText: {
-    fontSize: 13,
-    color: '#555',
-    alignSelf: 'center',
-  },
-  readonlyFooter: {
-    textAlign: 'center',
-    color: '#9e9e9e',
-    fontSize: 13,
-    marginTop: 24,
-  },
-  sectionBox: {
-    marginTop: 16,
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    padding: 12,
-  },
-  sectionTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 6,
-  },
-  line: {
-    fontSize: 14,
-    color: '#333',
-    marginTop: 2,
-  },
-  reminderRow: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#eee',
-    paddingTop: 8,
-    marginTop: 8,
-  },
-  reminderActions: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 6,
-  },
-  readonlyNote: {
-    fontSize: 12,
-    color: '#b26a00',
-    marginTop: 4,
-  },
-  errorText: {
-    fontSize: 12,
-    color: '#c62828',
-    marginTop: 8,
-  },
-  secondaryButton: {
-    borderWidth: 1,
-    borderColor: '#d0d0d0',
-    borderRadius: 6,
-    paddingVertical: 5,
-    paddingHorizontal: 10,
-    backgroundColor: '#fff',
-    alignSelf: 'flex-start',
-  },
-  secondaryText: {
-    fontSize: 13,
-    color: '#555',
-  },
-  dangerButton: {
-    borderColor: '#c62828',
-  },
-  dangerText: {
-    color: '#c62828',
-  },
-  devBox: {
-    marginTop: 16,
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: '#bbb',
-    borderRadius: 8,
-    padding: 10,
-  },
-  devTitle: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#666',
-    marginBottom: 4,
-  },
-  devText: {
-    fontSize: 12,
-    color: '#666',
-  },
-  sourceBadge: {
-    backgroundColor: '#eef2ff',
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  sourceBadgeText: {
-    fontSize: 12,
-    color: '#4f46e5',
-  },
-  sourceDeleteButton: {
-    marginTop: 8,
-    alignSelf: 'flex-start',
-  },
-});
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    scroll: {
+      flex: 1,
+      backgroundColor: c.background,
+    },
+    container: {
+      padding: 16,
+      paddingBottom: 32,
+    },
+    headerRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 10,
+    },
+    title: {
+      flex: 1,
+      fontSize: 20,
+      fontWeight: '700',
+      color: c.text,
+    },
+    meta: {
+      fontSize: 12,
+      color: c.textMuted,
+      marginTop: 4,
+    },
+    itemActionsRow: {
+      flexDirection: 'row',
+      gap: 8,
+      marginTop: 10,
+    },
+    content: {
+      fontSize: 15,
+      color: c.text,
+      marginTop: 10,
+      lineHeight: 22,
+    },
+    tagRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 6,
+      marginTop: 10,
+    },
+    priorityText: {
+      fontSize: 13,
+      color: c.textMuted,
+      alignSelf: 'center',
+    },
+    readonlyFooter: {
+      textAlign: 'center',
+      color: c.textMuted,
+      fontSize: 13,
+      marginTop: 24,
+    },
+    sectionBox: {
+      marginTop: 16,
+      backgroundColor: c.card,
+      borderRadius: 8,
+      padding: 12,
+    },
+    sectionTitle: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: c.text,
+      marginBottom: 6,
+    },
+    line: {
+      fontSize: 14,
+      color: c.text,
+      marginTop: 2,
+    },
+    reminderRow: {
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: c.border,
+      paddingTop: 8,
+      marginTop: 8,
+    },
+    reminderActions: {
+      flexDirection: 'row',
+      gap: 8,
+      marginTop: 6,
+    },
+    readonlyNote: {
+      fontSize: 12,
+      // 警示语义归 danger（Token 注释含「过期警示」族；切片 24 禁硬编码 hex）
+      color: c.danger,
+      marginTop: 4,
+    },
+    errorText: {
+      fontSize: 12,
+      color: c.danger,
+      marginTop: 8,
+    },
+    secondaryButton: {
+      borderWidth: 1,
+      borderColor: c.border,
+      borderRadius: 6,
+      paddingVertical: 5,
+      paddingHorizontal: 10,
+      backgroundColor: c.card,
+      alignSelf: 'flex-start',
+    },
+    secondaryText: {
+      fontSize: 13,
+      color: c.textMuted,
+    },
+    dangerButton: {
+      borderColor: c.danger,
+    },
+    dangerText: {
+      color: c.danger,
+    },
+    devBox: {
+      marginTop: 16,
+      borderWidth: 1,
+      borderStyle: 'dashed',
+      borderColor: c.border,
+      borderRadius: 8,
+      padding: 10,
+    },
+    devTitle: {
+      fontSize: 12,
+      fontWeight: '600',
+      color: c.textMuted,
+      marginBottom: 4,
+    },
+    devText: {
+      fontSize: 12,
+      color: c.textMuted,
+    },
+    sourceBadge: {
+      // 淡色填充底 → card（阶段 2 规则 3 按语义就近归类）
+      backgroundColor: c.card,
+      borderRadius: 6,
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+    },
+    sourceBadgeText: {
+      fontSize: 12,
+      // 靛蓝强调文字按信息提示语义归 text（与 TagChip/readonlyTitle 同口径）
+      color: c.text,
+    },
+    sourceDeleteButton: {
+      marginTop: 8,
+      alignSelf: 'flex-start',
+    },
+  });
+}

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 
@@ -9,6 +9,8 @@ import { TYPE_LABELS, formatTimestamp } from '../ui/display';
 import TagChip from '../ui/TagChip';
 import { useTagDisplayMode } from '../ui/useTagDisplayMode';
 import { formatItemStart, getDeviceTzid } from '../ui/timeFormat';
+import { useTheme } from '../ui/theme';
+import type { ThemeColors } from '../ui/theme';
 
 /**
  * 已归档列表（ui.md v0.12）：展示 status = 'archived' 的 Item 及其标签，可取消归档。
@@ -17,6 +19,10 @@ import { formatItemStart, getDeviceTzid } from '../ui/timeFormat';
  * 加载与取消归档失败均用页面内提示，不静默（不再只 console.error）。
  */
 export default function ArchivedScreen() {
+  // 切片 24（§7.36）：颜色走全局 Token（夜间模式），深浅色跟随系统。
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+
   const router = useRouter();
   const [items, setItems] = useState<ItemWithTags[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -82,7 +88,7 @@ export default function ArchivedScreen() {
         </Pressable>
       </View>
     </View>
-  ), [handleUnarchive, router, tagDisplayMode]);
+  ), [handleUnarchive, router, styles, tagDisplayMode]);
 
   return (
     <View style={styles.container}>
@@ -99,51 +105,53 @@ export default function ArchivedScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#ffffff',
-    paddingHorizontal: 16,
-    paddingTop: 16,
-  },
-  row: {
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e5e5e5',
-  },
-  rowTitle: {
-    fontSize: 15,
-    marginBottom: 2,
-  },
-  rowMeta: {
-    fontSize: 12,
-    color: '#888888',
-    marginBottom: 6,
-  },
-  tagRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    marginBottom: 6,
-  },
-  actionRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  actionButton: {
-    borderWidth: 1,
-    borderColor: '#cccccc',
-    borderRadius: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
-  actionText: {
-    fontSize: 12,
-    color: '#333333',
-  },
-  errorText: {
-    color: '#b00020',
-    fontSize: 13,
-    marginBottom: 8,
-  },
-});
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: c.background,
+      paddingHorizontal: 16,
+      paddingTop: 16,
+    },
+    row: {
+      paddingVertical: 10,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.border,
+    },
+    rowTitle: {
+      fontSize: 15,
+      marginBottom: 2,
+    },
+    rowMeta: {
+      fontSize: 12,
+      color: c.textMuted,
+      marginBottom: 6,
+    },
+    tagRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 6,
+      marginBottom: 6,
+    },
+    actionRow: {
+      flexDirection: 'row',
+      gap: 8,
+    },
+    actionButton: {
+      borderWidth: 1,
+      borderColor: c.border,
+      borderRadius: 6,
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+    },
+    actionText: {
+      fontSize: 12,
+      color: c.text,
+    },
+    errorText: {
+      color: c.danger,
+      fontSize: 13,
+      marginBottom: 8,
+    },
+  });
+}

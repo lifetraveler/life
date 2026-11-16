@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 
 import EmptyState from '../ui/EmptyState';
 import { getLastImportResult } from '../ui/transferResultStore';
+import { useTheme } from '../ui/theme';
+import type { ThemeColors } from '../ui/theme';
 
 /**
  * 导入结果页（切片 8，tasks/slice-08.md 实现要求 4）：
@@ -14,6 +16,8 @@ import { getLastImportResult } from '../ui/transferResultStore';
  */
 
 export default function ImportResultPage() {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const router = useRouter();
   const result = getLastImportResult();
   const [failuresExpanded, setFailuresExpanded] = useState(false);
@@ -78,10 +82,11 @@ export default function ImportResultPage() {
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
   scroll: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: c.background,
   },
   container: {
     padding: 16,
@@ -89,7 +94,7 @@ const styles = StyleSheet.create({
   },
   emptyContainer: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: c.background,
     alignItems: 'center',
     justifyContent: 'center',
     padding: 16,
@@ -98,36 +103,36 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#111',
+    color: c.text,
   },
   meta: {
     fontSize: 12,
-    color: '#888',
+    color: c.textMuted,
     marginTop: 4,
   },
   statBox: {
     marginTop: 14,
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
     borderRadius: 8,
     padding: 14,
     gap: 6,
   },
   statLine: {
     fontSize: 14,
-    color: '#333',
+    color: c.text,
   },
   statFailure: {
-    color: '#c62828',
+    color: c.danger,
   },
   sectionBox: {
     marginTop: 12,
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
     borderRadius: 8,
     padding: 14,
   },
   expandToggle: {
     fontSize: 13,
-    color: '#2563eb',
+    color: c.primary,
   },
   failureRow: {
     marginTop: 10,
@@ -135,16 +140,16 @@ const styles = StyleSheet.create({
   failureSummary: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#333',
+    color: c.text,
   },
   failureReason: {
     fontSize: 12,
-    color: '#c62828',
+    color: c.danger,
     marginTop: 2,
   },
   primaryButton: {
     marginTop: 18,
-    backgroundColor: '#1e6f5c',
+    backgroundColor: c.primary,
     borderRadius: 6,
     paddingVertical: 10,
     alignItems: 'center',
@@ -152,22 +157,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: 22,
   },
   primaryText: {
-    color: '#fff',
+    color: c.textOnPrimary,
     fontSize: 14,
     fontWeight: '600',
   },
   secondaryButton: {
     marginTop: 10,
     borderWidth: 1,
-    borderColor: '#d0d0d0',
+    borderColor: c.border,
     borderRadius: 6,
     paddingVertical: 8,
     paddingHorizontal: 16,
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
     alignSelf: 'flex-start',
   },
   secondaryText: {
     fontSize: 13,
-    color: '#555',
+    color: c.textMuted,
   },
-});
+  });
+}

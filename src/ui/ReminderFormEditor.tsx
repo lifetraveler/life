@@ -11,6 +11,8 @@ import {
   WEEKDAY_OPTIONS,
 } from './reminderForm';
 import type { ReminderFormValues } from './reminderForm';
+import { useTheme } from './theme';
+import type { ThemeColors } from './theme';
 import TzPicker from './TzPicker';
 
 /**
@@ -119,6 +121,8 @@ export default function ReminderForm({
   onSubmit,
   onCancel,
 }: ReminderFormProps) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [values, setValues] = useState<ReminderFormValues>(() =>
     initialValues(initial, defaultChannels),
   );
@@ -293,12 +297,13 @@ export default function ReminderForm({
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
   form: {
     marginTop: 8,
     paddingTop: 8,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#ddd',
+    borderTopColor: c.border,
   },
   fieldRow: {
     flexDirection: 'row',
@@ -313,69 +318,69 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     minWidth: 64,
     borderWidth: 1,
-    borderColor: '#d0d0d0',
+    borderColor: c.border,
     borderRadius: 6,
     paddingVertical: 8,
     paddingHorizontal: 12,
     alignItems: 'center',
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
   },
   segmentSelected: {
-    borderColor: '#1976d2',
-    backgroundColor: '#e3f2fd',
+    borderColor: c.primary,
+    backgroundColor: c.card,
   },
   segmentText: {
     fontSize: 14,
-    color: '#555',
+    color: c.textMuted,
   },
   segmentTextSelected: {
-    color: '#1976d2',
+    color: c.primary,
     fontWeight: '600',
   },
   label: {
     fontSize: 13,
-    color: '#666',
+    color: c.textMuted,
   },
   colon: {
     fontSize: 15,
-    color: '#111',
+    color: c.text,
   },
   timeInput: {
     borderWidth: 1,
-    borderColor: '#d0d0d0',
+    borderColor: c.border,
     borderRadius: 6,
     paddingHorizontal: 10,
     paddingVertical: 6,
     width: 64,
     fontSize: 15,
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
   },
   inputError: {
-    borderColor: '#c62828',
+    borderColor: c.danger,
   },
   weekdayChip: {
     borderWidth: 1,
-    borderColor: '#d0d0d0',
+    borderColor: c.border,
     borderRadius: 6,
     paddingVertical: 6,
     paddingHorizontal: 10,
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
   },
   weekdayChipSelected: {
-    borderColor: '#1976d2',
-    backgroundColor: '#e3f2fd',
+    borderColor: c.primary,
+    backgroundColor: c.card,
   },
   weekdayText: {
     fontSize: 13,
-    color: '#555',
+    color: c.textMuted,
   },
   weekdayTextSelected: {
-    color: '#1976d2',
+    color: c.primary,
     fontWeight: '600',
   },
   errorText: {
     fontSize: 12,
-    color: '#c62828',
+    color: c.danger,
     marginBottom: 8,
   },
   switchRow: {
@@ -400,16 +405,17 @@ const styles = StyleSheet.create({
     opacity: 0.4,
   },
   secondaryButton: {
-    borderColor: '#d0d0d0',
-    backgroundColor: '#fff',
+    borderColor: c.border,
+    backgroundColor: c.card,
   },
   secondaryText: {
     fontSize: 14,
-    color: '#555',
+    color: c.textMuted,
   },
   primaryText: {
     fontSize: 14,
-    color: '#1976d2',
+    color: c.primary,
     fontWeight: '600',
   },
 });
+}

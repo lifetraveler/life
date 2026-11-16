@@ -14,10 +14,11 @@
  *   chips 条件=有具体时间非 allDay）；
  * - 快捷推迟 chips（+15分钟/+1小时）本阶段仅禁用占位（onPostpone 未接线），
  *   阶段 3 接线并联动顺延 once 提醒 onceAt；
- * - 样式沿用闪电录入设计语言（白卡 hairline #DDDDDD、主色 #4A90D9），
+ * - 样式沿用闪电录入设计语言（白卡 hairline 描边 colors.border、主色 colors.primary），
  *   chip 容器 flexWrap 自适应宽（§7.32 高分屏响应）。
  */
 
+import { useMemo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type {
@@ -31,6 +32,8 @@ import {
   WEEKDAY_LABELS,
 } from './timeFormat';
 import { REMINDER_CHANNEL_LABELS } from './reminderForm';
+import { useTheme } from './theme';
+import type { ThemeColors } from './theme';
 
 /** 分类色缺失时的回退灰（Category.color null 的 UI 回退语义，取预置 other 色值）。 */
 const FALLBACK_CATEGORY_COLOR = '#9E9E9E';
@@ -103,6 +106,8 @@ export default function FlashResultCard({
   onPress,
   onPostpone,
 }: FlashResultCardProps) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const timeLine = describeCardTimeLine(payload, tzid);
   const reminderLine = describeCardReminderLine(payload.reminder);
   const categoryColor = payload.category?.color ?? FALLBACK_CATEGORY_COLOR;
@@ -182,83 +187,85 @@ export default function FlashResultCard({
   );
 }
 
-const styles = StyleSheet.create({
-  card: {
-    flexDirection: 'row',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#DDDDDD',
-    overflow: 'hidden',
-    shadowColor: '#000000',
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
-    maxWidth: 320,
-  },
-  colorBar: {
-    width: 4,
-  },
-  body: {
-    flex: 1,
-    padding: 12,
-    gap: 6,
-  },
-  categoryRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  categoryEmoji: {
-    fontSize: 12,
-  },
-  categoryName: {
-    fontSize: 12,
-    color: '#999999',
-  },
-  title: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: '#111111',
-    lineHeight: 22,
-  },
-  metaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  metaIcon: {
-    fontSize: 12,
-  },
-  metaText: {
-    fontSize: 13,
-    color: '#444444',
-    flexShrink: 1,
-  },
-  chipRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 4,
-  },
-  chip: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#CCCCCC',
-    borderRadius: 14,
-    paddingVertical: 4,
-    paddingHorizontal: 12,
-    backgroundColor: '#FFFFFF',
-  },
-  chipDisabled: {
-    opacity: 0.5,
-  },
-  chipText: {
-    fontSize: 12,
-    color: '#4A90D9',
-    fontWeight: '600',
-  },
-  chipTextDisabled: {
-    color: '#999999',
-  },
-});
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    card: {
+      flexDirection: 'row',
+      backgroundColor: c.card,
+      borderRadius: 16,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.border,
+      overflow: 'hidden',
+      shadowColor: c.border,
+      shadowOpacity: 0.06,
+      shadowRadius: 8,
+      shadowOffset: { width: 0, height: 2 },
+      elevation: 2,
+      maxWidth: 320,
+    },
+    colorBar: {
+      width: 4,
+    },
+    body: {
+      flex: 1,
+      padding: 12,
+      gap: 6,
+    },
+    categoryRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+    },
+    categoryEmoji: {
+      fontSize: 12,
+    },
+    categoryName: {
+      fontSize: 12,
+      color: c.textMuted,
+    },
+    title: {
+      fontSize: 17,
+      fontWeight: '700',
+      color: c.text,
+      lineHeight: 22,
+    },
+    metaRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+    },
+    metaIcon: {
+      fontSize: 12,
+    },
+    metaText: {
+      fontSize: 13,
+      color: c.text,
+      flexShrink: 1,
+    },
+    chipRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+      marginTop: 4,
+    },
+    chip: {
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.border,
+      borderRadius: 14,
+      paddingVertical: 4,
+      paddingHorizontal: 12,
+      backgroundColor: c.card,
+    },
+    chipDisabled: {
+      opacity: 0.5,
+    },
+    chipText: {
+      fontSize: 12,
+      color: c.primary,
+      fontWeight: '600',
+    },
+    chipTextDisabled: {
+      color: c.textMuted,
+    },
+  });
+}

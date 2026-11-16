@@ -18,6 +18,7 @@
  */
 
 import { AiParseError } from './errors';
+import { matchesEditIntent } from './editIntent';
 import { LocalFallbackProvider } from './localFallback';
 import { mergeDraftCorrection } from './merge';
 import { OpenAICompatibleProvider } from './openAiCompatible';
@@ -68,9 +69,21 @@ function fallbackTurn(
     history: [...deps.history],
   };
   const parsed = localFallback.parseSlots(trimmed, context);
+  // 切片 24（§7.36 / slice-23 遗留 2）：tags 只在两种轮次从上一轮继承——
+  // 1) 编辑词轮（「改成X点」，同一张卡的修改；多数被 useFlashChat 编辑窄规则
+  //    拦截，此处兜底 allDay 卡等漏网路径）；
+  // 2) 澄清待补轮（previousDraft.needsClarification=true，续答补全的是同一
+  //    事项，§7.35 语义必须保留，否则「提醒我吃药 #健康」+「明早8点」丢标签）。
+  // 其余（全新意图的新输入）不继承：tags 恒取本轮解析值，未表达即为空，
+  // 避免「叫醒卡带上一条散步/心情标签」的跨条目污染。
+  const inheritTags =
+    matchesEditIntent(trimmed) ||
+    deps.previousDraft?.needsClarification === true;
   let merged = parsed.draft;
   if (deps.previousDraft !== null) {
-    merged = mergeDraftCorrection(deps.previousDraft, parsed.draft, parsed.expressed);
+    merged = mergeDraftCorrection(deps.previousDraft, parsed.draft, parsed.expressed, {
+      inheritTags,
+    });
     // 切片 23 验收反馈修补：降级纠正轮标题不被本轮剩余原文覆盖——本地槽位解析
     // 没有 LLM 的标题提炼能力，“预约到XX医院”这类补充轮的剩余原文会被当成
     // expressed 标题，把上一轮主题词（如「预约体检」）改写掉。标题沿用上一轮，

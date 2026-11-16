@@ -28,21 +28,26 @@ import { itemRepository } from '../data';
 import { sortSearchResults } from '../domain/views/searchOrder';
 import type { ItemWithRelations } from '../domain/relations/itemWithRelations';
 import { formatAgendaTimeRange, getDeviceTzid } from '../ui/timeFormat';
+import { useTheme } from '../ui/theme';
+import type { ThemeColors } from '../ui/theme';
 
 const SEARCH_DEBOUNCE_MS = 300;
 const PAGE_SIZE = 50;
 const PREFETCH_DISTANCE_PX = 1200;
 const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
-const CARD_STRIPE_FALLBACK = '#DDDDDD';
 
 type IoniconName = ComponentProps<typeof Ionicons>['name'];
 
 /** 搜索结果行：分类色条 + 标题 + 时间标签（无时间显示待办标记）。 */
 function SearchItemCard({ item, deviceTzid }: { item: ItemWithRelations; deviceTzid: string }) {
+  // 切片 24（§7.36）：颜色走全局 Token（夜间模式），深浅色跟随系统。
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const stripeColor =
     item.category?.color && HEX_COLOR_PATTERN.test(item.category.color)
       ? item.category.color
-      : CARD_STRIPE_FALLBACK;
+      : // 分类色缺失/非法时色条回退 colors.border（切片 24：与 plan.tsx 同口径，回退色随主题切换）
+        colors.border;
   const timeLabel = formatAgendaTimeRange(
     { startAt: item.startAt, endAt: item.endAt, allDay: item.allDay },
     deviceTzid,
@@ -64,6 +69,9 @@ function SearchItemCard({ item, deviceTzid }: { item: ItemWithRelations; deviceT
 }
 
 export default function SearchPage() {
+  // 切片 24（§7.36）：颜色走全局 Token（夜间模式），深浅色跟随系统。
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [keyword, setKeyword] = useState('');
   const [results, setResults] = useState<ItemWithRelations[]>([]);
   const [deviceTzid, setDeviceTzid] = useState('Asia/Shanghai');
@@ -146,23 +154,23 @@ export default function SearchPage() {
           onPress={() => router.back()}
           accessibilityLabel="返回"
         >
-          <Ionicons name="chevron-back" size={22} color="#111111" />
+          <Ionicons name="chevron-back" size={22} color={colors.text} />
         </Pressable>
         <View style={styles.inputWrap}>
-          <Ionicons name="search-outline" size={16} color="#999999" />
+          <Ionicons name="search-outline" size={16} color={colors.textMuted} />
           <TextInput
             style={styles.input}
             value={keyword}
             onChangeText={setKeyword}
             placeholder="搜索标题、内容、标签"
-            placeholderTextColor="#999999"
+            placeholderTextColor={colors.textMuted}
             autoFocus
             returnKeyType="search"
             autoCorrect={false}
           />
           {searching ? (
             <Pressable onPress={() => setKeyword('')} accessibilityLabel="清空搜索">
-              <Ionicons name="close-circle" size={16} color="#BBBBBB" />
+              <Ionicons name="close-circle" size={16} color={colors.textMuted} />
             </Pressable>
           ) : null}
         </View>
@@ -187,98 +195,101 @@ export default function SearchPage() {
   );
 }
 
-const styles = StyleSheet.create({
-  page: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingTop: 56,
-    paddingBottom: 12,
-    backgroundColor: '#f5f5f5',
-  },
-  backButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  iconPressed: {
-    opacity: 0.6,
-  },
-  inputWrap: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E0E0E0',
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-  input: {
-    flex: 1,
-    fontSize: 15,
-    color: '#111111',
-    paddingVertical: 0,
-  },
-  meta: {
-    fontSize: 12,
-    color: '#999999',
-    paddingHorizontal: 16,
-    marginBottom: 4,
-  },
-  list: {
-    flex: 1,
-  },
-  listContent: {
-    paddingHorizontal: 16,
-    paddingBottom: 32,
-  },
-  listEmpty: {
-    flexGrow: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  empty: {
-    fontSize: 14,
-    color: '#999999',
-  },
-  card: {
-    flexDirection: 'row',
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#ECECEC',
-    backgroundColor: '#FAFAFA',
-    marginBottom: 8,
-    overflow: 'hidden',
-  },
-  cardPressed: {
-    opacity: 0.7,
-  },
-  cardStripe: {
-    width: 4,
-  },
-  cardBody: {
-    flex: 1,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-  },
-  cardTitle: {
-    fontSize: 15,
-    color: '#111111',
-    lineHeight: 20,
-  },
-  cardTime: {
-    fontSize: 12,
-    color: '#888888',
-    marginTop: 3,
-  },
-});
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    page: {
+      flex: 1,
+      backgroundColor: c.background,
+    },
+    topBar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingHorizontal: 16,
+      paddingTop: 56,
+      paddingBottom: 12,
+      backgroundColor: c.background,
+    },
+    backButton: {
+      width: 32,
+      height: 32,
+      borderRadius: 16,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    iconPressed: {
+      opacity: 0.6,
+    },
+    inputWrap: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      borderRadius: 12,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.border,
+      backgroundColor: c.card,
+      paddingHorizontal: 10,
+      paddingVertical: 8,
+    },
+    input: {
+      flex: 1,
+      fontSize: 15,
+      color: c.text,
+      paddingVertical: 0,
+    },
+    meta: {
+      fontSize: 12,
+      color: c.textMuted,
+      paddingHorizontal: 16,
+      marginBottom: 4,
+    },
+    list: {
+      flex: 1,
+    },
+    listContent: {
+      paddingHorizontal: 16,
+      paddingBottom: 32,
+    },
+    listEmpty: {
+      flexGrow: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    empty: {
+      fontSize: 14,
+      color: c.textMuted,
+    },
+    card: {
+      flexDirection: 'row',
+      borderRadius: 12,
+      borderWidth: StyleSheet.hairlineWidth,
+      // 卡片描边/底为浅灰系但非页面根底 → 按语义归 border/card（阶段 2 规则 3）
+      borderColor: c.border,
+      backgroundColor: c.card,
+      marginBottom: 8,
+      overflow: 'hidden',
+    },
+    cardPressed: {
+      opacity: 0.7,
+    },
+    cardStripe: {
+      width: 4,
+    },
+    cardBody: {
+      flex: 1,
+      paddingVertical: 10,
+      paddingHorizontal: 10,
+    },
+    cardTitle: {
+      fontSize: 15,
+      color: c.text,
+      lineHeight: 20,
+    },
+    cardTime: {
+      fontSize: 12,
+      color: c.textMuted,
+      marginTop: 3,
+    },
+  });
+}

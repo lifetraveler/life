@@ -8,6 +8,7 @@
  *   （life://quick-add → item/new）聚焦标题输入（ui.md「快速记录落点 v0.14」）。
  */
 
+import { useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 
 import type { Category } from '../domain/category';
@@ -16,6 +17,8 @@ import type { Tag } from '../domain/tag';
 import CategoryChip from './CategoryChip';
 import DateTimeField from './DateTimeField';
 import TagChip from './TagChip';
+import { useTheme } from './theme';
+import type { ThemeColors } from './theme';
 import { useTagDisplayMode } from './useTagDisplayMode';
 import type { ItemForm } from './useItemForm';
 
@@ -55,6 +58,8 @@ export default function ItemFormFields({
   deviceTzid,
   autoFocusTitle = false,
 }: ItemFormFieldsProps) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const tagDisplayMode = useTagDisplayMode();
   return (
     <>
@@ -172,23 +177,24 @@ export default function ItemFormFields({
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
   label: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#555',
+    color: c.textMuted,
     marginTop: 12,
     marginBottom: 6,
   },
   input: {
     borderWidth: 1,
-    borderColor: '#d0d0d0',
+    borderColor: c.border,
     borderRadius: 6,
     paddingHorizontal: 10,
     paddingVertical: 8,
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
     fontSize: 15,
-    color: '#111',
+    color: c.text,
   },
   contentInput: {
     minHeight: 80,
@@ -215,26 +221,26 @@ const styles = StyleSheet.create({
     padding: 1,
   },
   categoryOptionActive: {
-    borderColor: '#1e6f5c',
+    borderColor: c.primary,
   },
   chip: {
     borderWidth: 1,
-    borderColor: '#d0d0d0',
+    borderColor: c.border,
     borderRadius: 14,
     paddingVertical: 5,
     paddingHorizontal: 12,
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
   },
   chipActive: {
-    borderColor: '#1e6f5c',
-    backgroundColor: '#e6f4ef',
+    borderColor: c.primary,
+    backgroundColor: c.card,
   },
   chipText: {
     fontSize: 13,
-    color: '#555',
+    color: c.textMuted,
   },
   chipTextActive: {
-    color: '#1e6f5c',
+    color: c.primary,
     fontWeight: '600',
   },
   switchRow: {
@@ -244,18 +250,19 @@ const styles = StyleSheet.create({
   },
   secondaryButton: {
     borderWidth: 1,
-    borderColor: '#d0d0d0',
+    borderColor: c.border,
     borderRadius: 6,
     paddingVertical: 9,
     paddingHorizontal: 14,
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
   },
   secondaryText: {
     fontSize: 13,
-    color: '#555',
+    color: c.textMuted,
   },
   meta: {
     fontSize: 12,
-    color: '#888',
+    color: c.textMuted,
   },
 });
+}

@@ -1,6 +1,9 @@
+import { useMemo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { REMINDER_TZ_OPTIONS } from './reminderForm';
+import { useTheme } from './theme';
+import type { ThemeColors } from './theme';
 
 /**
  * Reminder 时区选择器（切片 6，AGENTS.md §4.25）：
@@ -13,6 +16,8 @@ interface TzPickerProps {
 }
 
 export default function TzPicker({ value, onChange }: TzPickerProps) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   return (
     <View style={styles.field}>
       <Text style={styles.label}>时区</Text>
@@ -39,43 +44,45 @@ export default function TzPicker({ value, onChange }: TzPickerProps) {
   );
 }
 
-const styles = StyleSheet.create({
-  field: {
-    marginBottom: 10,
-  },
-  label: {
-    fontSize: 13,
-    color: '#666',
-    marginBottom: 4,
-  },
-  row: {
-    flexDirection: 'row',
-    gap: 8,
-    flexWrap: 'wrap',
-  },
-  option: {
-    // 切片 21（AGENTS.md §7.32）：自适应宽度，大字体下不折行（行容器补 flexWrap 兜底）。
-    flexGrow: 0,
-    flexShrink: 1,
-    minWidth: 88,
-    borderWidth: 1,
-    borderColor: '#d0d0d0',
-    borderRadius: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-  },
-  optionSelected: {
-    borderColor: '#1976d2',
-    backgroundColor: '#e3f2fd',
-  },
-  optionText: {
-    fontSize: 13,
-    color: '#555',
-  },
-  optionTextSelected: {
-    color: '#1976d2',
-    fontWeight: '600',
-  },
-});
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    field: {
+      marginBottom: 10,
+    },
+    label: {
+      fontSize: 13,
+      color: c.textMuted,
+      marginBottom: 4,
+    },
+    row: {
+      flexDirection: 'row',
+      gap: 8,
+      flexWrap: 'wrap',
+    },
+    option: {
+      // 切片 21（AGENTS.md §7.32）：自适应宽度，大字体下不折行（行容器补 flexWrap 兜底）。
+      flexGrow: 0,
+      flexShrink: 1,
+      minWidth: 88,
+      borderWidth: 1,
+      borderColor: c.border,
+      borderRadius: 6,
+      paddingVertical: 8,
+      paddingHorizontal: 10,
+      backgroundColor: c.card,
+      alignItems: 'center',
+    },
+    optionSelected: {
+      borderColor: c.primary,
+      backgroundColor: c.card,
+    },
+    optionText: {
+      fontSize: 13,
+      color: c.textMuted,
+    },
+    optionTextSelected: {
+      color: c.primary,
+      fontWeight: '600',
+    },
+  });
+}

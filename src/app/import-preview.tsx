@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -20,6 +20,8 @@ import {
   setLastImportResult,
 } from '../ui/transferResultStore';
 import { formatItemStart, getDeviceTzid } from '../ui/timeFormat';
+import { useTheme } from '../ui/theme';
+import type { ThemeColors } from '../ui/theme';
 
 /**
  * 导入预览页（切片 17 阶段 2；AGENTS.md §7.28：ICS 与系统日历导入必须先进入
@@ -40,6 +42,8 @@ import { formatItemStart, getDeviceTzid } from '../ui/timeFormat';
 
 export default function ImportPreviewPage() {
   const router = useRouter();
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   // getLastImportPreview 只在进入本页那一刻读取一次：预览数据在导入过程中
   // 不应变化（store 仅由上一个页面在跳转前写入一次）。
   const [preview] = useState<ImportPreviewData | null>(() => getLastImportPreview());
@@ -220,7 +224,7 @@ export default function ImportPreviewPage() {
         disabled={selectedCount === 0 || confirming}
       >
         {confirming ? (
-          <ActivityIndicator color="#fff" />
+          <ActivityIndicator color={colors.textOnPrimary} />
         ) : (
           <Text style={styles.primaryText}>{`确认导入（${selectedCount} 条）`}</Text>
         )}
@@ -232,10 +236,11 @@ export default function ImportPreviewPage() {
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
   scroll: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: c.background,
   },
   container: {
     padding: 16,
@@ -248,44 +253,44 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 12,
     padding: 16,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: c.background,
   },
   emptyTitle: {
     fontSize: 14,
-    color: '#888',
+    color: c.textMuted,
   },
   title: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#111',
+    color: c.text,
   },
   meta: {
     fontSize: 12,
-    color: '#999',
+    color: c.textMuted,
   },
   hint: {
     fontSize: 12,
-    color: '#888',
+    color: c.textMuted,
     lineHeight: 18,
   },
   entryCard: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 8,
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
     borderRadius: 8,
     padding: 12,
   },
   entryCardDuplicate: {
-    backgroundColor: '#fafafa',
+    backgroundColor: c.background,
   },
   checkbox: {
     fontSize: 18,
-    color: '#1e6f5c',
+    color: c.primary,
     lineHeight: 22,
   },
   checkboxDisabled: {
-    color: '#bdbdbd',
+    color: c.textMuted,
   },
   entryBody: {
     flex: 1,
@@ -293,21 +298,22 @@ const styles = StyleSheet.create({
   },
   entryTitle: {
     fontSize: 14,
-    color: '#111',
+    color: c.text,
   },
   entryTitleDuplicate: {
-    color: '#9e9e9e',
+    color: c.textMuted,
   },
   entryMeta: {
     fontSize: 12,
-    color: '#888',
+    color: c.textMuted,
   },
   duplicateNote: {
     fontSize: 11,
-    color: '#b26a00',
+    // 警示语义归 danger（Token 注释含「过期警示」族；切片 24 禁硬编码 hex）
+    color: c.danger,
   },
   sectionBox: {
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
     borderRadius: 8,
     padding: 12,
     gap: 6,
@@ -315,7 +321,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#111',
+    color: c.text,
   },
   failureRow: {
     gap: 2,
@@ -323,21 +329,21 @@ const styles = StyleSheet.create({
   failureSummary: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#333',
+    color: c.text,
   },
   failureReason: {
     fontSize: 12,
-    color: '#c62828',
+    color: c.danger,
   },
   primaryButton: {
-    backgroundColor: '#1e6f5c',
+    backgroundColor: c.primary,
     borderRadius: 6,
     paddingVertical: 10,
     alignItems: 'center',
     marginTop: 8,
   },
   primaryText: {
-    color: '#fff',
+    color: c.textOnPrimary,
     fontSize: 14,
     fontWeight: '600',
   },
@@ -346,15 +352,16 @@ const styles = StyleSheet.create({
   },
   secondaryButton: {
     borderWidth: 1,
-    borderColor: '#d0d0d0',
+    borderColor: c.border,
     borderRadius: 6,
     paddingVertical: 8,
     paddingHorizontal: 14,
-    backgroundColor: '#fff',
+    backgroundColor: c.card,
     alignItems: 'center',
   },
   secondaryText: {
     fontSize: 13,
-    color: '#555',
+    color: c.textMuted,
   },
-});
+  });
+}

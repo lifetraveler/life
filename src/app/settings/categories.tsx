@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 
@@ -7,6 +7,8 @@ import type { VisualPatch } from '../../data/ItemRepository';
 import type { Category } from '../../domain/category';
 import CategoryChip from '../../ui/CategoryChip';
 import VisualEditor from '../../ui/VisualEditor';
+import { useTheme } from '../../ui/theme';
+import type { ThemeColors } from '../../ui/theme';
 
 /**
  * 分类管理页（tasks/slice-14.md 阶段 3 / AGENTS.md §7.22）：
@@ -17,6 +19,10 @@ import VisualEditor from '../../ui/VisualEditor';
  */
 
 export default function CategorySettingsPage() {
+  // 切片 24（§7.36）：颜色走全局 Token（夜间模式），深浅色跟随系统。
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+
   const [categories, setCategories] = useState<Category[] | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
@@ -104,39 +110,41 @@ export default function CategorySettingsPage() {
   );
 }
 
-const styles = StyleSheet.create({
-  scroll: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  container: {
-    padding: 16,
-    paddingBottom: 32,
-  },
-  hint: {
-    fontSize: 12,
-    color: '#888',
-    lineHeight: 18,
-    marginBottom: 10,
-  },
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 10,
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  rowAction: {
-    fontSize: 13,
-    color: '#1e6f5c',
-  },
-  errorText: {
-    fontSize: 12,
-    color: '#c62828',
-    marginTop: 8,
-  },
-});
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    scroll: {
+      flex: 1,
+      backgroundColor: c.background,
+    },
+    container: {
+      padding: 16,
+      paddingBottom: 32,
+    },
+    hint: {
+      fontSize: 12,
+      color: c.textMuted,
+      lineHeight: 18,
+      marginBottom: 10,
+    },
+    card: {
+      backgroundColor: c.card,
+      borderRadius: 8,
+      padding: 12,
+      marginBottom: 10,
+    },
+    row: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    rowAction: {
+      fontSize: 13,
+      color: c.primary,
+    },
+    errorText: {
+      fontSize: 12,
+      color: c.danger,
+      marginTop: 8,
+    },
+  });
+}
