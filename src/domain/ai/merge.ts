@@ -29,11 +29,28 @@ export type DraftField =
   | 'reminderDelayMinutes'
   | 'reminderChannels';
 
+/** mergeDraftCorrection 的可选行为开关。 */
+export interface MergeCorrectionOptions {
+  /**
+   * tags 是否允许继承上一轮。缺省 true（掩码合并）；false = 全新意图轮，
+   * tags 恒取本轮解析值（未表达即为 []），不沾上一轮标签。
+   */
+  inheritTags?: boolean;
+}
+
 export function mergeDraftCorrection(
   previous: ParsedItemDraft,
   next: ParsedItemDraft,
   expressed: ReadonlySet<DraftField>,
+  options: MergeCorrectionOptions = {},
 ): ParsedItemDraft {
+  // 切片 24（§7.36 / slice-23 遗留 2）：全新意图（非编辑词、非澄清续答）的
+  // 新输入不继承上一轮 tags——调用方把 inheritTags 置 false，tags 恒取本轮
+  // 解析值，避免「叫醒卡带上一条散步/心情标签」的跨条目污染。缺省 true
+  // 保持既有掩码合并行为（既有测试与编辑词轮不受影响）。
+  const tags = options.inheritTags === false || expressed.has('tags')
+    ? [...next.tags]
+    : [...previous.tags];
   return {
     title: expressed.has('title') ? next.title : previous.title,
     content: expressed.has('content') ? next.content : previous.content,
@@ -42,7 +59,7 @@ export function mergeDraftCorrection(
     endAt: expressed.has('endAt') ? next.endAt : previous.endAt,
     allDay: expressed.has('allDay') ? next.allDay : previous.allDay,
     categoryId: expressed.has('categoryId') ? next.categoryId : previous.categoryId,
-    tags: expressed.has('tags') ? [...next.tags] : [...previous.tags],
+    tags,
     priority: expressed.has('priority') ? next.priority : previous.priority,
     recurrence: expressed.has('recurrence') ? next.recurrence : previous.recurrence,
     reminderOffsetMinutes: expressed.has('reminderOffsetMinutes')

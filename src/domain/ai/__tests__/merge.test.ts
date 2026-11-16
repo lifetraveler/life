@@ -117,3 +117,61 @@ describe('mergeDraftCorrection（阶段 3 多轮合并）', () => {
     expect(answered.clarificationPrompt).toBeUndefined();
   });
 });
+
+describe('mergeDraftCorrection inheritTags（切片 24 §7.36 / slice-23 遗留 2）', () => {
+  const previous: ParsedItemDraft = {
+    title: '下午散步',
+    content: '',
+    type: 'event',
+    startAt: 1000,
+    endAt: null,
+    allDay: false,
+    categoryId: 'personal',
+    tags: ['心情'],
+    priority: null,
+    recurrence: null,
+    reminderOffsetMinutes: null,
+    reminderDelayMinutes: null,
+  };
+
+  const next: ParsedItemDraft = {
+    title: '叫我起床',
+    content: '',
+    type: 'task',
+    startAt: 5000,
+    endAt: null,
+    allDay: false,
+    categoryId: null,
+    tags: [],
+    priority: null,
+    recurrence: null,
+    reminderOffsetMinutes: null,
+    reminderDelayMinutes: null,
+  };
+
+  it('inheritTags=false 且本轮未表达 tags → 恒取本轮（不沾上一轮标签）', () => {
+    const merged = mergeDraftCorrection(previous, next, new Set(['startAt']), {
+      inheritTags: false,
+    });
+    expect(merged.tags).toEqual([]);
+  });
+
+  it('inheritTags=false 且本轮表达 tags → 取本轮 tags（拷贝不共享引用）', () => {
+    const tagged: ParsedItemDraft = { ...next, tags: ['叫醒'] };
+    const merged = mergeDraftCorrection(previous, tagged, new Set(['startAt', 'tags']), {
+      inheritTags: false,
+    });
+    expect(merged.tags).toEqual(['叫醒']);
+    merged.tags.push('污染');
+    expect(tagged.tags).toEqual(['叫醒']);
+  });
+
+  it('缺省 / inheritTags=true 保持既有掩码行为（未表达沿用上一轮）', () => {
+    const defaulted = mergeDraftCorrection(previous, next, new Set(['startAt']));
+    expect(defaulted.tags).toEqual(['心情']);
+    const explicit = mergeDraftCorrection(previous, next, new Set(['startAt']), {
+      inheritTags: true,
+    });
+    expect(explicit.tags).toEqual(['心情']);
+  });
+});

@@ -245,3 +245,77 @@ describe('runFlashTurn（阶段 3 编排）', () => {
     ).rejects.toThrow('runFlashTurn: input is empty');
   });
 });
+
+describe('runFlashTurn tags 继承边界（切片 24 §7.36 / slice-23 遗留 2）', () => {
+  const NOW = new Date('2026-11-10T10:00:00+08:00').getTime();
+  const TZID = 'Asia/Shanghai';
+
+  function draftOf(overrides: Partial<ParsedItemDraft>): ParsedItemDraft {
+    return {
+      title: '下午散步',
+      content: '',
+      type: 'event',
+      startAt: new Date('2026-11-11T15:00:00+08:00').getTime(),
+      endAt: null,
+      allDay: false,
+      categoryId: 'personal',
+      tags: ['心情'],
+      priority: null,
+      recurrence: null,
+      reminderOffsetMinutes: null,
+      reminderDelayMinutes: null,
+      ...overrides,
+    };
+  }
+
+  it('全新意图（叫醒输入）不继承上一轮 tags（遗留 2 回归）', async () => {
+    const result = await runFlashTurn('明天上午8点叫我起床', {
+      config: null,
+      now: NOW,
+      tzid: TZID,
+      history: [],
+      previousDraft: draftOf({}),
+    });
+    // 合并确实发生（时间取本轮解析值），但 tags 不再沾上一轮。
+    expect(result.draft.startAt).toBe(
+      new Date('2026-11-11T08:00:00+08:00').getTime(),
+    );
+    expect(result.draft.tags).toEqual([]);
+  });
+
+  it('编辑词轮（「改成…」）仍继承上一轮 tags', async () => {
+    const result = await runFlashTurn('改成后天下午3点', {
+      config: null,
+      now: NOW,
+      tzid: TZID,
+      history: [],
+      previousDraft: draftOf({ title: '交材料', tags: ['工作'] }),
+    });
+    expect(result.draft.tags).toEqual(['工作']);
+    expect(result.draft.startAt).toBe(
+      new Date('2026-11-12T15:00:00+08:00').getTime(),
+    );
+  });
+
+  it('澄清待补轮的续答继承 tags（§7.35 同一事项补全）且澄清信号归位', async () => {
+    const result = await runFlashTurn('明天上午8点', {
+      config: null,
+      now: NOW,
+      tzid: TZID,
+      history: [],
+      previousDraft: draftOf({
+        title: '提醒吃药',
+        tags: ['健康'],
+        startAt: null,
+        needsClarification: true,
+        clarificationPrompt: '你要在什么时间提醒你吃药？',
+      }),
+    });
+    expect(result.draft.tags).toEqual(['健康']);
+    expect(result.draft.startAt).toBe(
+      new Date('2026-11-11T08:00:00+08:00').getTime(),
+    );
+    expect(result.draft.needsClarification).toBeUndefined();
+    expect(result.draft.clarificationPrompt).toBeUndefined();
+  });
+});

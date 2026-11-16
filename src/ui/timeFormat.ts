@@ -97,6 +97,19 @@ export function formatAgendaTimeRange(
   return `${start} - ${end}`;
 }
 
+/** 绝对时刻 → 'HH:mm'（显式 tzid；切片 24：预览卡同日 endAt 只补时刻用） */
+export function formatItemClock(instant: number, tzid: string): string {
+  const parts = getZonedParts(instant, tzid);
+  return formatLocalTime(parts.hour, parts.minute);
+}
+
+/** 两绝对时刻是否同一民用日（显式 tzid；切片 24：范围行跨日判定用） */
+export function isSameCivilDay(a: number, b: number, tzid: string): boolean {
+  return (
+    formatLocalDate(getZonedParts(a, tzid)) === formatLocalDate(getZonedParts(b, tzid))
+  );
+}
+
 export const WEEKDAY_LABELS: Record<number, string> = {
   1: '周一',
   2: '周二',
