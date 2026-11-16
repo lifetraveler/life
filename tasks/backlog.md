@@ -10,8 +10,9 @@
   - ~~阶段 1 `src/ui/theme.ts` Token + `useTheme()` + 两个逻辑修复；阶段 2 全局硬编码色替换 + StatusBar 跟随；阶段 3 `adb shell cmd uimode night yes/no` 真机验收。~~
   - ~~打包修复：FlashPreviewCard 时间行日期重复（slice-23 遗留 5）；AI 上下文合并带入上一轮 tags（slice-23 遗留 2）。~~
 
-- **切片 25：闪电录入认真模式**（2026-11-16 立项；任务卡 `tasks/slice-25.md` 已起草未开工，卡与 AGENTS.md v0.27 §7.37 随切片 25 阶段 1 提交）
-  - 阶段 1 schema v12 `careful_mode` + settings/repository 读写 + 编辑轮守卫 + 新意图误留旧标题修复（slice-24 closeout §5 遗留 1）；阶段 2 `useFlashChat` `kind: 'confirm'` 确认交互 + `profile.tsx` 设置开关；阶段 3 真机验收。基点 main @ d5cb4cc，分支 `task/slice-25`。
+- ~~**切片 25：闪电录入认真模式**~~（✅ 已完成，关闭于切片 25，见 `tasks/slice-25-closeout.md`）
+  - ~~阶段 1 schema v12 `careful_mode` + settings/repository 读写 + 编辑轮守卫 + 新意图误留旧标题修复（slice-24 closeout §5 遗留 1）；阶段 2 `useFlashChat` `kind: 'confirm'` 确认交互 + `profile.tsx` 设置开关；阶段 3 真机验收。基点 main @ d5cb4cc，分支 `task/slice-25`。~~
+  - 验收终态：tsc 0 错 / jest 79 套件·1087 用例（只增不减）/ expo-doctor 2 项预存无新增 / MuMu 观察点①②④通过、③以代码+功能+持久化三重证据替代视觉帧（亚帧窗口不可达，closeout §五.3）。遗留披露见 closeout §五（代理谓词两边界、保存后上下文重置、disabled 瞬态未留证）。
 
 ## 2. 待编号路线（用户 2026-11-16 委托按进度/复杂度排序；每切片开工仍按 §7.1 逐切片确认）
 
@@ -19,14 +20,18 @@
 
 | 建议编号 | 任务 | 复杂度 | 要点 |
 | --- | --- | --- | --- |
-| ~~切片 25~~ | ~~**认真模式**~~ | ~~中~~ | ~~修改标题/内容前给选项确认（agent 式交互），默认模式按预设直接处理。范围：app_settings 迁移（v12）+ wire 选项字段 + useFlashChat 守卫 + Chat 选项交互 + 设置页开关。~~（✅ 已立项为切片 25，见 §1；schema v12 `careful_mode` 已随立项占用） |
-| 切片 26 | **AI 透明度** | 中偏小 | A. 提示词查看界面（读 AI_SYSTEM_PROMPT 静态串，轻）；B. AI 回答可选显示 token 消耗/缓存命中率/大致价格（openAiCompatible usage 管道 + 设置开关 + app_settings 迁移——B 涉及 AiParser.parse 返回值扩展，ai.md 契约正常演进需成文）。两子项打包（slice-23 closeout §6 候选 2）；与 25 同域（flash/设置页），迁移列可同批设计。注：迁移版本号届时顺延（v12 已被切片 25 占用） |
+| ~~切片 25~~ | ~~**认真模式**~~ | ~~中~~ | ~~修改标题/内容前给选项确认（agent 式交互），默认模式按预设直接处理。范围：app_settings 迁移（v12）+ wire 选项字段 + useFlashChat 守卫 + Chat 选项交互 + 设置页开关。~~（✅ 已完成，关闭于切片 25，见 `tasks/slice-25-closeout.md`） |
+| 切片 26 | **AI 透明度** | 中偏小 | A. 提示词查看界面（读 AI_SYSTEM_PROMPT 静态串，轻）；B. AI 回答可选显示 token 消耗/缓存命中率/大致价格（openAiCompatible usage 管道 + 设置开关 + app_settings 迁移——B 涉及 AiParser.parse 返回值扩展，ai.md 契约正常演进需成文）。两子项打包（slice-23 closeout §6 候选 2）；与已完成的 25 同域（flash/设置页），迁移列可同批设计。注：迁移版本号届时顺延（v12 已被切片 25 占用） |
 | 切片 27 | **系统日历 live 直读显示**（方案 C） | 中偏大（≈1 切片） | Toki 式直读：设置页日历多选（app_settings 新列 `display_calendar_ids_json`，迁移版本号届时顺延，v12 已被切片 25 占用）+ SystemCalendarReader 扩 color/source + live hook + 四视图合并渲染（只读徽标）+ 与已导入项重叠去重（§5 规则）+ 平台 gating + ui.md/repository.md 契约新增节。**前置：用户回答调研报告 §9 的 4 个开放问题**；写回（D1）如立项走独立变更提案 + 独立切片（须改 §7.15 / repository.md:142 冻结语义） |
 | 切片 28 | **数据备份/同步：配置 + 日程（WebDAV）** | 大（设计讨论先行，提案 §7.5） | 范围澄清见 §3：配置（app_settings/分类/标签）与日程相关数据（items/reminders/channel_presets）都同步；形态（备份恢复 vs 双向同步）与冲突策略待专项讨论，讨论结论落提案再开工。导出已存在（切片 12），主体是导入 + WebDAV |
 | 待定 | **手动深浅色切换**（切片 24 后续，用户 2026-11-16 提出，记档不立项） | 小 | app_settings 新列 `theme_mode`（'system'/'light'/'dark'，默认 'system'，addColumns 迁移；版本号立项时顺延——v12 已被切片 25 `careful_mode` 占用）+ `src/ui/theme.ts` 偏好 store（useSyncExternalStore，useTheme 返回 resolved scheme，切片 24 全部消费点零改动跟随）+ `profile.tsx`「外观」三选 radio 区。完整设计草案见 `tasks/slice-24-closeout.md` §5；立项时编号待定，后续切片顺延 |
+| 待定 | **切片25 候选①：保存后上下文保留或提示语**（来源 slice-25-phase2-feedback §六） | 小偏中 | 现状：保存后 `historyRef=[]`+`draftRef=null`（切片 22 设计），AI 上下文清零，用户续输入被解析为全新条目（用户报告场景）。轻改法=保存后提示语「已保存，继续输入将新建条目」；重改法=保留已保存条目进上下文（需评估与切片 22 遗留决策的冲突）。 |
+| 待定 | **切片25 候选②：已保存条目内容对话式编辑**（来源 slice-25-phase2-feedback §六） | 中 | 已保存条目目前仅窄规则时间修改与快捷顺延；content/category/tags 修改只能走详情页表单。对话式编辑需把「最后保存的条目」挂回上下文并扩展编辑意图语义——与候选①同根，可合并立项。 |
+| 待定 | **切片25 候选③：待确认期间补充语义合并**（来源 slice-25-phase2-feedback §六；需变更提案） | 中偏大 | 现状：待确认（pending confirm）期间任何新输入直接取消待确认按普通轮处理（§7.37 冻结交互）。合并=新输入作为补充信息并入待确认草稿——与「任何新输入取消待确认」冻结条款冲突，立项须先出变更提案修订 §7.37。 |
+| 待定 | **切片25 候选④：守卫谓词 expressed 上收评估**（来源 slice-25-phase2-feedback §三.2） | 小（先评估） | isEditTurn 代理谓词（编辑词轮∨未表达新时刻）有两个边界：同轮改时间+标题/内容误放行、同时间重述+新标题误拦。评估把 `parsed.expressed` 集合上收 hook 层的代价（AiParser.parse 冻结签名不动，返回值已有结构可查）——纯评估任务，结论决定是否立项。 |
 | 插队 | **变更 B：网络渠道后台送达** | 大（变更提案） | 提案重估：前台服务救不了 RN JS 定时器（slice-20 遗留披露 1）→ 原生 AlarmManager 驱动投递 vs Headless 唤醒两路线对比。重复投递 in-flight 缺陷已在切片 21 修复关闭，变更 B 剩后台送达本体。启动时机用户定；提案确认前禁改 `src/notifications/`（§7.17 闸门） |
 
-排序理由：25/26 同在闪电录入/AI 域（useFlashChat、app_settings、设置页），连续做上下文温热、迁移列同批；live 直读用户感知价值最高但有 4 问待决策，排在 26 之后等决策不阻塞进度；备份体量最大且提案先行，压后。变更 B 时刻可插队。
+排序理由：25/26 同在闪电录入/AI 域（useFlashChat、app_settings、设置页），连续做上下文温热、迁移列同批；live 直读用户感知价值最高但有 4 问待决策，排在 26 之后等决策不阻塞进度；备份体量最大且提案先行，压后。变更 B 时刻可插队。切片 25 收尾新增 4 条候选（保存后上下文/对话式编辑/补充语义合并/expressed 上收评估）为待定项未参与排序，与 26/27 无阻塞关系，下片立项时一并权衡。
 
 ## 3. 语义澄清记录（用户 2026-11-16 提出「配置导入导出 JSON / WebDAV 双向同步」，补录防丢失）
 

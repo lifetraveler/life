@@ -27,6 +27,7 @@ import { APP_SETTINGS_ROW_ID, DEFAULT_APP_SETTINGS } from '../domain/settings';
  * - v10：reminders 新增 channels_json / channel_configs_json，app_settings 新增
  *        chips_increments，channel_presets 新增 is_default（切片 18 阶段 1，AGENTS.md §7.29）
  * - v11：app_settings 新增 default_channels_json（切片 19 阶段 1，AGENTS.md §7.30）
+ * - v12：app_settings 新增 careful_mode（切片 25 阶段 1，AGENTS.md §7.37）
  *
  * 规则（AGENTS.md §4.6）：已发布的 migration step 不得修改，只能在末尾追加；
  * 新增表必须在 migration 中显式创建，不得依赖“删库重装”。
@@ -294,6 +295,21 @@ export default schemaMigrations({
         addColumns({
           table: 'app_settings',
           columns: [{ name: 'default_channels_json', type: 'string', isOptional: true }],
+        }),
+      ],
+    },
+    {
+      // 切片 25 阶段 1（AGENTS.md §7.37 闪电录入认真模式）：v12 app_settings 加列；
+      // v2–v11 step 保持原样，不得修改。
+      // - 单条 addColumns，零 unsafeExecuteSql、零 UPDATE：careful_mode 非可选 boolean
+      //   列，WatermelonDB addColumns 对既有行自动回填类型零值 false（= 默认模式，
+      //   v10 channel_presets.is_default 同款先例，无需 UPDATE），行为与切片 24 一致；
+      // - 列定义与 schema.ts 的 tableSchema 严格一致（漂移会被模式不匹配检测抛错）。
+      toVersion: 12,
+      steps: [
+        addColumns({
+          table: 'app_settings',
+          columns: [{ name: 'careful_mode', type: 'boolean' }],
         }),
       ],
     },

@@ -206,6 +206,9 @@ function toDomainCategory(model: CategoryModel): Category {
  * 切片 19（§7.30，schema v11）：default_channels_json 经 parseDefaultChannels 读层防御归一
  * （null/坏 JSON/非法渠道/空 → 回退默认 ["system-notification"]；expo 双开保留 canonical
  * 序靠前者；不抛错——同上先例）。
+ * 切片 25（§7.37，schema v12）：careful_mode 非可选 boolean 列（v12 migration/seed 保证
+ * 有值），直接映射；防御归一——库中读到非 boolean（理论上不应出现，如手改数据库）时
+ * 回退默认 false，不抛错（列本身无枚举语义，boolean 归一即可）。
  */
 function toDomainSettings(model: AppSettingsModel): AppSettings {
   return {
@@ -218,6 +221,9 @@ function toDomainSettings(model: AppSettingsModel): AppSettings {
     widgetShowTags: model.widgetShowTags,
     chipsIncrements: parseChipsIncrements(model.chipsIncrementsJson),
     defaultChannels: parseDefaultChannels(model.defaultChannelsJson),
+    carefulMode: typeof model.carefulMode === 'boolean'
+      ? model.carefulMode
+      : DEFAULT_APP_SETTINGS.carefulMode,
   };
 }
 
@@ -1815,6 +1821,8 @@ export class WatermelonItemRepository implements ItemRepository {
           record.defaultChannelsJson = serializeDefaultChannels(
             DEFAULT_APP_SETTINGS.defaultChannels,
           );
+          // 切片 25（schema v12）：补插默认行时写认真模式默认值（读层有归一，此处求自描述）。
+          record.carefulMode = DEFAULT_APP_SETTINGS.carefulMode;
         });
         return { ...DEFAULT_APP_SETTINGS };
       }
@@ -1827,7 +1835,9 @@ export class WatermelonItemRepository implements ItemRepository {
    * 切片 18（§7.29）：chipsIncrements 写路径 validateChipsIncrements 严格校验
    * （1–4 项、每项 1–10080 整数分钟，违反抛错）；
    * 切片 19（§7.30）：defaultChannels 写路径 validateDefaultChannels 严格校验
-   * （非法渠道/空/expo 家族双开抛错，返回 canonical 序标准化拷贝））；
+   * （非法渠道/空/expo 家族双开抛错，返回 canonical 序标准化拷贝）；
+   * 切片 25（§7.37）：carefulMode boolean 无枚举语义，直接写（非 boolean 理论上
+   * 不可能出现——类型系统已约束，无独立校验函数））；
    * 行不存在时以 patch 值（缺省用默认值）建行。
    * 改动小组件显示开关后，调用方需自行触发一次小组件快照刷新
    * （桥不订阅 app_settings；设置页负责）。
@@ -1861,6 +1871,7 @@ export class WatermelonItemRepository implements ItemRepository {
             chipsIncrements ?? serializeChipsIncrements(DEFAULT_APP_SETTINGS.chipsIncrements);
           record.defaultChannelsJson =
             defaultChannels ?? serializeDefaultChannels(DEFAULT_APP_SETTINGS.defaultChannels);
+          record.carefulMode = patch.carefulMode ?? DEFAULT_APP_SETTINGS.carefulMode;
         });
         return;
       }
@@ -1885,6 +1896,9 @@ export class WatermelonItemRepository implements ItemRepository {
         }
         if (defaultChannels !== undefined) {
           draft.defaultChannelsJson = defaultChannels;
+        }
+        if (patch.carefulMode !== undefined) {
+          draft.carefulMode = patch.carefulMode;
         }
       });
     });

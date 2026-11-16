@@ -124,6 +124,12 @@ describe('AI_SYSTEM_PROMPT：澄清与渠道推荐（切片 23 §7.35）', () =>
     expect(P).toContain('title 沿用摘要中的标题主题词');
   });
 
+  it('反向边界：全新意图不复用上一张卡标题（切片 25 §7.37）', () => {
+    expect(P).toContain('用户输入是全新意图（与上一张卡无关的新事项）');
+    expect(P).toContain('title 取本轮输入的主题词，禁止复用/照抄上一张卡的标题');
+    expect(P).toContain('只有修改类输入（改成/改为、补充细节、澄清续答）才以上一张卡草稿为基准');
+  });
+
   it('“多轮上下文（history）与澄清续答”一节存在：assistant=上一轮草稿 JSON + 续答合并 + 摘要块编辑指令', () => {
     expect(P).toContain('多轮上下文（history）与澄清续答');
     expect(P).toContain('history 中每条 assistant 消息就是上一轮解析出的完整草稿 JSON');

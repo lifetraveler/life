@@ -30,6 +30,14 @@
  * - 主动澄清轮（needsClarification=true）不出预览卡：清空待确认卡片状态，
  *   clarificationPrompt 作为普通 AI 文本消息追加，草稿保留在 draftRef 供
  *   下一轮续答经 merge 补全后自然出卡；澄清待补轮不被编辑窄规则劫持。
+ *
+ * 切片 25 阶段 2（AGENTS.md §7.37）：闪电录入认真模式——careful_mode 开启时，
+ * 「编辑意图导致 title 或 content 变化」的轮次在提交前拦截：不出新卡（本轮
+ * assistantNote 不进消息流）、不提交草稿与 history（缓冲进确认载荷），消息流
+ * 追加 kind:'confirm' 确认消息（pendingDraft + 缓冲 historyAppend + 旧→新摘要）
+ * + 「应用修改/放弃修改」本地处理（不发起 AI 轮次）；待确认期间任何新输入取消
+ * 待确认状态按普通轮处理。守卫谓词在本文件内联（editDiff 只提供 diff 纯函数，
+ * 「上一张卡是否存在」「是否编辑轮」归本层，见 editDiff.ts 头注分工）。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -43,6 +51,8 @@ import {
 } from '../domain/ai/editIntent';
 import { buildFlashCardPayload } from '../domain/ai/cardPayload';
 import { runFlashTurn } from '../domain/ai/chat';
+import { diffDraftChanges } from '../domain/ai/editDiff';
+import type { DraftFieldChanges } from '../domain/ai/editDiff';
 import type { AiConfig } from '../domain/ai/configStore';
 import {
   computePostponedOnceAt,
@@ -60,13 +70,42 @@ import type { OnceCivilTime, Reminder, ReminderChannel } from '../domain/reminde
 import { reminderScheduler } from '../notifications';
 import { formatItemTime, getDeviceTzid } from './timeFormat';
 
+/**
+ * 认真模式确认摘要行（切片 25 阶段 2，AGENTS.md §7.37）：单个拟改字段的
+ * 旧→新值。title 与 content 同轮双改时同一载荷携带两行（合并为一条确认消息）。
+ */
+export interface FlashConfirmChange {
+  field: 'title' | 'content';
+  label: string;
+  from: string;
+  to: string;
+}
+
+/**
+ * 认真模式确认消息载荷（kind:'confirm'）：拦截轮的拟提交草稿、缓冲 history
+ * 与拟改字段摘要。应用 = 提交 pendingDraft 与缓冲 history；放弃/取消 = 仅
+ * resolved 原地标记，草稿与 history 均不动。
+ */
+export interface FlashConfirmPayload {
+  confirmId: number;
+  pendingDraft: ParsedItemDraft;
+  /** 拦截轮的 historyAppend 缓冲（应用确认时才并入 historyRef）。 */
+  bufferedHistory: [ChatMessage, ChatMessage];
+  changes: FlashConfirmChange[];
+  resolved: boolean;
+}
+
 export interface FlashChatMessage {
   id: number;
   role: 'user' | 'assistant';
   text: string;
-  /** 呈现形态（切片 22）：'text' 纯文本；'card' 结果卡片（cardPayload 必有）。 */
-  kind: 'text' | 'card';
+  /**
+   * 呈现形态：'text' 纯文本；'card' 结果卡片（cardPayload 必有，切片 22）；
+   * 'confirm' 认真模式确认卡（confirmPayload 必有，切片 25 阶段 2）。
+   */
+  kind: 'text' | 'card' | 'confirm';
   cardPayload?: FlashCardPayload;
+  confirmPayload?: FlashConfirmPayload;
 }
 
 export interface ConfirmSaveResult {
@@ -92,6 +131,12 @@ const EDIT_UNTIMED_NOTE =
 const CLARIFICATION_FALLBACK_NOTE =
   '信息还不完整，请补充缺失的内容（例如具体时间）。';
 
+/** 认真模式确认消息正文（FlashConfirmCard 渲染结构化载荷，text 仅兜底显示）。 */
+const CONFIRM_MESSAGE_TEXT = '标题/内容修改需要你确认。';
+
+/** 认真模式放弃修改的追加文本（草稿与 history 均不动）。 */
+const CONFIRM_DISMISS_NOTE = '已放弃本次修改，卡片保持原样。';
+
 /**
  * 编辑/推迟后刷新卡片提醒快照：被顺延的 once 提醒若正是卡片快照里那条，
  * 用新 onceAt 替换（卡片提醒行 once 显示绝对触发时刻，随之可见变化）；
@@ -106,6 +151,36 @@ function patchReminderSnapshot(
   return nextOnceAt === undefined
     ? target.reminder
     : { ...target.reminder, onceAt: nextOnceAt };
+}
+
+/**
+ * 认真模式确认摘要行组装（切片 25 阶段 2，AGENTS.md §7.37）：仅取 title /
+ * content 两个拟改字段，按 title→content 固定顺序输出；title 与 content
+ * 同轮双改合并为同一条确认消息（两行摘要）。
+ */
+function buildConfirmChanges(
+  previousDraft: ParsedItemDraft,
+  pendingDraft: ParsedItemDraft,
+  diff: DraftFieldChanges,
+): FlashConfirmChange[] {
+  const changes: FlashConfirmChange[] = [];
+  if (diff.titleChanged) {
+    changes.push({
+      field: 'title',
+      label: '标题',
+      from: previousDraft.title,
+      to: pendingDraft.title,
+    });
+  }
+  if (diff.contentChanged) {
+    changes.push({
+      field: 'content',
+      label: '内容',
+      from: previousDraft.content,
+      to: pendingDraft.content,
+    });
+  }
+  return changes;
 }
 
 export function useFlashChat() {
@@ -158,17 +233,24 @@ export function useFlashChat() {
   }, [messages]);
 
   const push = useCallback((role: 'user' | 'assistant', text: string): void => {
-    setMessages((prev) => [...prev, { id: nextIdRef.current, role, text, kind: 'text' }]);
+    // 切片 25 阶段 2 修补（真机缺陷，m00248）：id 必须在 updater 外捕获为常量。
+    // 旧写法在 updater 内读 nextIdRef.current（自增在外）——React 18 并发重放
+    // 队列时（MuMu fabric 真机已复现 FlatList 重复 key '.$2'，澄清轮两条相邻
+    // push 撞 id）两条消息会读到同一 id；捕获为闭包常量后重放复用同一常量，
+    // id 永不相撞。pushCard/pushConfirm 同模式。
+    const id = nextIdRef.current;
     nextIdRef.current += 1;
+    setMessages((prev) => [...prev, { id, role, text, kind: 'text' }]);
   }, []);
 
   /** 追加结果卡片消息（切片 22 阶段 1，AGENTS.md §7.34）。 */
   const pushCard = useCallback((text: string, cardPayload: FlashCardPayload): void => {
+    const id = nextIdRef.current;
+    nextIdRef.current += 1;
     setMessages((prev) => [
       ...prev,
-      { id: nextIdRef.current, role: 'assistant', text, kind: 'card', cardPayload },
+      { id, role: 'assistant', text, kind: 'card', cardPayload },
     ]);
-    nextIdRef.current += 1;
   }, []);
 
   /** 原地刷新指定条目的结果卡片快照（阶段 3：推迟/编辑后时间与提醒联动可见）。 */
@@ -344,10 +426,90 @@ export function useFlashChat() {
     [appendEditHistory, getLastCardPayload, push, shiftOnceReminders, updateCard],
   );
 
+  // ---------------------------------------------------------------------------
+  // 切片 25 阶段 2（AGENTS.md §7.37）：认真模式确认流。
+  // ---------------------------------------------------------------------------
+
+  /** 每轮拦截判定前重读认真模式开关（设置页即时生效）；读取失败回退默认模式=不拦。 */
+  const readCarefulMode = useCallback(async (): Promise<boolean> => {
+    try {
+      const settings = await itemRepository.getSettings();
+      return settings.carefulMode === true;
+    } catch (error) {
+      console.warn('[slice-25] 认真模式开关读取失败，回退默认模式', error);
+      return false;
+    }
+  }, []);
+
+  /**
+   * 取消全部未决确认（resolved 原地标记，消息 id/FlatList key 稳定）。
+   * send() 入口（§7.37：待确认期间任何新输入取消待确认状态，按普通轮处理——
+   * pendingDraft 与缓冲 history 一并作废）、applyEdit / confirmSave（手动编辑
+   * 与保存落地后 pendingDraft 已过期，防后续应用时复活旧数据）调用。
+   */
+  const cancelPendingConfirm = useCallback((): void => {
+    setMessages((prev) => {
+      let changed = false;
+      const next = prev.map((message) => {
+        if (
+          message.kind === 'confirm' &&
+          message.confirmPayload !== undefined &&
+          message.confirmPayload.resolved !== true
+        ) {
+          changed = true;
+          return {
+            ...message,
+            confirmPayload: { ...message.confirmPayload, resolved: true },
+          };
+        }
+        return message;
+      });
+      return changed ? next : prev;
+    });
+  }, []);
+
+  /**
+   * 追加认真模式确认消息（拦截轮专用）。消息 id 在 setMessages updater 外先
+   * 捕获（切片 25 阶段 2 已把 push()/pushCard() 一并改为该模式）——updater 内
+   * 读 nextIdRef.current 在 React 18 并发重放下会让相邻消息撞 id（真机已复现）。
+   */
+  const pushConfirm = useCallback(
+    (
+      previousDraft: ParsedItemDraft,
+      pendingDraft: ParsedItemDraft,
+      bufferedHistory: [ChatMessage, ChatMessage],
+      diff: DraftFieldChanges,
+    ): void => {
+      const confirmId = nextIdRef.current;
+      nextIdRef.current += 1;
+      const confirmPayload: FlashConfirmPayload = {
+        confirmId,
+        pendingDraft,
+        bufferedHistory: [bufferedHistory[0], bufferedHistory[1]],
+        changes: buildConfirmChanges(previousDraft, pendingDraft, diff),
+        resolved: false,
+      };
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: confirmId,
+          role: 'assistant',
+          text: CONFIRM_MESSAGE_TEXT,
+          kind: 'confirm',
+          confirmPayload,
+        },
+      ]);
+    },
+    [],
+  );
+
   const send = useCallback(
     async (raw: string): Promise<void> => {
       const input = raw.trim();
       if (input.length === 0 || busy) return;
+      // 切片 25 阶段 2（§7.37）：待确认期间任何新输入取消待确认状态（作废
+      // pendingDraft 与缓冲 history），按普通轮处理——包括编辑窄规则与正常解析。
+      cancelPendingConfirm();
       setBusy(true);
       push('user', input);
       const tzid = getDeviceTzid();
@@ -365,6 +527,7 @@ export function useFlashChat() {
           storeRef.current = new SecureAiConfigStore();
         }
         configRef.current = await storeRef.current.load();
+        const turnStartDraft = draftRef.current;
         const result = await runFlashTurn(input, {
           config: configRef.current,
           now: Date.now(),
@@ -372,6 +535,30 @@ export function useFlashChat() {
           history: historyRef.current,
           previousDraft: draftRef.current,
         });
+        // 切片 25 阶段 2（§7.37 认真模式）：仅拦「编辑意图导致 title 或 content
+        // 变化」的轮次。守卫谓词——「当前有展示中的卡片」= 本轮开始 draftRef
+        // 非空且非澄清待补（澄清轮无展示卡；澄清分支在下方先行处理，不受影响）；
+        // 「编辑轮」用代理判定（hook 层拿不到 parsed.expressed）：matchesEditIntent
+        //（编辑词轮）或本轮未表达新时刻（diff.timeChanged=false，对应 chat.ts 标题
+        // 保护的补充轮分支）；带新时刻又带新主题词 = 全新建卡不拦。时间/提醒/
+        // 渠道/标签等字段修改不拦。开关读取失败回退 false（默认模式行为不变）。
+        if (
+          turnStartDraft !== null &&
+          turnStartDraft.needsClarification !== true &&
+          result.draft.needsClarification !== true
+        ) {
+          const diff = diffDraftChanges(turnStartDraft, result.draft);
+          if (diff.titleChanged || diff.contentChanged) {
+            const carefulMode = await readCarefulMode();
+            const isEditTurn = matchesEditIntent(input) || !diff.timeChanged;
+            if (carefulMode && isEditTurn) {
+              // 拦截：不出新卡（assistantNote 不进消息流）、不提交草稿与 history
+              //（缓冲进确认载荷，应用确认时才提交），旧预览卡保持可见。
+              pushConfirm(turnStartDraft, result.draft, result.historyAppend, diff);
+              return;
+            }
+          }
+        }
         historyRef.current = [...historyRef.current, ...result.historyAppend];
         draftRef.current = result.draft;
         if (result.draft.needsClarification === true) {
@@ -402,20 +589,81 @@ export function useFlashChat() {
         setBusy(false);
       }
     },
-    [busy, push, applyEditToCard, applyEditToDraft],
+    [busy, push, applyEditToCard, applyEditToDraft, cancelPendingConfirm, readCarefulMode, pushConfirm],
   );
 
-  /** 编辑弹窗回写（用户手动改字段，验收 8）。 */
-  const applyEdit = useCallback((next: ParsedItemDraft): void => {
-    draftRef.current = next;
-    setDraft(next);
+  /**
+   * 应用未决确认（§7.37：选项点击本地处理，不发起 AI 轮次）：提交拦截轮缓冲
+   * 的 historyAppend 与拟提交草稿（setDraft 后预览卡自动刷新），确认消息原地
+   * resolved 标记。已 resolved / 消息不存在时为无副作用空操作。
+   */
+  const applyConfirm = useCallback((confirmId: number): void => {
+    const payload = messagesRef.current.find(
+      (message) =>
+        message.id === confirmId &&
+        message.kind === 'confirm' &&
+        message.confirmPayload !== undefined,
+    )?.confirmPayload;
+    if (payload === undefined || payload.resolved === true) return;
+    historyRef.current = [
+      ...historyRef.current,
+      payload.bufferedHistory[0],
+      payload.bufferedHistory[1],
+    ];
+    draftRef.current = payload.pendingDraft;
+    setDraft(payload.pendingDraft);
+    setMessages((prev) =>
+      prev.map((message) =>
+        message.id === confirmId && message.confirmPayload !== undefined
+          ? { ...message, confirmPayload: { ...message.confirmPayload, resolved: true } }
+          : message,
+      ),
+    );
   }, []);
+
+  /**
+   * 放弃未决确认（§7.37：选项点击本地处理）：追加放弃文本；草稿与 history 均
+   * 不动，确认消息原地 resolved 标记。已 resolved / 消息不存在时空操作。
+   */
+  const dismissConfirm = useCallback((confirmId: number): void => {
+    const payload = messagesRef.current.find(
+      (message) =>
+        message.id === confirmId &&
+        message.kind === 'confirm' &&
+        message.confirmPayload !== undefined,
+    )?.confirmPayload;
+    if (payload === undefined || payload.resolved === true) return;
+    const noteId = nextIdRef.current;
+    nextIdRef.current += 1;
+    // 标记 resolved 与追加放弃文本合并在同一个 updater（原子：不会出现只其一）。
+    setMessages((prev) => [
+      ...prev.map((message) =>
+        message.id === confirmId && message.confirmPayload !== undefined
+          ? { ...message, confirmPayload: { ...message.confirmPayload, resolved: true } }
+          : message,
+      ),
+      { id: noteId, role: 'assistant', text: CONFIRM_DISMISS_NOTE, kind: 'text' },
+    ]);
+  }, []);
+
+  /** 编辑弹窗回写（用户手动改字段，验收 8）。手动编辑落地后未决确认一并取消。 */
+  const applyEdit = useCallback(
+    (next: ParsedItemDraft): void => {
+      cancelPendingConfirm();
+      draftRef.current = next;
+      setDraft(next);
+    },
+    [cancelPendingConfirm],
+  );
 
   const confirmSave = useCallback(async (): Promise<ConfirmSaveResult> => {
     const current = draftRef.current;
     if (current === null || busy) {
       return { ok: false, notice: null, message: '' };
     }
+    // 切片 25 阶段 2：保存落地后未决确认已过期（pendingDraft 若复活会用旧数据
+    // 覆盖用户刚保存的状态），入口一并取消。
+    cancelPendingConfirm();
     setBusy(true);
     const tzid = getDeviceTzid();
     try {
@@ -489,7 +737,7 @@ export function useFlashChat() {
     } finally {
       setBusy(false);
     }
-  }, [busy, push, pushCard]);
+  }, [busy, push, pushCard, cancelPendingConfirm]);
 
   /**
    * 快捷推迟（阶段 3，AGENTS.md §7.34）：startAt/endAt 绝对平移 Δ 分钟
@@ -536,5 +784,16 @@ export function useFlashChat() {
     [busy, push, shiftOnceReminders, updateCard],
   );
 
-  return { messages, draft, busy, categories, send, applyEdit, confirmSave, postponeCard };
+  return {
+    messages,
+    draft,
+    busy,
+    categories,
+    send,
+    applyEdit,
+    confirmSave,
+    postponeCard,
+    applyConfirm,
+    dismissConfirm,
+  };
 }

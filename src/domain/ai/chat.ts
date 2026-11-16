@@ -88,7 +88,22 @@ function fallbackTurn(
     // 没有 LLM 的标题提炼能力，“预约到XX医院”这类补充轮的剩余原文会被当成
     // expressed 标题，把上一轮主题词（如「预约体检」）改写掉。标题沿用上一轮，
     // 本轮原词并入 content 作补充说明（content 既有内容以「；」衔接保留）。
+    // 切片 25（§7.37 域规则 + slice-24 closeout §5 遗留 1）：标题保护仅适用于
+    // 纠正/补充轮，全新意图不复用上一张卡的标题（「起床」标题曾误留到
+    // 「后天下午3点开会」卡）。纠正/补充轮判定（前三支与 :79 inheritTags 同源）：
+    // 1) 编辑词轮（「改成X点」，matchesEditIntent）；
+    // 2) 澄清续答轮（previousDraft.needsClarification=true，续答常带新时刻，
+    //    时间表达不否决本支）；
+    // 3) 本轮未表达新时间的补充轮（如「预约到XX医院」只补细节不带新时刻，
+    //    ai.md「澄清续答轮与已有卡片后的补充轮同样 title 沿用上一轮主题词」）。
+    // 反之：带新时间又带新主题词的输入按全新意图出卡（遗留 1 修复落点）。
+    // 注：任务卡原文谓词仅为 1)+2)；3) 为 ai.md 补充轮契约（:197/:205）所必需，
+    // 已在阶段报告披露该偏差。残余边界（本轮已披露）：不带时刻的全新意图
+    // （如「记一下体检报告指标」）仍会沿用旧标题，同属遗留 1 家族、本切片收窄。
+    const inheritTitle =
+      inheritTags || !parsed.expressed.has('startAt');
     if (
+      inheritTitle &&
       parsed.expressed.has('title') &&
       parsed.draft.title !== deps.previousDraft.title
     ) {

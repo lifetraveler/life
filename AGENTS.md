@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.26
+版本：v0.27
 
 ## 1. 项目概览
 
@@ -295,8 +295,25 @@ schema 版本 5→6，新增/修改如下：
 - **全局 UI 一致性**：输入框、按钮、弹窗在深色模式下必须有足够的对比度。StatusBar 需跟随主题动态切换。
 - **遗留修复**：修复 FlashPreviewCard 时间行的日期重复问题；修复 AI 上下文合并时，非修改意图的新输入不应携带上一轮的 Tags。
 
+### 7.37 闪电录入认真模式（v0.27）
+- **开关与存储**：app_settings 新增 `careful_mode`（boolean，默认 false = 默认模式），
+  schema v11→v12 addColumns 迁移（旧数据回退 false，行为与切片 24 一致）。设置页
+  （profile.tsx AI 配置区块）提供开关，即时生效、重启保持。
+- **拦截范围冻结**：认真模式仅拦截「编辑意图导致 title 或 content 变化」的轮次；
+  时间/提醒/渠道/标签等字段修改与全新建卡不拦，按默认模式直接处理。
+  默认模式（careful_mode=false）行为与切片 24 完全一致。
+- **交互形态**：拦截轮不出新卡、草稿保持旧状态，Chat 追加 `kind: 'confirm'` 确认消息
+  （含拟改字段摘要与新值）+ 快捷选项（应用修改/放弃修改）；title 与 content 同轮双改
+  合并为一条确认消息。选项点击**本地处理，不发起 AI 轮次**；待确认期间任何新输入
+  取消待确认状态，按普通轮处理。
+- **实现边界**：守卫在 useFlashChat 层（对比上一张展示中卡片与本轮解析结果），
+  不修改 AiParser.parse 冻结签名，ai.md 契约零改动。
+- **域规则（切片 25 成文）**：标题保护仅适用于编辑词轮与澄清续答轮（与 inheritTags
+  同谓词）；全新意图不复用上一张卡的标题（修复切片 23/24 误留旧标题缺陷），
+  远端 prompt 同语义注记。
+
 ## 8. 当前切片
 
-- **已完成**：切片 1–23 全部收尾合并（main，最新 merge `7a414e6`；schema v11，版本 0.23.0/versionCode 10）。切片 23 详情见 `tasks/slice-23-closeout.md` 与 `tasks/slice-23-phase2-3-feedback.md`，各切片历史见对应 `tasks/slice-NN.md` / `tasks/slice-NN-closeout.md`。
-- **当前切片**：切片 24 夜间模式与视觉清理已完成合并（提交索引与验收详见 `tasks/slice-24-closeout.md`；v0.26 修订与任务卡已随切片入库）。下一未完成项以 `tasks/backlog.md` 为准。
-- **未完成项以 `tasks/backlog.md` 为准**（2026-11-16 起的惯例）：候选排序（切片 25 认真模式 → 26 AI 透明度 → 27 系统日历 live 直读【先回答调研报告的 4 个开放问题】→ 28 备份/同步 WebDAV【设计讨论先行】+ 插队候选「变更 B 网络渠道后台送达」）、遗留 L1–L13、手验项 U1–U3、契约化已知限制均记录在 backlog，本节不再罗列候选清单。每切片 closeout 同步更新 backlog.md（划掉完成项并注明关闭切片号）并保持本节精简。
+- **已完成**：切片 1–24 全部收尾合并（main，最新 merge `7a414e6`；切片 24 夜间模式 merge `72daa78`，main @ `d5cb4cc`；schema v11，版本 0.23.0/versionCode 10）。各切片历史见对应 `tasks/slice-NN.md` / `tasks/slice-NN-closeout.md`。
+- **当前切片**：切片 25 闪电录入认真模式已完成（分支 `task/slice-25`，schema v12 `careful_mode`；提交索引、MuMu 验收与遗留披露见 `tasks/slice-25-closeout.md`，两阶段反馈见 `tasks/slice-25-phase1-feedback.md` / `slice-25-phase2-feedback.md`）。下一片按 backlog 候选排序执行（26 AI 透明度为建议值，立项时逐切片确认）。未完成项以 `tasks/backlog.md` 为准。
+- **未完成项以 `tasks/backlog.md` 为准**（2026-11-16 起的惯例）：候选排序（~~切片 25 认真模式~~已完成 → 26 AI 透明度 → 27 系统日历 live 直读【先回答调研报告的 4 个开放问题】→ 28 备份/同步 WebDAV【设计讨论先行】+ 插队候选「变更 B 网络渠道后台送达」+ 切片 25 收尾新增 4 条待定候选）、遗留 L1–L13、手验项 U1–U3、契约化已知限制均记录在 backlog，本节不再罗列候选清单。每切片 closeout 同步更新 backlog.md（划掉完成项并注明关闭切片号）并保持本节精简。
