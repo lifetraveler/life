@@ -126,7 +126,12 @@ export default function SettingsPage() {
     AppSettings,
     WidgetShowFlagKey
   > | null>(null);
-  const [widgetSavingKey, setWidgetSavingKey] = useState<string | null>(null);
+  // 切片 25 阶段 2（AGENTS.md §7.37）：认真模式开关（app_settings schema v12，
+  // carefulMode 默认 false）。保存互斥键扩为 settingsSavingKey——本页全部写开关
+  // 共用（app_settings 为单行读改写，跨区块并发写会丢字段）。
+  const [carefulMode, setCarefulMode] = useState<boolean | null>(null);
+  const [settingsSavingKey, setSettingsSavingKey] = useState<string | null>(null);
+  const [carefulError, setCarefulError] = useState<string | null>(null);
   const [widgetError, setWidgetError] = useState<string | null>(null);
 
   useFocusEffect(
@@ -143,6 +148,9 @@ export default function SettingsPage() {
               widgetShowCategoryEmoji: settings.widgetShowCategoryEmoji,
               widgetShowTags: settings.widgetShowTags,
             });
+            // 切片 25 阶段 2（§7.37）：认真模式开关随同一次 getSettings 读取
+            //（读层已防御归一，旧数据回退 false）。
+            setCarefulMode(settings.carefulMode === true);
           }
         })
         .catch((error: unknown) => {
@@ -188,12 +196,12 @@ export default function SettingsPage() {
       key: WidgetShowFlagKey,
       value: boolean,
     ): Promise<void> => {
-      if (widgetFlags === null || widgetSavingKey !== null || widgetFlags[key] === value) {
+      if (widgetFlags === null || settingsSavingKey !== null || widgetFlags[key] === value) {
         return;
       }
       const previous = widgetFlags;
       setWidgetFlags({ ...widgetFlags, [key]: value });
-      setWidgetSavingKey(key);
+      setSettingsSavingKey(key);
       try {
         await itemRepository.updateSettings({ [key]: value });
         setWidgetError(null);
@@ -203,10 +211,37 @@ export default function SettingsPage() {
         setWidgetFlags(previous);
         setWidgetError('保存失败，请重试');
       } finally {
-        setWidgetSavingKey(null);
+        setSettingsSavingKey(null);
       }
     },
-    [widgetFlags, widgetSavingKey],
+    [widgetFlags, settingsSavingKey],
+  );
+
+  /**
+   * 切片 25 阶段 2（AGENTS.md §7.37）：认真模式开关切换。与小组件开关同模式：
+   * 乐观更新 → updateSettings({ carefulMode }) → 失败回滚；即时生效（闪电录入
+   * 每轮解析前经 getSettings 重读）且写入 app_settings 持久层，重启保持。
+   */
+  const handleCarefulModeChange = useCallback(
+    async (value: boolean): Promise<void> => {
+      if (carefulMode === null || settingsSavingKey !== null || carefulMode === value) {
+        return;
+      }
+      const previous = carefulMode;
+      setCarefulMode(value);
+      setSettingsSavingKey('carefulMode');
+      try {
+        await itemRepository.updateSettings({ carefulMode: value });
+        setCarefulError(null);
+      } catch (error) {
+        console.warn('[slice-25] 认真模式开关保存失败', error);
+        setCarefulMode(previous);
+        setCarefulError('保存失败，请重试');
+      } finally {
+        setSettingsSavingKey(null);
+      }
+    },
+    [carefulMode, settingsSavingKey],
   );
 
   const handleImport = useCallback(async (): Promise<void> => {
@@ -364,6 +399,24 @@ export default function SettingsPage() {
           <Text style={styles.navLabel}>AI 配置</Text>
           <Text style={styles.navChevron}>›</Text>
         </Pressable>
+        {/* 切片 25 阶段 2（AGENTS.md §7.37）：认真模式开关。carefulMode 读取失败
+            保持 null（行仍渲染、Switch 关着），保存互斥走 settingsSavingKey。 */}
+        <View style={styles.widgetToggleRow}>
+          <View style={styles.widgetToggleText}>
+            <Text style={styles.radioLabel}>认真模式</Text>
+            <Text style={styles.widgetToggleHint}>修改标题/内容前先向我确认。</Text>
+          </View>
+          <Switch
+            value={carefulMode === true}
+            onValueChange={(value) => {
+              void handleCarefulModeChange(value);
+            }}
+            disabled={carefulMode === null || settingsSavingKey !== null}
+          />
+        </View>
+        {carefulError !== null ? (
+          <Text style={styles.errorHint}>{carefulError}</Text>
+        ) : null}
       </View>
 
       <View style={styles.section}>
@@ -409,7 +462,7 @@ export default function SettingsPage() {
                 onValueChange={(value) => {
                   void handleWidgetFlagChange(option.key, value);
                 }}
-                disabled={widgetSavingKey !== null}
+                disabled={settingsSavingKey !== null}
               />
             </View>
           ))

@@ -13,6 +13,7 @@ import {
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import FlashConfirmCard from '../../ui/FlashConfirmCard';
 import FlashEditModal from '../../ui/FlashEditModal';
 import FlashPreviewCard from '../../ui/FlashPreviewCard';
 import FlashResultCard from '../../ui/FlashResultCard';
@@ -116,6 +117,25 @@ export default function FlashScreen() {
           onPress={() => router.push(`/item/${payload.itemId}`)}
           onPostpone={(minutes) => {
             void chat.postponeCard(payload.itemId, minutes);
+          }}
+        />
+      );
+    }
+    // 切片 25 阶段 2（AGENTS.md §7.37）：认真模式确认消息走 FlashConfirmCard；
+    // chips 接线 applyConfirm/dismissConfirm（选项点击本地处理，不发起 AI 轮次），
+    // busy（AI 轮次进行中）时禁用。载荷捕获局部 const 再进闭包（同 card 先例），
+    // 同样不包 row wrapper（row 主轴按内容测宽会把 body 塌缩成 0 宽）。
+    if (item.kind === 'confirm' && item.confirmPayload !== undefined) {
+      const confirmPayload = item.confirmPayload;
+      return (
+        <FlashConfirmCard
+          payload={confirmPayload}
+          disabled={chat.busy}
+          onApply={() => {
+            chat.applyConfirm(confirmPayload.confirmId);
+          }}
+          onDismiss={() => {
+            chat.dismissConfirm(confirmPayload.confirmId);
           }}
         />
       );
