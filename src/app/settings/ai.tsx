@@ -38,6 +38,19 @@ type TestState =
   | { phase: 'testing' }
   | { phase: 'done'; result: TestConnectionResult };
 
+/**
+ * 用量单价输入归一（切片 26 阶段 2，§7.38）：空串 → undefined（留空不估算）；
+ * 非法/非正数 → undefined（静默丢弃，与 configStore isAiProviderConfig 的
+ * 归一口径一致，不整包拒绝）；正数 → 原值。
+ */
+function parsePriceInput(raw: string): number | undefined {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return undefined;
+  const value = Number(trimmed);
+  if (!Number.isFinite(value) || value <= 0) return undefined;
+  return value;
+}
+
 export default function AiSettingsPage() {
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -45,6 +58,10 @@ export default function AiSettingsPage() {
   const [baseUrl, setBaseUrl] = useState<string>(DEFAULT_BASE_URL);
   const [apiKey, setApiKey] = useState<string>('');
   const [model, setModel] = useState<string>(DEFAULT_MODEL);
+  // 切片 26 阶段 2（AGENTS.md §7.38）：用量单价（每百万 tokens，可选）。
+  // 输入框持有原始文本，保存时经 parsePriceInput 归一；留空 = 不估算费用。
+  const [priceInput, setPriceInput] = useState<string>('');
+  const [priceOutput, setPriceOutput] = useState<string>('');
   const [showKey, setShowKey] = useState<boolean>(false);
   const [saving, setSaving] = useState<boolean>(false);
   const [savedTick, setSavedTick] = useState<number>(0);
@@ -59,6 +76,17 @@ export default function AiSettingsPage() {
         setBaseUrl(config.active.baseUrl);
         setApiKey(config.active.apiKey);
         setModel(config.active.model);
+        // 切片 26 阶段 2（§7.38）：已存单价回填（未配置→空串=不估算）。
+        setPriceInput(
+          config.active.priceInputPerMillion !== undefined
+            ? String(config.active.priceInputPerMillion)
+            : '',
+        );
+        setPriceOutput(
+          config.active.priceOutputPerMillion !== undefined
+            ? String(config.active.priceOutputPerMillion)
+            : '',
+        );
       }
       setLoaded(true);
     })();
@@ -73,9 +101,24 @@ export default function AiSettingsPage() {
       const key = apiKey.trim();
       const name = model.trim();
       if (url.length === 0 || key.length === 0 || name.length === 0) return null;
-      return { provider: 'openai-compatible', baseUrl: url, apiKey: key, model: name };
+      // 切片 26 阶段 2（§7.38）：单价可选，正数才写入；留空/非法不估算。
+      //（已知 quirk 维持现状：本函数原本就丢 timeoutMs，切片 26 不修。）
+      const parsedPriceInput = parsePriceInput(priceInput);
+      const parsedPriceOutput = parsePriceInput(priceOutput);
+      return {
+        provider: 'openai-compatible',
+        baseUrl: url,
+        apiKey: key,
+        model: name,
+        ...(parsedPriceInput !== undefined
+          ? { priceInputPerMillion: parsedPriceInput }
+          : {}),
+        ...(parsedPriceOutput !== undefined
+          ? { priceOutputPerMillion: parsedPriceOutput }
+          : {}),
+      };
     },
-    [baseUrl, apiKey, model],
+    [baseUrl, apiKey, model, priceInput, priceOutput],
   );
 
   const handleSave = useCallback(async (): Promise<void> => {
@@ -126,6 +169,8 @@ export default function AiSettingsPage() {
             setApiKey('');
             setBaseUrl(DEFAULT_BASE_URL);
             setModel(DEFAULT_MODEL);
+            setPriceInput('');
+            setPriceOutput('');
             setTestState({ phase: 'idle' });
             setSavedTick((n) => n + 1);
           })();
@@ -175,6 +220,31 @@ export default function AiSettingsPage() {
         placeholder={DEFAULT_MODEL}
         autoCapitalize="none"
         autoCorrect={false}
+      />
+
+      {/* 切片 26 阶段 2（AGENTS.md §7.38）：用量单价（可选）。两项都填（正数）
+          才在用量行估算费用；留空不估算；非法/非正数保存时静默丢弃。 */}
+      <Text style={styles.label}>用量单价（每百万 tokens，可选）</Text>
+      <Text style={styles.hint}>
+        用于 AI 回复的用量费用估算（按全价上界计，不区分缓存折扣，不做币种换算）。两项都填才估算费用；留空则不显示费用段。
+      </Text>
+      <TextInput
+        style={styles.input}
+        value={priceInput}
+        onChangeText={setPriceInput}
+        placeholder="输入单价，如 2"
+        autoCapitalize="none"
+        autoCorrect={false}
+        keyboardType="decimal-pad"
+      />
+      <TextInput
+        style={styles.input}
+        value={priceOutput}
+        onChangeText={setPriceOutput}
+        placeholder="输出单价，如 8"
+        autoCapitalize="none"
+        autoCorrect={false}
+        keyboardType="decimal-pad"
       />
 
       <Pressable

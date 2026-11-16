@@ -132,6 +132,10 @@ export default function SettingsPage() {
   const [carefulMode, setCarefulMode] = useState<boolean | null>(null);
   const [settingsSavingKey, setSettingsSavingKey] = useState<string | null>(null);
   const [carefulError, setCarefulError] = useState<string | null>(null);
+  // 切片 26 阶段 2（AGENTS.md §7.38）：AI 用量展示开关（app_settings schema v13，
+  // showAiUsage 默认 false = 不显示）。与认真模式开关共用互斥键 settingsSavingKey。
+  const [showAiUsage, setShowAiUsage] = useState<boolean | null>(null);
+  const [showAiUsageError, setShowAiUsageError] = useState<string | null>(null);
   const [widgetError, setWidgetError] = useState<string | null>(null);
 
   useFocusEffect(
@@ -151,6 +155,9 @@ export default function SettingsPage() {
             // 切片 25 阶段 2（§7.37）：认真模式开关随同一次 getSettings 读取
             //（读层已防御归一，旧数据回退 false）。
             setCarefulMode(settings.carefulMode === true);
+            // 切片 26 阶段 2（§7.38）：用量展示开关随同一次 getSettings 读取
+            //（读层已防御归一，旧数据回退 false）。
+            setShowAiUsage(settings.showAiUsage === true);
           }
         })
         .catch((error: unknown) => {
@@ -242,6 +249,33 @@ export default function SettingsPage() {
       }
     },
     [carefulMode, settingsSavingKey],
+  );
+
+  /**
+   * 切片 26 阶段 2（AGENTS.md §7.38）：AI 用量展示开关切换。与认真模式同模式：
+   * 乐观更新 → updateSettings({ showAiUsage }) → 失败回滚；即时生效（闪电录入
+   * 每轮解析后经 getSettings 重读）且写入 app_settings 持久层，重启保持。
+   */
+  const handleShowAiUsageChange = useCallback(
+    async (value: boolean): Promise<void> => {
+      if (showAiUsage === null || settingsSavingKey !== null || showAiUsage === value) {
+        return;
+      }
+      const previous = showAiUsage;
+      setShowAiUsage(value);
+      setSettingsSavingKey('showAiUsage');
+      try {
+        await itemRepository.updateSettings({ showAiUsage: value });
+        setShowAiUsageError(null);
+      } catch (error) {
+        console.warn('[slice-26] 用量展示开关保存失败', error);
+        setShowAiUsage(previous);
+        setShowAiUsageError('保存失败，请重试');
+      } finally {
+        setSettingsSavingKey(null);
+      }
+    },
+    [showAiUsage, settingsSavingKey],
   );
 
   const handleImport = useCallback(async (): Promise<void> => {
@@ -399,6 +433,11 @@ export default function SettingsPage() {
           <Text style={styles.navLabel}>AI 配置</Text>
           <Text style={styles.navChevron}>›</Text>
         </Pressable>
+        {/* 切片 26 阶段 2（AGENTS.md §7.38）：提示词只读查看页入口。 */}
+        <Pressable style={styles.navRow} onPress={() => router.push('/settings/ai-prompt')}>
+          <Text style={styles.navLabel}>AI 提示词</Text>
+          <Text style={styles.navChevron}>›</Text>
+        </Pressable>
         {/* 切片 25 阶段 2（AGENTS.md §7.37）：认真模式开关。carefulMode 读取失败
             保持 null（行仍渲染、Switch 关着），保存互斥走 settingsSavingKey。 */}
         <View style={styles.widgetToggleRow}>
@@ -416,6 +455,26 @@ export default function SettingsPage() {
         </View>
         {carefulError !== null ? (
           <Text style={styles.errorHint}>{carefulError}</Text>
+        ) : null}
+        {/* 切片 26 阶段 2（AGENTS.md §7.38）：AI 用量展示开关。showAiUsage 读取
+            失败保持 null（行仍渲染、Switch 关着），保存互斥走 settingsSavingKey。 */}
+        <View style={styles.widgetToggleRow}>
+          <View style={styles.widgetToggleText}>
+            <Text style={styles.radioLabel}>AI 用量展示</Text>
+            <Text style={styles.widgetToggleHint}>
+              AI 回复后追加一行 tokens 与估算费用。
+            </Text>
+          </View>
+          <Switch
+            value={showAiUsage === true}
+            onValueChange={(value) => {
+              void handleShowAiUsageChange(value);
+            }}
+            disabled={showAiUsage === null || settingsSavingKey !== null}
+          />
+        </View>
+        {showAiUsageError !== null ? (
+          <Text style={styles.errorHint}>{showAiUsageError}</Text>
         ) : null}
       </View>
 
