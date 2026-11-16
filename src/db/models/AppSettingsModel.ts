@@ -35,4 +35,6 @@ export default class AppSettingsModel extends Model {
    * 非法渠道/空/expo 家族双开抛错）。
    */
   @text('default_channels_json') defaultChannelsJson!: string | null;
+  // v12（切片 25，AGENTS.md §7.37）：闪电录入认真模式；非可选 boolean 同 widget* 先例。
+  @field('careful_mode') carefulMode!: boolean;
 }

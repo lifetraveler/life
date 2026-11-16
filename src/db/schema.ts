@@ -11,8 +11,10 @@ import { appSchema, tableSchema } from '@nozbe/watermelondb';
  * （AGENTS.md §7.29，docs/proposals/slice-18-multi-channel.md）。
  * v11（切片 19 阶段 1）：app_settings 新增 default_channels_json
  * （AGENTS.md §7.30 延迟提醒意图与默认渠道）。
+ * v12（切片 25 阶段 1）：app_settings 新增 careful_mode
+ * （AGENTS.md §7.37 闪电录入认真模式）。
  */
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 export const schema = appSchema({
   version: SCHEMA_VERSION,
@@ -138,6 +140,10 @@ export const schema = appSchema({
     // 默认渠道集合，JSON 字符串数组，默认 ["system-notification"]；isOptional 回填 null，
     // 读取层防御归一（parseDefaultChannels：坏值/空/expo 双开 → 回退或丢弃），写路径
     // 校验（validateDefaultChannels：非法渠道/空/expo 双开抛错）。
+    // v12（切片 25 阶段 1，AGENTS.md §7.37）：careful_mode——闪电录入认真模式开关
+    // （默认 false = 默认模式）。非可选 boolean：addColumns 对既有行自动回填类型零值
+    // false（v10 channel_presets.is_default 同款先例，无需 UPDATE）；新行由
+    // Repository 写入显式值。
     tableSchema({
       name: 'app_settings',
       columns: [
@@ -148,6 +154,7 @@ export const schema = appSchema({
         { name: 'widget_show_tags', type: 'boolean' },
         { name: 'chips_increments', type: 'string', isOptional: true },
         { name: 'default_channels_json', type: 'string', isOptional: true },
+        { name: 'careful_mode', type: 'boolean' },
       ],
     }),
     // 切片 17 阶段 1（AGENTS.md §7.27 渠道配置中心，schema v9）：渠道预设表。

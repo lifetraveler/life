@@ -54,6 +54,15 @@ export interface AppSettings {
    * 互斥（system-notification 与 alarm 至多一个，与提醒写路径同一纪律）。
    */
   defaultChannels: ReminderChannel[];
+  /**
+   * 闪电录入认真模式（切片 25，AGENTS.md §7.37）：开启后，闪电录入的
+   * 「编辑意图导致 title 或 content 变化」的轮次先追加确认消息，由用户选择
+   * 应用/放弃修改后才出卡；时间/提醒/渠道/标签等字段修改与全新建卡不拦。
+   * 默认 false = 默认模式（行为与切片 24 完全一致）。非可选 boolean 存
+   * careful_mode 列；读层防御归一（非 boolean 回退 false），boolean 无枚举
+   * 语义、无独立 parse/validate 函数。
+   */
+  carefulMode: boolean;
 }
 
 /** chips_increments 约束（提案 §7，已确认）：最少 1 项、最多 4 项、每项 1–10080 分钟（7 天） */
@@ -65,6 +74,7 @@ export const CHIPS_MAX_MINUTES = 10080;
 /**
  * 默认设置（§7.22：tagDisplayMode 默认 'text'；阶段 7a：过期组默认展示、
  * 待办/分类 emoji/标签默认不展示；切片 18：chips 默认 [10,60] 与切片 16 硬编码一致；
+ * 切片 25：carefulMode 默认 false = 默认模式（AGENTS.md §7.37）；
  * getSettings 无记录时的兜底返回值）。
  */
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -75,6 +85,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   widgetShowTags: false,
   chipsIncrements: [10, 60],
   defaultChannels: [...DEFAULT_REMINDER_CHANNELS],
+  carefulMode: false,
 };
 
 /** app_settings 单行主键（§7.22） */

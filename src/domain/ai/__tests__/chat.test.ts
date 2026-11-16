@@ -319,3 +319,89 @@ describe('runFlashTurn tags 继承边界（切片 24 §7.36 / slice-23 遗留 2�
     expect(result.draft.clarificationPrompt).toBeUndefined();
   });
 });
+
+describe('runFlashTurn 标题守卫三态（切片 25 §7.37 / slice-24 closeout 遗留 1）', () => {
+  const NOW = new Date('2026-11-10T10:00:00+08:00').getTime();
+  const TZID = 'Asia/Shanghai';
+
+  function draftOf(overrides: Partial<ParsedItemDraft>): ParsedItemDraft {
+    return {
+      title: '起床',
+      content: '',
+      type: 'task',
+      startAt: new Date('2026-11-11T08:00:00+08:00').getTime(),
+      endAt: null,
+      allDay: false,
+      categoryId: null,
+      tags: [],
+      priority: null,
+      recurrence: null,
+      reminderOffsetMinutes: null,
+      reminderDelayMinutes: null,
+      ...overrides,
+    };
+  }
+
+  function failingFetch(): typeof fetch {
+    return (async () =>
+      new Response('boom', { status: 500 })) as unknown as typeof fetch;
+  }
+
+  it('全新意图（带新时刻）不沿用上一张卡标题（遗留 1 回归）', async () => {
+    const result = await runFlashTurn('后天下午3点开会', {
+      config: null,
+      now: NOW,
+      tzid: TZID,
+      history: [],
+      previousDraft: draftOf({}),
+      fetchImpl: failingFetch(),
+    });
+    // 本轮带新时刻、无编辑词、非澄清语境 → 按全新意图出卡，标题取本轮解析值，
+    // 「起床」不再误留（修复前：title 起床 + 原词并入 content）。
+    expect(result.draft.title).toBe('开会');
+    expect(result.draft.startAt).toBe(
+      new Date('2026-11-12T15:00:00+08:00').getTime(),
+    );
+    expect(result.draft.content).toBe('');
+  });
+
+  it('编辑词轮仍沿用上一轮标题（标题被剩余原文表达时）', async () => {
+    const result = await runFlashTurn('改成后天下午3点开会', {
+      config: null,
+      now: NOW,
+      tzid: TZID,
+      history: [],
+      previousDraft: draftOf({ title: '交材料', content: '旧补充' }),
+      fetchImpl: failingFetch(),
+    });
+    // 编辑词轮命中守卫第 1 支：标题沿用上一轮，本轮原词以「；」并入 content。
+    expect(result.draft.title).toBe('交材料');
+    expect(result.draft.content).toBe('旧补充；改成后天下午3点开会');
+    expect(result.draft.startAt).toBe(
+      new Date('2026-11-12T15:00:00+08:00').getTime(),
+    );
+  });
+
+  it('澄清续答轮沿用上一轮标题（续答带新时刻与细节，时间表达不否决本支）', async () => {
+    const result = await runFlashTurn('明早8点在西安交大二附院', {
+      config: null,
+      now: NOW,
+      tzid: TZID,
+      history: [],
+      previousDraft: draftOf({
+        title: '提醒吃药',
+        startAt: null,
+        needsClarification: true,
+        clarificationPrompt: '你要在什么时间提醒你吃药？',
+      }),
+    });
+    // 澄清续答命中守卫第 2 支：即便续答自带新时刻，标题仍沿用待补卡的
+    // 上一轮主题词，原词并入 content（与切片 23 语义一致）。
+    expect(result.draft.title).toBe('提醒吃药');
+    expect(result.draft.content).toBe('明早8点在西安交大二附院');
+    expect(result.draft.startAt).toBe(
+      new Date('2026-11-11T08:00:00+08:00').getTime(),
+    );
+    expect(result.draft.needsClarification).toBeUndefined();
+  });
+});

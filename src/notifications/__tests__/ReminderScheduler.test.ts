@@ -399,6 +399,7 @@ class FakeRepository implements ItemRepository {
       widgetShowCategoryEmoji: false,
       widgetShowTags: false,
       chipsIncrements: [10, 60],
+      carefulMode: false, // 切片 25 v12 新列：调度器不触达，stub 仅满足编译
       defaultChannels: ['system-notification'],
     };
   }

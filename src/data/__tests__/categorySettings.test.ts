@@ -91,14 +91,14 @@ describe('全局设置兜底（getSettings/updateSettings）', () => {
   it('空库 getSettings() 兜底返回 text 并静默落唯一 global 行；两次调用幂等不重复插行', async () => {
     const { db, repository } = makeContext();
     // 未经 seedPresetData 的空库：首次 getSettings 经 ensureSeeded 兜底
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], defaultChannels: ['system-notification'] });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], carefulMode: false, defaultChannels: ['system-notification'] });
     const rows = await db.get<AppSettingsModel>('app_settings').query().fetch();
     expect(rows.length).toBe(1);
     expect(rows[0]?._raw.id).toBe(APP_SETTINGS_ROW_ID);
     expect(rows[0]?.tagDisplayMode).toBe('text');
 
     // 第二次调用：幂等，不新增行
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], defaultChannels: ['system-notification'] });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], carefulMode: false, defaultChannels: ['system-notification'] });
     const rowsAgain = await db.get<AppSettingsModel>('app_settings').query().fetch();
     expect(rowsAgain.length).toBe(1);
   });
@@ -106,7 +106,7 @@ describe('全局设置兜底（getSettings/updateSettings）', () => {
   it('updateSettings 合法值生效并可回读', async () => {
     const { repository } = makeContext();
     await repository.updateSettings({ tagDisplayMode: 'emoji' });
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'emoji', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], defaultChannels: ['system-notification'] });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'emoji', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], carefulMode: false, defaultChannels: ['system-notification'] });
   });
 
   it('updateSettings 非法值抛 updateSettings: invalid tagDisplayMode', async () => {
@@ -331,13 +331,13 @@ describe('阶段 3 补充：视觉更新与设置往返边角', () => {
 
   it('updateSettings 往返：text → emoji → both → text，每步 getSettings 随之变化', async () => {
     const { repository } = makeContext();
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], defaultChannels: ['system-notification'] });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], carefulMode: false, defaultChannels: ['system-notification'] });
     await repository.updateSettings({ tagDisplayMode: 'emoji' });
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'emoji', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], defaultChannels: ['system-notification'] });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'emoji', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], carefulMode: false, defaultChannels: ['system-notification'] });
     await repository.updateSettings({ tagDisplayMode: 'both' });
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'both', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], defaultChannels: ['system-notification'] });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'both', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], carefulMode: false, defaultChannels: ['system-notification'] });
     await repository.updateSettings({ tagDisplayMode: 'text' });
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], defaultChannels: ['system-notification'] });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], carefulMode: false, defaultChannels: ['system-notification'] });
   });
 
   it('updateCategoryVisuals 空 patch 是合法 no-op：不抛错且视觉值不变', async () => {
@@ -459,5 +459,51 @@ describe('defaultChannels 设置往返（切片 19，AGENTS.md §7.30）', () =>
       });
     });
     expect((await repository.getSettings()).defaultChannels).toEqual(['system-notification']);
+  });
+});
+
+describe('carefulMode 设置往返（切片 25，AGENTS.md §7.37）', () => {
+  it('默认值 false；true/false 写读往返；updateSettings 建行路径也生效', async () => {
+    const { repository } = makeContext();
+    expect((await repository.getSettings()).carefulMode).toBe(false);
+    await repository.updateSettings({ carefulMode: true });
+    expect((await repository.getSettings()).carefulMode).toBe(true);
+    // 即时生效语义：同库内反复切换
+    await repository.updateSettings({ carefulMode: false });
+    expect((await repository.getSettings()).carefulMode).toBe(false);
+
+    // 空库直接 updateSettings：以 patch 值建行（repository.md 写层纪律）
+    const fresh = makeContext();
+    await fresh.repository.updateSettings({ carefulMode: true });
+    expect((await fresh.repository.getSettings()).carefulMode).toBe(true);
+  });
+
+  it('读层防御归一：手工写非 boolean 值 → 回退 false 不抛错', async () => {
+    const { repository, db } = makeContext();
+    await repository.getSettings(); // 确保 app_settings 行存在
+    const row = await db.get<AppSettingsModel>('app_settings').find(APP_SETTINGS_ROW_ID);
+
+    await db.write(async () => {
+      await row.update((draft) => {
+        // 模拟手改库写入非 boolean（列定义上不可能，防御分支兜底）
+        draft.carefulMode = 'yes' as unknown as boolean;
+      });
+    });
+    expect((await repository.getSettings()).carefulMode).toBe(false);
+
+    await db.write(async () => {
+      await row.update((draft) => {
+        draft.carefulMode = null as unknown as boolean;
+      });
+    });
+    expect((await repository.getSettings()).carefulMode).toBe(false);
+
+    // 恢复合法值后照常回读
+    await db.write(async () => {
+      await row.update((draft) => {
+        draft.carefulMode = true;
+      });
+    });
+    expect((await repository.getSettings()).carefulMode).toBe(true);
   });
 });
