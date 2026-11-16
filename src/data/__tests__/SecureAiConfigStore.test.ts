@@ -11,7 +11,7 @@ jest.mock('expo-secure-store', () => ({
 
 import * as SecureStore from 'expo-secure-store';
 import { SecureAiConfigStore } from '../SecureAiConfigStore';
-import { AI_CONFIG_STORE_KEY } from '../../domain/ai/configStore';
+import { AI_CONFIG_STORE_KEY, createEmptyAiSlots } from '../../domain/ai/configStore';
 
 const mockedGetItem = jest.mocked(SecureStore.getItemAsync);
 const mockedSetItem = jest.mocked(SecureStore.setItemAsync);
@@ -38,12 +38,17 @@ describe('SecureAiConfigStore', () => {
     expect(mockedGetItem).toHaveBeenCalledWith(AI_CONFIG_STORE_KEY);
   });
 
-  it('load：合法 JSON 返回 AiConfig', async () => {
+  it('load：合法 JSON 返回 AiConfig（v1 旧格式经 isAiConfig 归一化为槽模型）', async () => {
     mockedGetItem.mockResolvedValue(
       JSON.stringify({ active: storedConfig }),
     );
     const config = await store.load();
-    expect(config).toEqual({ active: storedConfig });
+    // 阶段 2c（v0.22）：无 platform 键的 active 归 custom 槽。
+    expect(config).toEqual({
+      active: storedConfig,
+      slots: { ...createEmptyAiSlots(), custom: storedConfig },
+      activePlatform: 'custom',
+    });
   });
 
   it('load：损坏 JSON 返回 null，不抛错', async () => {

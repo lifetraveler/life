@@ -15,7 +15,7 @@ import { router } from 'expo-router';
 import { SecureAiConfigStore } from '../../data/SecureAiConfigStore';
 import { OpenAICompatibleProvider } from '../../domain/ai/openAiCompatible';
 import type { TestConnectionResult } from '../../domain/ai/openAiCompatible';
-import { AI_PLATFORM_IDS, AI_PLATFORM_PRESETS } from '../../domain/ai/configStore';
+import { AI_PLATFORM_IDS, AI_PLATFORM_PRESETS, createEmptyAiSlots } from '../../domain/ai/configStore';
 import type { AiPlatform, AiProviderConfig } from '../../domain/ai/configStore';
 import { useTheme } from '../../ui/theme';
 import type { ThemeColors } from '../../ui/theme';
@@ -107,69 +107,80 @@ export default function AiSettingsPage() {
   // 输入框持有原始文本，保存时经 parsePriceInput 归一；留空 = 不估算费用。
   const [priceInput, setPriceInput] = useState<string>('');
   const [priceOutput, setPriceOutput] = useState<string>('');
-  // 阶段 2b（v0.21）：平台预设 + DeepSeek 峰谷分层六价（仅 deepseek 平台用）。
-  const [platform, setPlatform] = useState<AiPlatform>('custom');
+  // 阶段 2c（v0.22）：每平台独立槽——editingPlatform=当前编辑平台（点 chip 切
+  // 编辑视图），activePlatform=正在使用平台（保存即激活），slots=五槽镜像。
+  const [editingPlatform, setEditingPlatform] = useState<AiPlatform>('custom');
+  const [activePlatform, setActivePlatform] = useState<AiPlatform | null>(null);
+  const [slots, setSlots] = useState<Record<AiPlatform, AiProviderConfig | null> | null>(null);
   const [tierPrices, setTierPrices] = useState<TierPriceInputs>(EMPTY_TIER_PRICES);
   const [showKey, setShowKey] = useState<boolean>(false);
   const [saving, setSaving] = useState<boolean>(false);
   const [savedTick, setSavedTick] = useState<number>(0);
   const [testState, setTestState] = useState<TestState>({ phase: 'idle' });
 
+  // 阶段 2c（v0.22）：槽 → 表单回填单点（load 与切平台 chip 共用）。空槽按
+  // 平台预设初始化（BaseURL 取预设，无预设回落 DEFAULT；Model 取预设第一个）；
+  // 非空槽全字段回显（含单价六/两价）。
+  const applySlotToForm = useCallback(
+    (cfg: AiProviderConfig | null, platform: AiPlatform): void => {
+      if (cfg === null) {
+        const preset = AI_PLATFORM_PRESETS[platform];
+        setBaseUrl(preset.baseURL.length > 0 ? preset.baseURL : DEFAULT_BASE_URL);
+        setApiKey('');
+        setModel(preset.models.length > 0 ? preset.models[0] : DEFAULT_MODEL);
+        setPriceInput('');
+        setPriceOutput('');
+        setTierPrices(EMPTY_TIER_PRICES);
+        return;
+      }
+      setBaseUrl(cfg.baseUrl);
+      setApiKey(cfg.apiKey);
+      setModel(cfg.model);
+      setPriceInput(
+        cfg.priceInputPerMillion !== undefined ? String(cfg.priceInputPerMillion) : '',
+      );
+      setPriceOutput(
+        cfg.priceOutputPerMillion !== undefined ? String(cfg.priceOutputPerMillion) : '',
+      );
+      setTierPrices({
+        priceCachedPeak:
+          cfg.priceCachedPeak !== undefined ? String(cfg.priceCachedPeak) : '',
+        priceCachedOffPeak:
+          cfg.priceCachedOffPeak !== undefined ? String(cfg.priceCachedOffPeak) : '',
+        priceUncachedPeak:
+          cfg.priceUncachedPeak !== undefined ? String(cfg.priceUncachedPeak) : '',
+        priceUncachedOffPeak:
+          cfg.priceUncachedOffPeak !== undefined ? String(cfg.priceUncachedOffPeak) : '',
+        priceOutputPeak:
+          cfg.priceOutputPeak !== undefined ? String(cfg.priceOutputPeak) : '',
+        priceOutputOffPeak:
+          cfg.priceOutputOffPeak !== undefined ? String(cfg.priceOutputOffPeak) : '',
+      });
+    },
+    [],
+  );
+
   useEffect(() => {
     let alive = true;
     void (async () => {
       const config = await store.load();
       if (!alive) return;
-      if (config !== null && config.active !== null) {
-        setBaseUrl(config.active.baseUrl);
-        setApiKey(config.active.apiKey);
-        setModel(config.active.model);
-        // 切片 26 阶段 2（§7.38）：已存单价回填（未配置→空串=不估算）。
-        setPriceInput(
-          config.active.priceInputPerMillion !== undefined
-            ? String(config.active.priceInputPerMillion)
-            : '',
-        );
-        setPriceOutput(
-          config.active.priceOutputPerMillion !== undefined
-            ? String(config.active.priceOutputPerMillion)
-            : '',
-        );
-        // 阶段 2b（v0.21）：平台与分层六价回显（未配置→空串/自定义）。
-        setPlatform(config.active.platform ?? 'custom');
-        setTierPrices({
-          priceCachedPeak:
-            config.active.priceCachedPeak !== undefined
-              ? String(config.active.priceCachedPeak)
-              : '',
-          priceCachedOffPeak:
-            config.active.priceCachedOffPeak !== undefined
-              ? String(config.active.priceCachedOffPeak)
-              : '',
-          priceUncachedPeak:
-            config.active.priceUncachedPeak !== undefined
-              ? String(config.active.priceUncachedPeak)
-              : '',
-          priceUncachedOffPeak:
-            config.active.priceUncachedOffPeak !== undefined
-              ? String(config.active.priceUncachedOffPeak)
-              : '',
-          priceOutputPeak:
-            config.active.priceOutputPeak !== undefined
-              ? String(config.active.priceOutputPeak)
-              : '',
-          priceOutputOffPeak:
-            config.active.priceOutputOffPeak !== undefined
-              ? String(config.active.priceOutputOffPeak)
-              : '',
-        });
+      if (config !== null) {
+        // 阶段 2c（v0.22）：isAiConfig 归一化保证 slots/activePlatform 恒存在
+        //（v1 旧格式已迁移归槽）；防御性 ?? 仅兜类型可选。
+        const nextSlots = config.slots ?? createEmptyAiSlots();
+        const initial = config.activePlatform ?? 'custom';
+        setSlots(nextSlots);
+        setActivePlatform(config.activePlatform ?? null);
+        setEditingPlatform(initial);
+        applySlotToForm(nextSlots[initial] ?? null, initial);
       }
       setLoaded(true);
     })();
     return () => {
       alive = false;
     };
-  }, []);
+  }, [applySlotToForm]);
 
   const buildConfig = useCallback(
     (): AiProviderConfig | null => {
@@ -196,7 +207,7 @@ export default function AiSettingsPage() {
         baseUrl: url,
         apiKey: key,
         model: name,
-        ...(platform === 'deepseek'
+        ...(editingPlatform === 'deepseek'
           ? {
               ...(tier.priceCachedPeak !== undefined ? { priceCachedPeak: tier.priceCachedPeak } : {}),
               ...(tier.priceCachedOffPeak !== undefined
@@ -221,10 +232,10 @@ export default function AiSettingsPage() {
                 ? { priceOutputPerMillion: parsedPriceOutput }
                 : {}),
             }),
-        ...(platform !== 'custom' ? { platform } : {}),
+        ...(editingPlatform !== 'custom' ? { platform: editingPlatform } : {}),
       };
     },
-    [baseUrl, apiKey, model, priceInput, priceOutput, platform, tierPrices],
+    [baseUrl, apiKey, model, priceInput, priceOutput, editingPlatform, tierPrices],
   );
 
   const handleSave = useCallback(async (): Promise<void> => {
@@ -235,14 +246,19 @@ export default function AiSettingsPage() {
     }
     setSaving(true);
     try {
-      await store.save({ active: config });
+      // 阶段 2c（v0.22）：写入当前编辑平台槽并激活（保存即激活——用户确认）。
+      // active 恒等于 slots[activePlatform]（不变式，isAiConfig 归一口径）。
+      const nextSlots = { ...(slots ?? createEmptyAiSlots()), [editingPlatform]: config };
+      await store.save({ active: config, slots: nextSlots, activePlatform: editingPlatform });
+      setSlots(nextSlots);
+      setActivePlatform(editingPlatform);
       setSavedTick((n) => n + 1);
     } catch {
       Alert.alert('保存失败', '写入安全存储失败，请重试');
     } finally {
       setSaving(false);
     }
-  }, [buildConfig]);
+  }, [buildConfig, slots, editingPlatform]);
 
   const handleTest = useCallback(async (): Promise<void> => {
     const config = buildConfig();
@@ -272,32 +288,30 @@ export default function AiSettingsPage() {
         onPress: () => {
           void (async () => {
             await store.clear();
-            setApiKey('');
-            setBaseUrl(DEFAULT_BASE_URL);
-            setModel(DEFAULT_MODEL);
-            setPriceInput('');
-            setPriceOutput('');
-            setPlatform('custom');
-            setTierPrices(EMPTY_TIER_PRICES);
+            // 阶段 2c（v0.22）：清除全部平台槽，表单回到 custom 空槽默认。
+            setSlots(null);
+            setActivePlatform(null);
+            setEditingPlatform('custom');
+            applySlotToForm(null, 'custom');
             setTestState({ phase: 'idle' });
             setSavedTick((n) => n + 1);
           })();
         },
       },
     ]);
-  }, []);
+  }, [applySlotToForm]);
 
-  // 阶段 2b（v0.21）：选平台——预填该平台预设 BaseURL（空串不覆盖），
-  // Model 不自动改（由 Model 预设 chips 点选填入，输入框始终可自由编辑）。
+  // 阶段 2c（v0.22）：点平台 chip = 切换编辑视图——从该平台槽回填表单
+  //（空槽按预设默认值初始化；未保存的编辑直接丢弃，不提示——MVP 口径）。
+  // 「使用中」平台只在保存时切换（保存即激活，用户已确认）。
+  // 按钮保存态一并重置：避免上一平台的「已保存」残态误导当前编辑。
   const handlePlatformPress = useCallback(
     (id: AiPlatform): void => {
-      setPlatform(id);
-      const preset = AI_PLATFORM_PRESETS[id];
-      if (preset.baseURL.length > 0) {
-        setBaseUrl(preset.baseURL);
-      }
+      setEditingPlatform(id);
+      applySlotToForm(slots?.[id] ?? null, id);
+      setSavedTick(0);
     },
-    [],
+    [slots, applySlotToForm],
   );
 
   // 阶段 2b（v0.21）：点 Model 预设 chip 填入输入框；deepseek 平台的官方
@@ -305,7 +319,7 @@ export default function AiSettingsPage() {
   const handleModelPresetPress = useCallback(
     (name: string): void => {
       setModel(name);
-      const presetPrices = platform === 'deepseek' ? DEEPSEEK_MODEL_TIER_PRICES[name] : undefined;
+      const presetPrices = editingPlatform === 'deepseek' ? DEEPSEEK_MODEL_TIER_PRICES[name] : undefined;
       if (presetPrices !== undefined) {
         setTierPrices({
           priceCachedPeak: presetPrices.priceCachedPeak,
@@ -317,15 +331,18 @@ export default function AiSettingsPage() {
         });
       }
     },
-    [platform],
+    [editingPlatform],
   );
 
   return (
     <ScrollView style={styles.page} contentContainerStyle={styles.content}>
       <Text style={styles.sectionTitle}>连接配置</Text>
-      <Text style={styles.hint}>兼容 OpenAI / DeepSeek 等 OpenAI 兼容端点。Key 仅存于系统安全存储。</Text>
+      <Text style={styles.hint}>
+        兼容 OpenAI / DeepSeek 等 OpenAI 兼容端点。各平台配置（含 Key）独立保存，切换平台仅切换编辑视图；「保存配置」写入当前编辑平台并将其设为使用中。Key 仅存于系统安全存储。
+      </Text>
 
-      {/* 阶段 2b（v0.21）：平台 chips——预设 BaseURL/Model 预填，零新依赖。 */}
+      {/* 阶段 2c（v0.22）：平台 chips——点选切换编辑视图（从该平台槽回填），
+          「使用中」徽标仅在保存时跟随 activePlatform。零新依赖。 */}
       <Text style={styles.label}>平台</Text>
       <View style={styles.chipRow}>
         {AI_PLATFORM_IDS.map((id) => (
@@ -333,13 +350,14 @@ export default function AiSettingsPage() {
             key={id}
             style={({ pressed }) => [
               styles.chip,
-              platform === id && styles.chipActive,
+              editingPlatform === id && styles.chipActive,
               pressed && styles.pressed,
             ]}
             onPress={() => handlePlatformPress(id)}
           >
-            <Text style={[styles.chipText, platform === id && styles.chipTextActive]}>
+            <Text style={[styles.chipText, editingPlatform === id && styles.chipTextActive]}>
               {AI_PLATFORM_PRESETS[id].label}
+              {activePlatform === id ? ' · 使用中' : ''}
             </Text>
           </Pressable>
         ))}
@@ -374,9 +392,9 @@ export default function AiSettingsPage() {
       />
 
       <Text style={styles.label}>Model</Text>
-      {AI_PLATFORM_PRESETS[platform].models.length > 0 ? (
+      {AI_PLATFORM_PRESETS[editingPlatform].models.length > 0 ? (
         <View style={styles.chipRow}>
-          {AI_PLATFORM_PRESETS[platform].models.map((name) => (
+          {AI_PLATFORM_PRESETS[editingPlatform].models.map((name) => (
             <Pressable
               key={name}
               style={({ pressed }) => [styles.chip, pressed && styles.pressed]}
@@ -399,7 +417,7 @@ export default function AiSettingsPage() {
       {/* 用量单价（可选）。阶段 2b（v0.21）：按平台切换计价形态——
           deepseek 走峰谷分层六价（缓存命中/未命中/输出 × 高峰/空闲），
           其余平台维持全价上界两价（v0.20 口径）。非法/非正数保存时静默丢弃。 */}
-      {platform === 'deepseek' ? (
+      {editingPlatform === 'deepseek' ? (
         <>
           <Text style={styles.label}>用量单价（每百万 tokens，可选，DeepSeek 分层）</Text>
           <Text style={styles.hint}>

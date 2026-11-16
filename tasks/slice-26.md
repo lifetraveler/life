@@ -126,6 +126,24 @@ readAiUsageSnapshotTiered 高峰/空闲/cached 缺省/非零段缺价/全缓存�
 `openAiCompatible.test.ts`（tiered 峰谷两值、deepseek 全缺价 null、
 platform 缺省走 flat）。
 
+### 阶段 2c：每平台独立配置槽（追加阶段，v0.30）
+
+> 来源：用户 2026-11-17 反馈——切换平台后 API Key 不分平台（单槽设计）；
+> 要求每平台保存自己的数据并标出使用中平台。方案（保存即激活）经用户确认；
+> 提案文档 §9 v2 修订段。AGENTS §7.38 v0.30 注记、ai.md v0.22 条目。
+
+| 文件 | 改动 |
+| --- | --- |
+| `src/domain/ai/configStore.ts` | `AiConfig` + `slots?: Record<AiPlatform, AiProviderConfig \| null>` 与 `activePlatform?: AiPlatform`；`createEmptyAiSlots()` 工厂；isAiConfig 归一化（v1 旧 JSON 按 platform 归槽零迁移；v2 逐槽校验、activePlatform 集合校验、active 按 `slots[activePlatform]` 重算不变式，损坏整包 null） |
+| `src/app/settings/ai.tsx` | state 槽化（editingPlatform/activePlatform/slots）+ `applySlotToForm`（空槽按预设初始化/非空槽全字段回填）+ 保存即激活（写当前编辑平台槽+切徽标）+ chips「· 使用中」徽标 + hint 文案更新 + 切编辑视图重置保存按钮残态 |
+| `docs/contracts/ai.md` | 头部 v0.21→v0.22；文末追加 v0.22 条目（槽模型/v1 迁移/UI 交互/回滚/原因/影响范围/迁移方案=读取时归一化） |
+| `AGENTS.md` | v0.29→v0.30；§7.38 末尾「每平台独立配置槽」注记段 |
+
+测试：`configStore.test.ts` isAiConfig describe 重写 8 条（v1 null/归 deepseek 槽/
+归 custom 槽/v2 透传+active 重算/active 与槽不一致以槽为准/使用中槽 null/
+损坏四态/active 残缺）、`SecureAiConfigStore.test.ts` load 断言跟改（归一化
+槽模型输出）。
+
 ### 阶段 3：真机验收 + 收尾
 
 - 验收矩阵（MuMu 或 dev client，见 §4）。

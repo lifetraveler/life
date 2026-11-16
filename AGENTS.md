@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.29
+版本：v0.30
 
 ## 1. 项目概览
 
@@ -339,6 +339,14 @@ schema 版本 5→6，新增/修改如下：
   其余平台维持全价上界两价。**已知限制**：法定节假日不做识别（节假日工作
   时段按高峰计，误差方向为高估），记 backlog 待定候选。usage 行格式与
   v0.20 传输边界冻结条款不变。
+- **每平台独立配置槽（v0.30 注记，切片 26 阶段 2c）**：AiConfig 扩展为槽
+  模型——`slots: Record<AiPlatform, AiProviderConfig | null>`（每平台独立
+  保存 BaseURL/API Key/Model/单价）+ `activePlatform`（使用中平台）；
+  `active` 恒等于 `slots[activePlatform]`（isAiConfig 归一化按槽重算）。
+  v1 旧 JSON 读取时按 platform 归槽零迁移，写回即 v2。UI 交互「保存即激活」：
+  平台 chips 点选仅切换编辑视图（空槽按预设初始化、未保存编辑丢弃不提示），
+  「保存配置」写入当前编辑平台槽并切换「使用中」徽标。闪电录入消费面
+  （config.active）不变。
 
 ## 8. 当前切片
 

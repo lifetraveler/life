@@ -1,4 +1,4 @@
-# AI 解析层契约（v0.21）
+# AI 解析层契约（v0.22）
 
 ## 接口定义
 ```typescript
@@ -299,3 +299,29 @@ Reminder 模型中没有落库位置：data-model.md §4.1 冻结
   DeepSeek 官方价预填）；相关测试。契约接口零改动。
 - 迁移方案：纯可选字段新增，旧 SecureStore JSON 缺键照常通过守卫（undefined
   = custom 平台 / 无价），无数据迁移。
+
+## AI 配置每平台独立配置槽（v0.22，切片 26 阶段 2c，AGENTS.md §7.38 注记，非破坏性条目）
+
+- **存储模型**：AiConfig 扩展为槽模型——`slots: Record<AiPlatform,
+  AiProviderConfig | null>`（每平台独立保存 BaseURL/API Key/Model/单价，
+  含 DeepSeek 分层六价）+ `activePlatform: AiPlatform`（使用中平台）。
+  `active` 恒等于 `slots[activePlatform]`（不变式；isAiConfig 归一化时按槽
+  重算 active，忽略传入值）。闪电录入消费面不变：runFlashTurn 仍读
+  `config.active`。
+- **v1 旧格式迁移（读取时归一化）**：SecureStore 旧 JSON 无 slots 键时，
+  isAiConfig 将 active 按 platform（缺省 custom）归入对应槽、activePlatform
+  置为该平台、其余槽为 null——零独立迁移步骤，写回即 v2 格式。v2 格式
+  （slots/activePlatform 任一键存在）：逐槽守卫校验，损坏槽配置或
+  activePlatform 非集合内 → 整包 null（走本地降级，不抛错）。
+- **UI 交互（保存即激活，用户确认）**：平台 chips 点选仅切换**编辑视图**
+  （从该平台槽回填表单；空槽按预设默认值初始化；未保存编辑直接丢弃不提示，
+  MVP 口径）；「保存配置」写入当前编辑平台槽并将「使用中」徽标切到该平台；
+  使用中徽标实时标注 activePlatform。切换编辑视图时保存按钮状态一并重置。
+- **回滚**：v2 JSON 在旧代码下多余键被忽略、active 仍可读，无锁死。
+- 原因：用户指出切换平台后 API Key 不分平台（单槽设计）；要求每平台保存
+  自己的数据并标出使用中平台。
+- 影响范围：src/domain/ai/configStore.ts（slots/activePlatform/createEmptyAiSlots/
+  isAiConfig 归一化）、src/app/settings/ai.tsx（槽化 state/applySlotToForm/
+  保存激活/徽标）；相关测试（configStore.test.ts / SecureAiConfigStore.test.ts）。
+  消费面（chat.ts / openAiCompatible.ts / usage.ts）零改动。
+- 迁移方案：无独立迁移（读取时归一化）；SecureStore JSON v1→v2 自动升级。

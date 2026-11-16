@@ -141,3 +141,24 @@ estimatedCost = cached×cachedPrice + (prompt−cached)×uncachedPrice + output�
    自由填写）还是用户补充资料后再定？
 2. 节假日口径：接受「节假日按空闲计（估算可能低估）」的 auto 规则，还是要求硬编码节假日表？
 3. 阶段挂靠：并入切片 26 追加「阶段 2b」（推荐，验收一次过）还是独立切片？
+
+## 9. v2 修订：每平台独立配置槽（阶段 2c，2026-11-17 用户需求）
+
+用户验收 2b 时指出：切换平台 chip 后 API Key 等表单内容不变——单槽设计（platform 只是
+active 配置上的标签）不符合「每平台各自保存、标出正在使用」的预期。修订为：
+
+- **存储**：AiConfig 扩展 `slots?: Record<AiPlatform, AiProviderConfig | null>` 与
+  `activePlatform?: AiPlatform`；`active` 语义收窄为「= slots[activePlatform]」（消费面
+  ——chat.ts/useFlashChat/OpenAICompatibleProvider——零改动）。
+- **旧 JSON 迁移**：load 读到无 slots 键的旧格式时，active 按其 platform（缺省 custom）
+  归入对应槽，其余槽 null；activePlatform = 该平台。守卫归一化单点（isAiConfig）。
+- **UI**：点平台 chip = 切换编辑视图（从该平台槽回填表单，空槽按预设默认值初始化，
+  未保存的编辑直接丢弃不提示）；点「保存配置」= 写入当前编辑平台槽 + 「使用中」标记
+  切到该平台（**保存即激活**，用户已确认）；chip 显示 `· 使用中` 徽标。
+- **估算链不变**：槽 config.platform = 槽平台 → deepseek 槽走分层六价，其余槽全价两价。
+- **影响范围**：configStore.ts（数据模型+守卫归一）、ai.tsx（chip 切换/保存逻辑/徽标）、
+  测试（isAiConfig 归一化用例）；SecureAiConfigStore 接口透传零改动；ai.md v0.22 条目、
+  AGENTS v0.30 注记段更新。
+- **回滚**：git revert 阶段 2c 提交；新格式 JSON 读回旧代码会因多余键被 isAiConfig 的
+  旧校验拒绝（active 键存在 → 旧代码仍能读 active 字段——实际向后兼容：旧格式校验只看
+  active 键，多余键忽略，故 v2 JSON 在旧代码下可读出 active 继续工作，无锁死）。

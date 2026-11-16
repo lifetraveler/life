@@ -4,6 +4,7 @@
  */
 
 import {
+  createEmptyAiSlots,
   isAiConfig,
   isAiProviderConfig,
 } from '../configStore';
@@ -111,13 +112,81 @@ describe('isAiProviderConfig', () => {
   });
 });
 
-describe('isAiConfig', () => {
-  it('active 为 null 合法（未配置状态，返回校验后对象）', () => {
-    expect(isAiConfig({ active: null })).toEqual({ active: null });
+describe('isAiConfig（阶段 2c 归一化）', () => {
+  it('v1 旧格式 active=null → 空槽 + custom（未配置状态）', () => {
+    expect(isAiConfig({ active: null })).toEqual({
+      active: null,
+      slots: createEmptyAiSlots(),
+      activePlatform: 'custom',
+    });
   });
 
-  it('active 为合法 provider 配置时通过', () => {
-    expect(isAiConfig({ active: validConfig })).toEqual({ active: validConfig });
+  it('v1 旧格式 active 合法 → 按其 platform 归槽（deepseek）', () => {
+    const cfg = { ...validConfig, platform: 'deepseek' };
+    const result = isAiConfig({ active: cfg });
+    expect(result).not.toBeNull();
+    expect(result?.active).toEqual(cfg);
+    expect(result?.activePlatform).toBe('deepseek');
+    expect(result?.slots?.deepseek).toEqual(cfg);
+    expect(result?.slots?.volcano).toBeNull();
+    expect(result?.slots?.custom).toBeNull();
+  });
+
+  it('v1 旧格式无 platform 键 → 归 custom 槽', () => {
+    const result = isAiConfig({ active: validConfig });
+    expect(result?.activePlatform).toBe('custom');
+    expect(result?.slots?.custom).toEqual(validConfig);
+  });
+
+  it('v2 新格式合法 → 透传且 active 按 slots[activePlatform] 重算', () => {
+    const deepseekCfg = { ...validConfig, platform: 'deepseek' };
+    const slots = { ...createEmptyAiSlots(), deepseek: deepseekCfg };
+    const result = isAiConfig({
+      active: deepseekCfg,
+      slots,
+      activePlatform: 'deepseek',
+    });
+    expect(result?.active).toEqual(deepseekCfg);
+    expect(result?.activePlatform).toBe('deepseek');
+    expect(result?.slots).toEqual(slots);
+  });
+
+  it('v2 新格式 active 与槽不一致 → 以槽为准重算 active', () => {
+    const deepseekCfg = { ...validConfig, platform: 'deepseek' };
+    const slots = { ...createEmptyAiSlots(), deepseek: deepseekCfg };
+    const result = isAiConfig({
+      active: validConfig,
+      slots,
+      activePlatform: 'deepseek',
+    });
+    expect(result?.active).toEqual(deepseekCfg);
+  });
+
+  it('v2 新格式使用中平台槽为 null → active=null', () => {
+    const result = isAiConfig({
+      active: null,
+      slots: createEmptyAiSlots(),
+      activePlatform: 'custom',
+    });
+    expect(result?.active).toBeNull();
+    expect(result?.activePlatform).toBe('custom');
+  });
+
+  it('v2 新格式损坏（槽配置残缺 / activePlatform 非法 / slots 非对象）→ null', () => {
+    expect(
+      isAiConfig({
+        active: null,
+        slots: { ...createEmptyAiSlots(), deepseek: { provider: 'openai-compatible' } },
+        activePlatform: 'deepseek',
+      }),
+    ).toBeNull();
+    expect(
+      isAiConfig({ active: null, slots: createEmptyAiSlots(), activePlatform: 'azure' }),
+    ).toBeNull();
+    expect(isAiConfig({ active: null, slots: 'bad', activePlatform: 'custom' })).toBeNull();
+    expect(
+      isAiConfig({ active: null, slots: createEmptyAiSlots(), activePlatform: 42 }),
+    ).toBeNull();
   });
 
   it('active 残缺时返回 null（走本地降级，不抛错）', () => {
