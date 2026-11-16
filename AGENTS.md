@@ -351,5 +351,5 @@ schema 版本 5→6，新增/修改如下：
 ## 8. 当前切片
 
 - **已完成**：切片 1–25 全部收尾合并（main @ `5ed723f`；切片 24 夜间模式 merge `72daa78`，切片 25 认真模式 merge `5ed723f`；schema v12，版本 0.23.0/versionCode 10）。各切片历史见对应 `tasks/slice-NN.md` / `tasks/slice-NN-closeout.md`。
-- **当前切片**：切片 26 AI 透明度（提示词查看 + 用量展示）已立项（卡 `tasks/slice-26.md`，AGENTS v0.28 §7.38 随切片 26 阶段 1 提交，分支 `task/slice-26` 基点 main @ `91ed33d`）。切片 25 收尾索引见 `tasks/slice-25-closeout.md`。下一片按 backlog 候选排序执行（27 系统日历 live 直读为建议值，前置 4 问待用户决策，立项时逐切片确认）。未完成项以 `tasks/backlog.md` 为准。
-- **未完成项以 `tasks/backlog.md` 为准**（2026-11-16 起的惯例）：候选排序（~~切片 25 认真模式~~已完成 → ~~26 AI 透明度~~已立项随切片 26 开工 → 27 系统日历 live 直读【先回答调研报告的 4 个开放问题】→ 28 备份/同步 WebDAV【设计讨论先行】+ 插队候选「变更 B 网络渠道后台送达」+ 切片 25 收尾新增 4 条待定候选）、遗留 L1–L13、手验项 U1–U3、契约化已知限制均记录在 backlog，本节不再罗列候选清单。每切片 closeout 同步更新 backlog.md（划掉完成项并注明关闭切片号）并保持本节精简。
+- **当前切片**：切片 26 AI 透明度（提示词查看 + 用量展示）已完成（分支 `task/slice-26`，schema v13 `show_ai_usage`；提交索引、真机验收矩阵 10 项与遗留披露见 `tasks/slice-26-closeout.md`，四阶段反馈见 `tasks/slice-26-phase1/2/2b/2c-feedback.md`；追加阶段 2b 平台化分层计价与 2c 每平台独立配置槽见提案 `docs/proposals/slice-26-ai-config-enhancement.md`）。下一片按 backlog 候选排序执行（27 系统日历 live 直读为建议值，前置 4 问待用户决策，立项时逐切片确认）。未完成项以 `tasks/backlog.md` 为准。
+- **未完成项以 `tasks/backlog.md` 为准**（2026-11-16 起的惯例）：候选排序（~~切片 25 认真模式~~已完成 → ~~26 AI 透明度~~已完成，关闭于切片 26 → 27 系统日历 live 直读【先回答调研报告的 4 个开放问题】→ 28 备份/同步 WebDAV【设计讨论先行】+ 插队候选「变更 B 网络渠道后台送达」+ 切片 25 收尾新增 4 条待定候选 + 切片 26 新增候选 29a/29b）、遗留 L1–L13、手验项 U1–U3、契约化已知限制均记录在 backlog，本节不再罗列候选清单。每切片 closeout 同步更新 backlog.md（划掉完成项并注明关闭切片号）并保持本节精简。

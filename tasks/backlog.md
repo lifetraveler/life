@@ -17,6 +17,7 @@
 - **切片 26：AI 透明度（提示词查看 + 用量展示）**（2026-11-16 立项，卡 `tasks/slice-26.md`，基点 main @ 5ed723f，分支 `task/slice-26`）
   - 阶段 1 域层 usage 管道（新建 `src/domain/ai/usage.ts` + openAiCompatible `lastUsage` 副通道 + `FlashTurnResult.usage` + AiProviderConfig 可选单价字段）+ schema v13 `show_ai_usage` + settings/repository 读写；阶段 2 UI（新建 `src/app/settings/ai-prompt.tsx` 提示词查看页 + profile 开关/navRow + /settings/ai 单价输入 + useFlashChat 消息接线）；阶段 3 真机验收矩阵 + closeout。
   - 规划修订：原行「B 涉及 AiParser.parse 返回值扩展」的假设**不成立已修订**——usage 不进 ParsedItemDraft/history，走 provider `lastUsage` 副通道（卡 §1 D1）；ai.md 仅追加非破坏性变更记录条目。切片 25 收尾新增 4 条待定候选已权衡，均不并入本切片（①②同根后续可合并立项、③需变更提案、④纯评估）。
+  - 验收终态：tsc 0 错 / jest 81 套件·1145 用例（只增不减） / expo-doctor 2 项预存无新增 / 真机验收矩阵 10 项全通过（含分层计价四轮分毞不差实测：0.002215 / 0.001761 / 0.002638改价 / 0.002289 与 0.004347）。遗留披露见 closeout §五。
 
 ## 2. 待编号路线（用户 2026-11-16 委托按进度/复杂度排序；每切片开工仍按 §7.1 逐切片确认）
 
@@ -25,9 +26,11 @@
 | 建议编号 | 任务 | 复杂度 | 要点 |
 | --- | --- | --- | --- |
 | ~~切片 25~~ | ~~**认真模式**~~ | ~~中~~ | ~~修改标题/内容前给选项确认（agent 式交互），默认模式按预设直接处理。范围：app_settings 迁移（v12）+ wire 选项字段 + useFlashChat 守卫 + Chat 选项交互 + 设置页开关。~~（✅ 已完成，关闭于切片 25，见 `tasks/slice-25-closeout.md`） |
-| ~~切片 26~~ | ~~**AI 透明度**~~ | ~~中偏小~~ | ~~A. 提示词查看界面（读 AI_SYSTEM_PROMPT 静态串，轻）；B. AI 回答可选显示 token 消耗/缓存命中率/大致价格（openAiCompatible usage 管道 + 设置开关 + app_settings 迁移——B 涉及 AiParser.parse 返回值扩展，ai.md 契约正常演进需成文）。两子项打包（slice-23 closeout §6 候选 2）；与已完成的 25 同域（flash/设置页），迁移列可同批设计。注：迁移版本号届时顺延（v12 已被切片 25 占用）~~（✅ 已立项 2026-11-16，随切片 26 开工，卡 `tasks/slice-26.md`；「涉及 AiParser.parse 返回值扩展」假设修订为 provider `lastUsage` 副通道，见卡 §1 D1；迁移占用 v13） |
+| ~~切片 26~~ | ~~**AI 透明度**~~ | ~~中偏小~~ | ~~A. 提示词查看界面（读 AI_SYSTEM_PROMPT 静态串，轻）；B. AI 回答可选显示 token 消耗/缓存命中率/大致价格（openAiCompatible usage 管道 + 设置开关 + app_settings 迁移——B 涉及 AiParser.parse 返回值扩展，ai.md 契约正常演进需成文）。两子项打包（slice-23 closeout §6 候选 2）；与已完成的 25 同域（flash/设置页），迁移列可同批设计。注：迁移版本号届时顺延（v12 已被切片 25 占用）~~（✅ 已完成，关闭于切片 26，见 `tasks/slice-26-closeout.md`。交付含追加阶段 2b（AI 配置平台化 + DeepSeek 峰谷分层计价，提案 `docs/proposals/slice-26-ai-config-enhancement.md`）与 2c（每平台独立配置槽，保存即激活 + 使用中徽标）；迁移占用 v13）~~ |
 | 切片 27 | **系统日历 live 直读显示**（方案 C） | 中偏大（≈1 切片） | Toki 式直读：设置页日历多选（app_settings 新列 `display_calendar_ids_json`，迁移版本号届时顺延，v13 已被切片 26 `show_ai_usage` 占用）+ SystemCalendarReader 扩 color/source + live hook + 四视图合并渲染（只读徽标）+ 与已导入项重叠去重（§5 规则）+ 平台 gating + ui.md/repository.md 契约新增节。**前置：用户回答调研报告 §9 的 4 个开放问题**；写回（D1）如立项走独立变更提案 + 独立切片（须改 §7.15 / repository.md:142 冻结语义） |
 | 切片 28 | **数据备份/同步：配置 + 日程（WebDAV）** | 大（设计讨论先行，提案 §7.5） | 范围澄清见 §3：配置（app_settings/分类/标签）与日程相关数据（items/reminders/channel_presets）都同步；形态（备份恢复 vs 双向同步）与冲突策略待专项讨论，讨论结论落提案再开工。导出已存在（切片 12），主体是导入 + WebDAV |
+| 候选 29a | **闪电录入对话能力强化包** | 中偏小 | 用户 2026-11-17 真机反馈驱动（切片 26 阶段 3 期间发现）：① 编辑意图识别强化——口语纠正短句（「还是30分钟后吧」）在 history 有上一张卡时被远端模型误判为新建（实测：上一轮「10分钟后」编辑成功、下一轮同型短句新建，模型意图判断波动；prompt 需明确「短口语无新事由默认编辑上一张卡」+ 本地兜底评估）；② 「推迟 X 分钟」语义边界 prompt 明确（推迟=基于卡片当前时间；「X分钟后」=说话时刻，实测已按此语义工作，需成文防漂移）；③ 聊天历史预览卡与当前草稿卡视觉区分（历史卡降透明度/加「历史」角标），避免「新添加了一张」误读。①②涉及 prompt.ts（AI_SYSTEM_PROMPT 静态串，切片 26 刚交付只读展示页）+ 可能的 useFlashChat 本地启发式 |
+| 候选 29b | **AI 日程查询/记忆检索（对话式日程管理）** | 大（设计讨论先行） | 用户愿景（2026-11-17 提出）：日程作为「记忆/RAG 系统」——提问「未来一周有什么安排 / 有没有饭局或就医」→ 意图识别为查询 → 到日程库检索（日程相关操作封装为 tool）→ 查询结果返回标准日程卡片 → 可继续对话修改各属性（复用 FlashPreviewCard 形态）。需要：查询意图路由（录入 vs 查询 vs 编辑）、日程检索 tool（Repository 查询层已有基础：viewQueries/filterSheet 多维筛选可复用）、检索结果卡片化与对话修改链路。**与候选 29a 同域（闪电录入对话能力），建议合并立项或先做 29a 打基础；立项前先出设计讨论稿（查询 DSL/tool 接口/上下文注入预算）** |
 | 待定 | **手动深浅色切换**（切片 24 后续，用户 2026-11-16 提出，记档不立项） | 小 | app_settings 新列 `theme_mode`（'system'/'light'/'dark'，默认 'system'，addColumns 迁移；版本号立项时顺延——v13 已被切片 26 `show_ai_usage` 占用）+ `src/ui/theme.ts` 偏好 store（useSyncExternalStore，useTheme 返回 resolved scheme，切片 24 全部消费点零改动跟随）+ `profile.tsx`「外观」三选 radio 区。完整设计草案见 `tasks/slice-24-closeout.md` §5；立项时编号待定，后续切片顺延 |
 | 待定 | **切片25 候选①：保存后上下文保留或提示语**（来源 slice-25-phase2-feedback §六） | 小偏中 | 现状：保存后 `historyRef=[]`+`draftRef=null`（切片 22 设计），AI 上下文清零，用户续输入被解析为全新条目（用户报告场景）。轻改法=保存后提示语「已保存，继续输入将新建条目」；重改法=保留已保存条目进上下文（需评估与切片 22 遗留决策的冲突）。 |
 | 待定 | **切片25 候选②：已保存条目内容对话式编辑**（来源 slice-25-phase2-feedback §六） | 中 | 已保存条目目前仅窄规则时间修改与快捷顺延；content/category/tags 修改只能走详情页表单。对话式编辑需把「最后保存的条目」挂回上下文并扩展编辑意图语义——与候选①同根，可合并立项。 |
