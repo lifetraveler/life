@@ -105,8 +105,12 @@ export default function RootLayout() {
       <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
       <Stack
         screenOptions={{
-          // 切片 24（§7.36）：各屏容器底色用 Token，未自带背景的页面在深色模式下不露白。
+          // 切片 24（§7.36）：各屏容器底色用 Token，未自带背景的页面在深色模式下不露白；
+          // 导航头（Stack header）同步 Token 化——expo-router 默认头主题不随运行时深浅切换
+          // （真机实测：uimode 夜间切换后 header 仍浅底黑字），显式给 card/text Token 修复。
           contentStyle: { backgroundColor: colors.background },
+          headerStyle: { backgroundColor: colors.card },
+          headerTintColor: colors.text,
         }}
       >
         {/* 切片 14 阶段 5：底部 Tab 布局（index/settings 移入 (tabs)，无导航头） */}

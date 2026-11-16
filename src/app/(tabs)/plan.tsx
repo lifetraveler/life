@@ -1063,7 +1063,8 @@ export default function PlanScreen() {
       }
       return <AgendaItemCard item={row.item} tzid={viewTime.tzid} onPress={openItemDetail} />;
     },
-    [openItemDetail, viewTime.tzid],
+    // 切片 24：styles 随 colors 重建，须入依赖否则深浅切换瞬间组头沿用旧色（真机实测复现）
+    [openItemDetail, viewTime.tzid, styles],
   );
 
   return (
