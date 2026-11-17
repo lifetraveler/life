@@ -42,8 +42,11 @@ import {
   isTagDisplayMode,
   parseChipsIncrements,
   parseDefaultChannels,
+  parseDisplayCalendarIds,
   serializeChipsIncrements,
   serializeDefaultChannels,
+  serializeDisplayCalendarIds,
+  validateDisplayCalendarIds,
   validateChipsIncrements,
   validateDefaultChannels,
 } from '../domain/settings';
@@ -211,6 +214,8 @@ function toDomainCategory(model: CategoryModel): Category {
  * 回退默认 false，不抛错（列本身无枚举语义，boolean 归一即可）。
  * 切片 26（§7.38，schema v13）：show_ai_usage 同 careful_mode 先例——非可选 boolean
  * 直接映射，非 boolean 回退默认 false，不抛错。
+ * 切片 27（§7.39，schema v14）：display_calendar_ids_json 经 parseDisplayCalendarIds
+ * 读层防御归一（null/坏 JSON/非串/空串剔除 → []，不抛错；[] = 功能关闭，合法状态）。
  */
 function toDomainSettings(model: AppSettingsModel): AppSettings {
   return {
@@ -229,6 +234,7 @@ function toDomainSettings(model: AppSettingsModel): AppSettings {
     showAiUsage: typeof model.showAiUsage === 'boolean'
       ? model.showAiUsage
       : DEFAULT_APP_SETTINGS.showAiUsage,
+    displayCalendarIds: parseDisplayCalendarIds(model.displayCalendarIdsJson),
   };
 }
 
@@ -1830,6 +1836,11 @@ export class WatermelonItemRepository implements ItemRepository {
           record.carefulMode = DEFAULT_APP_SETTINGS.carefulMode;
           // 切片 26（schema v13）：补插默认行时写用量展示开关默认值（读层有归一，此处求自描述）。
           record.showAiUsage = DEFAULT_APP_SETTINGS.showAiUsage;
+          // 切片 27（schema v14）：补插默认行时写日历显示开关默认值 '[]'
+          // （读层有归一，此处求自描述；[] = 功能关闭）。
+          record.displayCalendarIdsJson = serializeDisplayCalendarIds(
+            DEFAULT_APP_SETTINGS.displayCalendarIds,
+          );
         });
         return { ...DEFAULT_APP_SETTINGS };
       }
@@ -1846,6 +1857,8 @@ export class WatermelonItemRepository implements ItemRepository {
    * 切片 25（§7.37）：carefulMode boolean 无枚举语义，直接写（非 boolean 理论上
    * 不可能出现——类型系统已约束，无独立校验函数）；
    * 切片 26（§7.38）：showAiUsage 同 carefulMode 先例，boolean 直接写；
+   * 切片 27（§7.39）：displayCalendarIds 写路径 validateDisplayCalendarIds 严格校验
+   * （仅非空字符串、去重抛错；空数组 = 功能关闭，合法写入 '[]'）；
    * 行不存在时以 patch 值（缺省用默认值）建行。
    * 改动小组件显示开关后，调用方需自行触发一次小组件快照刷新
    * （桥不订阅 app_settings；设置页负责）。
@@ -1862,6 +1875,10 @@ export class WatermelonItemRepository implements ItemRepository {
     const defaultChannels =
       patch.defaultChannels !== undefined
         ? serializeDefaultChannels(validateDefaultChannels(patch.defaultChannels))
+        : undefined;
+    const displayCalendarIds =
+      patch.displayCalendarIds !== undefined
+        ? serializeDisplayCalendarIds(validateDisplayCalendarIds(patch.displayCalendarIds))
         : undefined;
     await this.db.write(async () => {
       const models = await this.db.get<AppSettingsModel>(APP_SETTINGS_TABLE).query().fetch();
@@ -1881,6 +1898,9 @@ export class WatermelonItemRepository implements ItemRepository {
             defaultChannels ?? serializeDefaultChannels(DEFAULT_APP_SETTINGS.defaultChannels);
           record.carefulMode = patch.carefulMode ?? DEFAULT_APP_SETTINGS.carefulMode;
           record.showAiUsage = patch.showAiUsage ?? DEFAULT_APP_SETTINGS.showAiUsage;
+          record.displayCalendarIdsJson =
+            displayCalendarIds ??
+            serializeDisplayCalendarIds(DEFAULT_APP_SETTINGS.displayCalendarIds);
         });
         return;
       }
@@ -1911,6 +1931,9 @@ export class WatermelonItemRepository implements ItemRepository {
         }
         if (patch.showAiUsage !== undefined) {
           draft.showAiUsage = patch.showAiUsage;
+        }
+        if (displayCalendarIds !== undefined) {
+          draft.displayCalendarIdsJson = displayCalendarIds;
         }
       });
     });

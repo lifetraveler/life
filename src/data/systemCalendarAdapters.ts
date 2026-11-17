@@ -62,6 +62,21 @@ function toDomainEvent(raw: Calendar.Event): SystemCalendarEvent {
   };
 }
 
+/**
+ * 切片 27（AGENTS.md §7.39 D5）：日历 color/sourceName 防御映射——TS 类型声明
+ * color / source.name 非可选 string，但 Android 原生 Bundle 可能带 null，按
+ * toDomainEvent 的 typeof 防御先例如实归一：非 string 或空串 → null（UI 回退）。
+ */
+function toDomainCalendarInfo(raw: Calendar.Calendar): SystemCalendarInfo {
+  return {
+    id: raw.id,
+    title: typeof raw.title === 'string' ? raw.title : '',
+    color: typeof raw.color === 'string' && raw.color !== '' ? raw.color : null,
+    sourceName:
+      typeof raw.source?.name === 'string' && raw.source.name !== '' ? raw.source.name : null,
+  };
+}
+
 /** 生产实现：expo-calendar（Android 真机）。空 calendarIds 直接返回空（不出无意义调用）。 */
 export const expoSystemCalendarReader: SystemCalendarReader = {
   async requestPermissions(): Promise<{ granted: boolean }> {
@@ -71,10 +86,7 @@ export const expoSystemCalendarReader: SystemCalendarReader = {
 
   async getCalendars(): Promise<SystemCalendarInfo[]> {
     const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
-    return calendars.map((cal) => ({
-      id: cal.id,
-      title: typeof cal.title === 'string' ? cal.title : '',
-    }));
+    return calendars.map(toDomainCalendarInfo);
   },
 
   async getEvents(

@@ -289,3 +289,38 @@ SystemImportResult：
   校验（非空数组、元素全部为合法渠道 id、expo 家族 system-notification/alarm 至多一个，
   违反抛明确错误），通过后去重 + REMINDER_CHANNELS canonical 序排列序列化落库；
   行不存在时以 patch 值（缺省用默认值）建行。读层防御归一规则见 data-model.md v0.19 节。
+
+## 全局设置扩展（displayCalendarIds）与系统日历 live 直读（v0.31，切片 27 阶段 1 落地）
+
+> 依据：AGENTS.md §7.39（系统日历 live 直读显示，方案 C）；先例为「全局设置扩展
+> （defaultChannels，v0.19）」同款结构。v0.9「系统日历导入接口」冻结条款
+> （含「不调用任何写入系统日历的 API」）一字未动，本节不修改其语义。
+
+### 全局设置扩展（displayCalendarIds）
+- `AppSettings` 领域对象增加 `displayCalendarIds: string[]`（系统日历 live 直读显示
+  开关：选中显示的系统日历 id 集合；AGENTS.md §7.39）。
+- 语义与 defaultChannels 不同：**空数组是合法状态（= 功能关闭），不存在「空回退
+  默认值」分支**；默认值 `[]`。
+- schema v14：app_settings 新增 `display_calendar_ids_json`（isOptional string，
+  JSON 字符串数组）；存量行回填 null，读层经 parseDisplayCalendarIds 防御归一
+  （null/''/坏 JSON/非数组 → []；元素非字符串或 trim 空串剔除；去重保序；不抛错）。
+- `getSettings` 兜底建行时写入默认 `[]`（serializeDisplayCalendarIds 落库，seed 与
+  ensure 路径一致）。
+- `updateSettings` patch 增加 `displayCalendarIds?`：写前经 validateDisplayCalendarIds
+  严格校验（必须为数组、每项非空字符串，违反抛明确错误；空数组 = 关闭，合法写入
+  `'[]'`），通过后去重保序序列化落库；行不存在时以 patch 值（缺省用默认值）建行。
+
+### SystemCalendarReader 端口扩展（D5，契约外显式扩展）
+- `SystemCalendarInfo` 增加 `color: string | null`（Android CALENDAR_COLOR，expo-calendar
+  原生序列化 '#RRGGBB'；缺失/空串为 null）与 `sourceName: string | null`（Android
+  ACCOUNT_NAME，即 expo-calendar `Calendar.source.name`；缺失/空串为 null）。
+- 先例：observeItemsWithTags 端口扩展（切片 12）；导入接口 importSystemCalendarEvents
+  签名与去重键语义不变，getEvents 不变。
+- 端口读取仍只读：本节不引入任何系统日历写入 API 调用路径（§7.15 冻结语义不变）。
+
+### live 直读数据流边界（冻结）
+- live 事件由 UI 层 hook 直接消费 SystemCalendarReader.getEvents + 领域
+  filterEventsInRange 合成为只读视图条目，**不经过 Repository 写路径、不落库**；
+  不参与提醒调度、搜索、筛选谓词、小组件快照、闪电录入、ICS 与数据导出。
+- live 视图条目在视图数据管线「filterItems 之后、分组/布局之前」并入；视图查询
+  接口签名不变。

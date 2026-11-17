@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.30
+版本：v0.31
 
 ## 1. 项目概览
 
@@ -348,8 +348,38 @@ schema 版本 5→6，新增/修改如下：
   「保存配置」写入当前编辑平台槽并切换「使用中」徽标。闪电录入消费面
   （config.active）不变。
 
+### 7.39 系统日历 live 直读显示（v0.31）
+- **方案与范围**：Toki 式 live 直读（方案 C，调研报告
+  docs/proposals/system-calendar-display-writeback-assessment.md）：选中系统日历的
+  事件实时合并进视图渲染，**不落库**。四视图全做（agenda/week/month/day，用户
+  2026-11-17 决策 Q1）。
+- **开关与存储**：app_settings 新增 `display_calendar_ids_json`（JSON 字符串数组，
+  isOptional，空/缺省 = 功能关闭），schema v13→v14 addColumns 迁移（旧数据回退空）。
+  日历多选入口为计划页筛选面板内「日历显示」区（按账户分组 + 色点 + 显隐开关，
+  2026-11-17 用户决策：取消独立设置页，不新建 /settings/calendar-display，profile
+  不加 navRow；权限拒绝态与固定说明文案均在面板区底）；SystemCalendarReader
+  .getCalendars 扩 color/sourceName（端口契约外显式扩展，observeItemsWithTags
+  先例）；UI 容忍 color/sourceName 为 null。
+- **数据流与边界（冻结）**：UI live hook 复用 SystemCalendarReader.getEvents +
+  filterEventsInRange（expandReaderWindow 窗口外扩沿用）；刷新 = 窗口变化防抖 +
+  AppState 回前台 + useFocusEffect，不做后台轮询。live 事件经合成视图条目在
+  「filterItems 之后、分组/布局之前」并入（筛选谓词与分组逻辑零改动），渲染带
+  日历色条 + 只读徽标 + sourceName，点击只读弹层（不提供编辑）。
+  **live 事件不落库、不参与提醒调度/搜索/筛选谓词/小组件快照/闪电录入/ICS 与
+  数据导出；不调用任何系统日历写入 API（§7.15 冻结语义不变）**。
+- **重叠去重**：live 事件隐藏 ⟺ 存在 sourceType='system-calendar' 的已导入项
+  sourceUid 相同且 startAt 相同（单事件精确命中；重复系列只命中被导入的首实例，
+  其余实例正常显示）；sourceUid 复用 resolveSystemEventSourceUid（Q2 自动去重
+  + 提示）。筛选面板日历区固定说明「已导入过的日历同时显示可能重复」（sourceUid
+  不含 calendarId，不做逐日历静态判导入状态）。
+- **写回（D1）不做**：如立项须独立变更提案修订 §7.15「不写回」与 repository.md
+  「不调用任何写入系统日历的 API」冻结语义，独立切片；weekdays 多选日重复的
+  Android 降级策略备查决策 = 跳过并在 UI 提示（用户 2026-11-17，Q4）。
+- **L10 并入复核**：重复系列导入疑缺陷（所有实例共享 event.id → 只落首实例）
+  在本切片阶段 3 真机复核定性；修复若涉去重键语义变更另立变更提案。
+
 ## 8. 当前切片
 
-- **已完成**：切片 1–25 全部收尾合并（main @ `5ed723f`；切片 24 夜间模式 merge `72daa78`，切片 25 认真模式 merge `5ed723f`；schema v12，版本 0.23.0/versionCode 10）。各切片历史见对应 `tasks/slice-NN.md` / `tasks/slice-NN-closeout.md`。
-- **当前切片**：切片 26 AI 透明度（提示词查看 + 用量展示）已完成（分支 `task/slice-26`，schema v13 `show_ai_usage`；提交索引、真机验收矩阵 10 项与遗留披露见 `tasks/slice-26-closeout.md`，四阶段反馈见 `tasks/slice-26-phase1/2/2b/2c-feedback.md`；追加阶段 2b 平台化分层计价与 2c 每平台独立配置槽见提案 `docs/proposals/slice-26-ai-config-enhancement.md`）。下一片按 backlog 候选排序执行（27 系统日历 live 直读为建议值，前置 4 问待用户决策，立项时逐切片确认）。未完成项以 `tasks/backlog.md` 为准。
-- **未完成项以 `tasks/backlog.md` 为准**（2026-11-16 起的惯例）：候选排序（~~切片 25 认真模式~~已完成 → ~~26 AI 透明度~~已完成，关闭于切片 26 → 27 系统日历 live 直读【先回答调研报告的 4 个开放问题】→ 28 备份/同步 WebDAV【设计讨论先行】+ 插队候选「变更 B 网络渠道后台送达」+ 切片 25 收尾新增 4 条待定候选 + 切片 26 新增候选 29a/29b）、遗留 L1–L13、手验项 U1–U3、契约化已知限制均记录在 backlog，本节不再罗列候选清单。每切片 closeout 同步更新 backlog.md（划掉完成项并注明关闭切片号）并保持本节精简。
+- **已完成**：切片 1–26 全部收尾合并（main @ `73f9807`；切片 24 夜间模式 merge `72daa78`，切片 25 认真模式 merge `5ed723f`，切片 26 AI 透明度 merge `73f9807`；schema v13，版本 0.23.0/versionCode 10）。各切片历史见对应 `tasks/slice-NN.md` / `tasks/slice-NN-closeout.md`。
+- **当前切片**：切片 27 系统日历 live 直读显示已立项（分支 `task/slice-27` 从 main `7e43fee` 切出；调研报告 4 个开放问题已由用户 2026-11-17 定案：Q1 四视图全做 / Q2 自动去重+筛选面板提示 / Q3 本片不做写回 / Q4 weekdays 跳过并在 UI 提示，详见 `tasks/slice-27.md` 与 AGENTS §7.39；任务卡与 AGENTS.md v0.31 随切片 27 阶段 1 提交）。下一片按 backlog 候选排序执行（28 备份/同步 WebDAV 为建议值，设计讨论先行，立项时逐切片确认）。未完成项以 `tasks/backlog.md` 为准。
+- **未完成项以 `tasks/backlog.md` 为准**（2026-11-16 起的惯例）：候选排序（~~切片 25 认真模式~~已完成 → ~~26 AI 透明度~~已完成，关闭于切片 26 → ~~27 系统日历 live 直读~~已立项（四问定案见 `tasks/slice-27.md`）→ 28 备份/同步 WebDAV【设计讨论先行】+ 插队候选「变更 B 网络渠道后台送达」+ 切片 25 收尾新增 4 条待定候选 + 切片 26 新增候选 29a/29b）、遗留 L1–L13、手验项 U1–U3、契约化已知限制均记录在 backlog，本节不再罗列候选清单。每切片 closeout 同步更新 backlog.md（划掉完成项并注明关闭切片号）并保持本节精简。
