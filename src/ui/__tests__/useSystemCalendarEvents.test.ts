@@ -346,6 +346,54 @@ describe('useSystemCalendarEvents（切片 27 live 读取）', () => {
     expect(latestEvents?.status).toBe('error');
     expect(latestEvents?.events).toHaveLength(1);
   });
+
+  test('权限恢复自愈：拒绝态回页签重读时 OS 已授权 → 自动恢复 ready', async () => {
+    const reader = makeReader({
+      requestPermissions: jest.fn(async () => ({ granted: false })),
+    });
+    await mountEvents({ ...WIN_A, reader });
+    await flushMicrotasks();
+    expect(latestEvents?.status).toBe('no-permission');
+    expect(reader.getEvents).not.toHaveBeenCalled();
+    // 模拟用户在 OS 层恢复授权（设置页改权/外部授权），面板清单已恢复；
+    // events hook 在下一次回页签触发时自愈
+    (reader.requestPermissions as unknown as jest.Mock).mockImplementation(
+      async () => ({ granted: true }),
+    );
+    await act(async () => {
+      focusEffectCallback()();
+    });
+    await flushMicrotasks();
+    // 自愈把权限态置回 granted，主调度 effect 重新驱动（缓存空 → 防抖读取中）
+    expect(latestEvents?.status).toBe('loading');
+    await act(async () => {
+      jest.advanceTimersByTime(300);
+    });
+    await flushMicrotasks();
+    expect(latestEvents?.status).toBe('ready');
+    expect(reader.getEvents).toHaveBeenCalledWith(['cal-1'], 0, 1000);
+    expect(latestEvents?.events).toHaveLength(1);
+  });
+
+  test('权限请求永不落定（expo canAskAgain=false 自动拒绝路径）：8s 兜底超时按拒绝处理', async () => {
+    const reader = makeReader({
+      requestPermissions: jest.fn(
+        () => new Promise<{ granted: boolean }>(() => undefined),
+      ),
+    });
+    await mountEvents({ ...WIN_A, reader });
+    await flushMicrotasks();
+    // 超时前：权限未知 → loading，不读取
+    expect(latestEvents?.status).toBe('loading');
+    expect(reader.getEvents).not.toHaveBeenCalled();
+    await act(async () => {
+      jest.advanceTimersByTime(8000);
+    });
+    await flushMicrotasks();
+    // 超时兜底：按拒绝处理（真机 MuMu 12 复现的 expo 挂起路径）
+    expect(latestEvents?.status).toBe('no-permission');
+    expect(reader.getEvents).not.toHaveBeenCalled();
+  });
 });
 
 describe('useSystemCalendarList（筛选面板日历清单）', () => {

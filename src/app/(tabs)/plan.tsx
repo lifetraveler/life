@@ -580,6 +580,16 @@ export default function PlanScreen() {
     reader: expoSystemCalendarReader,
   });
 
+  // 切片 27 权限恢复联动（真机矩阵发现的缺陷）：面板「重新授权」恢复的是清单
+  // hook；events hook 拒绝态由 doFetch 自愈（回前台/回页签触发），但用户在面板
+  // 弹窗里当场点「允许」的场景没有触发源。这里在清单恢复 ready 且 events 仍处
+  // no-permission 时补一次 retryPermissions（已授权时 expo 直接返回不弹窗）。
+  useEffect(() => {
+    if (calendarList.status === 'ready' && liveCalendar.status === 'no-permission') {
+      liveCalendar.retryPermissions();
+    }
+  }, [calendarList.status, liveCalendar.status, liveCalendar.retryPermissions]);
+
   // live 合成条目（D2 去重 + D5 映射）：filterItems 之后、分组/布局之前并入四数据
   // 路径；不参与筛选谓词（不进 filterItems）。buildLiveCalendarEntries 为异步纯
   // 函数（sha256 端口），结果经 state 供各路径 memo 消费；失败=本轮不并入（保留

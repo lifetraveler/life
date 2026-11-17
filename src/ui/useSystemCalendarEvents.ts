@@ -27,6 +27,35 @@ import type { SystemCalendarEvent, SystemCalendarInfo } from '../domain/systemCa
 const LIVE_CACHE_MAX_WINDOWS = 64;
 /** 窗口变化防抖（ms）。 */
 const WINDOW_DEBOUNCE_MS = 300;
+/**
+ * requestPermissions 兜底超时（ms）。真机（MuMu 12 / Android 15）复现：
+ * 用户拒绝一次后 canAskAgain=false，系统对后续权限请求以「秒杀
+ * GrantPermissionsActivity」方式自动拒绝，expo-calendar 15.0.8 该路径的
+ * JS promise 永不落定（既不 resolve 也不 reject），面板会卡在 loading。
+ * 超时按拒绝处理（denied），恢复路径仍走 doFetch 自愈/重新授权按钮。
+ */
+const PERMISSION_REQUEST_TIMEOUT_MS = 8000;
+
+/** 给 reader.requestPermissions 套超时兜底（超时=reject，所有调用点均按拒绝处理）。 */
+function requestPermissionsWithTimeout(
+  reader: SystemCalendarReader,
+): Promise<{ granted: boolean }> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error('permission request timeout'));
+    }, PERMISSION_REQUEST_TIMEOUT_MS);
+    reader
+      .requestPermissions()
+      .then((response) => {
+        clearTimeout(timer);
+        resolve(response);
+      })
+      .catch((error: unknown) => {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      });
+  });
+}
 
 /** 状态枚举显式化：plan.tsx/面板按态渲染（无权限/加载中/错误互斥）。 */
 export type SystemCalendarEventsStatus =
@@ -85,7 +114,21 @@ export function useSystemCalendarEvents(
   const doFetch = useCallback(
     async (bypassCache: boolean): Promise<void> => {
       const snapshot = latestRef.current;
-      if (!snapshot.enabled || snapshot.permissionState !== 'granted') {
+      if (!snapshot.enabled) {
+        return;
+      }
+      if (snapshot.permissionState !== 'granted') {
+        // 权限恢复自愈（真机矩阵发现的缺陷：拒绝态下用户改回授权后，
+        // events hook 永远卡在 no-permission）。拒绝态先重走 requestPermissions：
+        // OS 层已授权（设置页改权/外部授权）时 expo 直接返回 granted 不弹窗；
+        // 仍拒绝则维持 no-permission。授权后置状态并 return，由主调度 effect
+        // 自行重驱动（缓存命中或防抖读取）。
+        try {
+          const response = await requestPermissionsWithTimeout(reader);
+          setPermissionState(response.granted ? 'granted' : 'denied');
+        } catch (error: unknown) {
+          setPermissionState('denied');
+        }
         return;
       }
       const key = snapshot.windowKey;
@@ -118,7 +161,7 @@ export function useSystemCalendarEvents(
           setEvents(fetched);
           setStatus('ready');
         }
-      } catch {
+      } catch (error: unknown) {
         if (currentKeyRef.current === key) {
           setStatus('error'); // 保留旧 events（外部读取失败不清空视图）
         }
@@ -139,14 +182,13 @@ export function useSystemCalendarEvents(
       return;
     }
     let cancelled = false;
-    void reader
-      .requestPermissions()
+    void requestPermissionsWithTimeout(reader)
       .then((response) => {
         if (!cancelled) {
           setPermissionState(response.granted ? 'granted' : 'denied');
         }
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (!cancelled) {
           setPermissionState('denied');
         }
@@ -209,8 +251,7 @@ export function useSystemCalendarEvents(
   );
 
   const retryPermissions = useCallback((): void => {
-    void reader
-      .requestPermissions()
+    void requestPermissionsWithTimeout(reader)
       .then((response) => {
         setPermissionState(response.granted ? 'granted' : 'denied');
       })
@@ -261,7 +302,7 @@ export function useSystemCalendarList(params: {
     setStatus('loading');
     const load = async (): Promise<void> => {
       try {
-        const permission = await reader.requestPermissions();
+        const permission = await requestPermissionsWithTimeout(reader);
         if (!permission.granted) {
           if (!cancelled) {
             setStatus('no-permission');
