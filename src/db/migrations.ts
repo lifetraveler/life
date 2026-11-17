@@ -349,5 +349,29 @@ export default schemaMigrations({
         }),
       ],
     },
+    {
+      // 切片 30 阶段 1（AGENTS.md §7.41 草稿放弃/已删除卡联动/AI 重试）：v15 app_settings 加列；
+      // v2–v14 step 保持原样，不得修改。
+      // - 单条 addColumns 两列，零 unsafeExecuteSql、零 UPDATE：
+      //   * ai_retry_max 可空 number 列回填 null——刻意不用非可选：非可选 number 会
+      //     自动回填类型零值 0，与「0=关闭重试」语义混淆（存量行应按默认 3 处理），
+      //     读取层归一（parseAiRetryMax：null/越界/非整数 → 回退默认 3），写路径校验
+      //     （validateAiRetryMax：0–5 整数否则抛错）；
+      //   * flash_deleted_card_display 可空 string 列回填 null，读取层归一
+      //     （非 'mark'|'remove' → 'mark'），写路径校验（枚举外抛错）。
+      //   与 v10/v11/v14 可空列先例一致——不做 SQL 回填，避免字符串拼接转义风险，
+      //   且 LokiJS 适配器（仅测试用）忽略 'sql' 步骤无法单测；
+      // - 列定义与 schema.ts 的 tableSchema 严格一致（漂移会被模式不匹配检测抛错）。
+      toVersion: 15,
+      steps: [
+        addColumns({
+          table: 'app_settings',
+          columns: [
+            { name: 'ai_retry_max', type: 'number', isOptional: true },
+            { name: 'flash_deleted_card_display', type: 'string', isOptional: true },
+          ],
+        }),
+      ],
+    },
   ],
 });

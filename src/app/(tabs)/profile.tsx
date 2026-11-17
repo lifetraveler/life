@@ -17,7 +17,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { itemRepository } from '../../data';
 import { serializeExportData } from '../../domain/export';
 import { buildIcs } from '../../domain/ics/buildIcs';
-import type { AppSettings, TagDisplayMode } from '../../domain/settings';
+import type { AppSettings, FlashDeletedCardDisplay, TagDisplayMode } from '../../domain/settings';
 import TagChip from '../../ui/TagChip';
 import { getDeviceTzid } from '../../ui/timeFormat';
 import { useTheme } from '../../ui/theme';
@@ -101,6 +101,32 @@ const WIDGET_TOGGLE_OPTIONS: ReadonlyArray<{
   },
 ];
 
+/** AI 服务重试档位选项（切片 30，AGENTS.md §7.41 aiRetryMax：0–5 整数，0=关闭） */
+const AI_RETRY_TIER_OPTIONS: ReadonlyArray<{ value: number; label: string }> = [
+  { value: 0, label: '0 次（关闭）' },
+  { value: 1, label: '1 次' },
+  { value: 3, label: '3 次（默认）' },
+  { value: 5, label: '5 次' },
+];
+
+/** 已删除条目卡片显示选项（切片 30，AGENTS.md §7.41 flashDeletedCardDisplay） */
+const FLASH_DELETED_DISPLAY_OPTIONS: ReadonlyArray<{
+  value: FlashDeletedCardDisplay;
+  label: string;
+  hint: string;
+}> = [
+  {
+    value: 'mark',
+    label: '标记已删除',
+    hint: '卡片置灰并加「已删除」角标，不可点进、快捷操作隐藏（默认）。',
+  },
+  {
+    value: 'remove',
+    label: '从对话移除',
+    hint: '该结果卡直接从聊天列表消失（本次会话内）。',
+  },
+];
+
 export default function SettingsPage() {
   // 切片 24（§7.36）：颜色走全局 Token（夜间模式），深浅色跟随系统。
   const { colors } = useTheme();
@@ -136,6 +162,14 @@ export default function SettingsPage() {
   // showAiUsage 默认 false = 不显示）。与认真模式开关共用互斥键 settingsSavingKey。
   const [showAiUsage, setShowAiUsage] = useState<boolean | null>(null);
   const [showAiUsageError, setShowAiUsageError] = useState<string | null>(null);
+  // 切片 30 阶段 1（AGENTS.md §7.41）：AI 重试档位与已删除卡显示配置
+  // （app_settings schema v15）。与上述开关共用互斥键 settingsSavingKey。
+  const [aiRetryMax, setAiRetryMax] = useState<number | null>(null);
+  const [aiRetryError, setAiRetryError] = useState<string | null>(null);
+  const [flashDeletedDisplay, setFlashDeletedDisplay] = useState<FlashDeletedCardDisplay | null>(
+    null,
+  );
+  const [flashDeletedError, setFlashDeletedError] = useState<string | null>(null);
   const [widgetError, setWidgetError] = useState<string | null>(null);
 
   useFocusEffect(
@@ -158,6 +192,10 @@ export default function SettingsPage() {
             // 切片 26 阶段 2（§7.38）：用量展示开关随同一次 getSettings 读取
             //（读层已防御归一，旧数据回退 false）。
             setShowAiUsage(settings.showAiUsage === true);
+            // 切片 30 阶段 1（§7.41）：重试档位/已删除卡显示随同一次 getSettings 读取
+            //（读层已防御归一，旧数据回退 3 / 'mark'）。
+            setAiRetryMax(settings.aiRetryMax);
+            setFlashDeletedDisplay(settings.flashDeletedCardDisplay);
           }
         })
         .catch((error: unknown) => {
@@ -276,6 +314,64 @@ export default function SettingsPage() {
       }
     },
     [showAiUsage, settingsSavingKey],
+  );
+
+  /**
+   * 切片 30 阶段 1（AGENTS.md §7.41）：AI 重试档位切换。与用量展示同模式：
+   * 乐观更新 → updateSettings({ aiRetryMax }) → 失败回滚；即时生效（重试包装
+   * 每轮解析前经 getSettings 重读）且写入 app_settings 持久层，重启保持。
+   */
+  const handleAiRetryMaxChange = useCallback(
+    async (value: number): Promise<void> => {
+      if (aiRetryMax === null || settingsSavingKey !== null || aiRetryMax === value) {
+        return;
+      }
+      const previous = aiRetryMax;
+      setAiRetryMax(value);
+      setSettingsSavingKey('aiRetryMax');
+      try {
+        await itemRepository.updateSettings({ aiRetryMax: value });
+        setAiRetryError(null);
+      } catch (error) {
+        console.warn('[slice-30] AI 重试档位保存失败', error);
+        setAiRetryMax(previous);
+        setAiRetryError('保存失败，请重试');
+      } finally {
+        setSettingsSavingKey(null);
+      }
+    },
+    [aiRetryMax, settingsSavingKey],
+  );
+
+  /**
+   * 切片 30 阶段 1（AGENTS.md §7.41）：已删除卡显示方式切换。与重试档位同模式：
+   * 乐观更新 → updateSettings({ flashDeletedCardDisplay }) → 失败回滚；
+   * 即时生效（存在性查询/渲染每轮 focus 重读）且重启保持。
+   */
+  const handleFlashDeletedDisplayChange = useCallback(
+    async (value: FlashDeletedCardDisplay): Promise<void> => {
+      if (
+        flashDeletedDisplay === null ||
+        settingsSavingKey !== null ||
+        flashDeletedDisplay === value
+      ) {
+        return;
+      }
+      const previous = flashDeletedDisplay;
+      setFlashDeletedDisplay(value);
+      setSettingsSavingKey('flashDeletedCardDisplay');
+      try {
+        await itemRepository.updateSettings({ flashDeletedCardDisplay: value });
+        setFlashDeletedError(null);
+      } catch (error) {
+        console.warn('[slice-30] 已删除卡显示保存失败', error);
+        setFlashDeletedDisplay(previous);
+        setFlashDeletedError('保存失败，请重试');
+      } finally {
+        setSettingsSavingKey(null);
+      }
+    },
+    [flashDeletedDisplay, settingsSavingKey],
   );
 
   const handleImport = useCallback(async (): Promise<void> => {
@@ -475,6 +571,78 @@ export default function SettingsPage() {
         </View>
         {showAiUsageError !== null ? (
           <Text style={styles.errorHint}>{showAiUsageError}</Text>
+        ) : null}
+        {/* 切片 30 阶段 1（AGENTS.md §7.41）：AI 服务重试档位（aiRetryMax，
+            0–5 整数，UI 档 0/1/3/5，0=关闭即现状）。读取失败保持 null（行仍渲染、
+            不可选），保存互斥走 settingsSavingKey。 */}
+        <View style={styles.widgetToggleRow}>
+          <View style={styles.widgetToggleText}>
+            <Text style={styles.radioLabel}>AI 服务重试</Text>
+            <Text style={styles.widgetToggleHint}>
+              AI 服务异常时自动重试，间隔 1 秒；关闭后直接降级本地解析。
+            </Text>
+          </View>
+        </View>
+        {aiRetryMax === null ? (
+          <Text style={styles.hint}>加载中…</Text>
+        ) : (
+          AI_RETRY_TIER_OPTIONS.map((option) => {
+            const selected = aiRetryMax === option.value;
+            return (
+              <Pressable
+                key={option.value}
+                style={styles.radioRow}
+                onPress={() => {
+                  void handleAiRetryMaxChange(option.value);
+                }}
+                disabled={settingsSavingKey !== null}
+              >
+                <View style={[styles.radioOuter, selected && styles.radioOuterActive]}>
+                  {selected ? <View style={styles.radioInner} /> : null}
+                </View>
+                <Text style={styles.radioLabel}>{option.label}</Text>
+              </Pressable>
+            );
+          })
+        )}
+        {aiRetryError !== null ? <Text style={styles.errorHint}>{aiRetryError}</Text> : null}
+        {/* 切片 30 阶段 1（AGENTS.md §7.41）：已删除条目卡片显示方式
+            （flashDeletedCardDisplay：mark 置灰角标 / remove 直接移除）。 */}
+        <View style={styles.widgetToggleRow}>
+          <View style={styles.widgetToggleText}>
+            <Text style={styles.radioLabel}>已删除条目卡片</Text>
+            <Text style={styles.widgetToggleHint}>
+              条目在详情页删除后，聊天里对应结果卡的处理方式。
+            </Text>
+          </View>
+        </View>
+        {flashDeletedDisplay === null ? (
+          <Text style={styles.hint}>加载中…</Text>
+        ) : (
+          FLASH_DELETED_DISPLAY_OPTIONS.map((option) => {
+            const selected = flashDeletedDisplay === option.value;
+            return (
+              <Pressable
+                key={option.value}
+                style={styles.radioRow}
+                onPress={() => {
+                  void handleFlashDeletedDisplayChange(option.value);
+                }}
+                disabled={settingsSavingKey !== null}
+              >
+                <View style={[styles.radioOuter, selected && styles.radioOuterActive]}>
+                  {selected ? <View style={styles.radioInner} /> : null}
+                </View>
+                <View style={styles.widgetToggleText}>
+                  <Text style={styles.radioLabel}>{option.label}</Text>
+                  <Text style={styles.widgetToggleHint}>{option.hint}</Text>
+                </View>
+              </Pressable>
+            );
+          })
+        )}
+        {flashDeletedError !== null ? (
+          <Text style={styles.errorHint}>{flashDeletedError}</Text>
         ) : null}
       </View>
 

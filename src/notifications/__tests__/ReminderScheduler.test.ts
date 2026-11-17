@@ -402,6 +402,8 @@ class FakeRepository implements ItemRepository {
       carefulMode: false, // 切片 25 v12 新列：调度器不触达，stub 仅满足编译
       showAiUsage: false, // 切片 26 v13 新列：调度器不触达，stub 仅满足编译
       displayCalendarIds: [], // 切片 27 v14 新列：调度器不触达，stub 仅满足编译
+      aiRetryMax: 3, // 切片 30 v15 新列：调度器不触达，stub 仅满足编译
+      flashDeletedCardDisplay: 'mark', // 切片 30 v15 新列：调度器不触达，stub 仅满足编译
       defaultChannels: ['system-notification'],
     };
   }

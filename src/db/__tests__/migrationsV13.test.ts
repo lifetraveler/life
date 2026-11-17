@@ -27,16 +27,16 @@ afterAll(() => {
 });
 
 describe('schema v13（切片 26 阶段 1）', () => {
-  it('SCHEMA_VERSION = 14 且 migrations 链 maxVersion = 14', () => {
-    expect(SCHEMA_VERSION).toBe(14);
-    expect(schema.version).toBe(14);
-    expect(migrations.maxVersion).toBe(14);
+  it('SCHEMA_VERSION = 15 且 migrations 链 maxVersion = 15', () => {
+    expect(SCHEMA_VERSION).toBe(15);
+    expect(schema.version).toBe(15);
+    expect(migrations.maxVersion).toBe(15);
     expect(migrations.minVersion).toBe(1); // 最早 step 是 toVersion 2，minVersion = 2 - 1 = 1
   });
 
   it('migration 链 toVersion 从 2 连续递增到 14，无跳号（v2–v13 已发布 step 未回改）', () => {
     const versions = migrations.sortedMigrations.map((entry) => entry.toVersion);
-    expect(versions).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+    expect(versions).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
   });
 
   it('v13 step：唯一 add_columns（app_settings.show_ai_usage，非可选 boolean），零 unsafeExecuteSql', () => {
