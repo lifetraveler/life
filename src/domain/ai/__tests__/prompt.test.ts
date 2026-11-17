@@ -124,10 +124,10 @@ describe('AI_SYSTEM_PROMPT：澄清与渠道推荐（切片 23 §7.35）', () =>
     expect(P).toContain('title 沿用摘要中的标题主题词');
   });
 
-  it('反向边界：全新意图不复用上一张卡标题（切片 25 §7.37）', () => {
+  it('反向边界：全新意图不复用上一张卡标题（切片 25 §7.37，清单随切片 29 扩展）', () => {
     expect(P).toContain('用户输入是全新意图（与上一张卡无关的新事项）');
     expect(P).toContain('title 取本轮输入的主题词，禁止复用/照抄上一张卡的标题');
-    expect(P).toContain('只有修改类输入（改成/改为、补充细节、澄清续答）才以上一张卡草稿为基准');
+    expect(P).toContain('只有修改类输入（改成/改为、补充细节、澄清续答、短纠正句）才以上一张卡草稿为基准');
   });
 
   it('“多轮上下文（history）与澄清续答”一节存在：assistant=上一轮草稿 JSON + 续答合并 + 摘要块编辑指令', () => {
@@ -148,6 +148,52 @@ describe('AI_SYSTEM_PROMPT：澄清与渠道推荐（切片 23 §7.35）', () =>
     expect(P).toContain('禁止由毫秒反算日期');
     expect(P).toContain('民用时间一律以摘要块为准');
     expect(P).toContain('无摘要块时按“当前时间”基准正常解析');
+  });
+});
+
+describe('AI_SYSTEM_PROMPT：短纠正句与推迟语义（切片 29 §7.40）', () => {
+  const P = AI_SYSTEM_PROMPT;
+
+  it('短纠正句判定条款存在：摘要块存在时不含新事由名词的修正句默认编辑上一张卡', () => {
+    expect(P).toContain('短纠正句判定');
+    expect(P).toContain('「还是30分钟后吧」');
+    expect(P).toContain('「就改成明天上午吧」「算了，改到周五」');
+    expect(P).toContain('默认视为对上一张卡的编辑');
+    expect(P).toContain('以摘要为基准修正被提及的字段，其余字段照抄摘要');
+    expect(P).toContain('禁止新建条目。无摘要块时本条不生效');
+  });
+
+  it('短纠正句判定锚定：不含新事由名词（新标题性名词短语/新动作主体）+ 语气词', () => {
+    expect(P).toContain('不含新事由名词的短句');
+    expect(P).toContain('没有引入摘要标题之外的新标题性名词短语或新动作主体');
+    expect(P).toContain('「还是/就/吧/算了」等语气词');
+  });
+
+  it('推迟语义：「推迟/延后 X 分钟」＝卡摘要基准 ±X（start/end 同 Δ 保时长）', () => {
+    expect(P).toContain('「推迟/延后 X 分钟」＝以上一张卡（摘要块）的时间为基准平移 ±X 分钟');
+    expect(P).toContain('start 与 end（如有）同 Δ 平移、保持时长不变');
+    expect(P).toContain('摘要块时间是唯一基准，禁止以当前说话时刻平移');
+  });
+
+  it('推迟语义：「X 分钟后」＝说话时刻基准（编辑语境改卡时间；全新意图仍 delay 语义）', () => {
+    expect(P).toContain('「X 分钟后」＝以当前说话时刻为基准');
+    expect(P).toContain('卡片新时间＝说话时刻+X 分钟');
+    expect(P).toContain('全新意图语境下仍按 reminderDelayMinutes 延迟提醒语义');
+    expect(P).toContain('（不换算成 start）');
+  });
+
+  it('两种表达可同现互不覆盖', () => {
+    expect(P).toContain('两种表达可在同一句出现，各按各的基准计算，互不覆盖');
+  });
+
+  it('推迟语义加固：禁止把「推迟 X 分钟」原文写入 title/content（真机缺陷：模型曾写入 content）', () => {
+    expect(P).toContain('推迟/延后类修正只调整时间字段');
+    expect(P).toContain('禁止把「推迟 X 分钟」这类原文写入 title 或 content');
+  });
+
+  it('反向边界修订：新事由名词短句不是短纠正句，仍全新意图防误伤（切片 29）', () => {
+    expect(P).toContain('含新事由名词的短句（如「明天开会」「周六聚餐」）不是短纠正句');
+    expect(P).toContain('仍是全新意图照常新建，防误伤');
   });
 });
 

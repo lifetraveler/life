@@ -738,7 +738,13 @@ export function useFlashChat() {
       }
       draftRef.current = null;
       setDraft(null);
-      historyRef.current = [];
+      // 切片 29（§7.40，用户 2026-11-17 批准的范围修订）：保存后不再清空
+      // history，改为播种本次保存草稿的 JSON（沿用 chat.ts historyAppend 的
+      // assistant 条目格式）。下一轮 buildHistoryBriefing 因此有「上一张卡片
+      // 草稿摘要」块可用，多轮节「短纠正句判定/推迟语义」条款在保存后的轮次
+      // 继续生效（修复「保存后『还是30分钟后吧』被误判全新解析」缺陷）。
+      // 仅播种这一条、不携带更早对话——保持「每存一张=新对话」设计，不跨条目串味。
+      historyRef.current = [{ role: 'assistant', text: JSON.stringify(current) }];
       // 切片 22 阶段 1（AGENTS.md §7.34）：保存成功后的 AI 回复改为结果卡片消息
       //（替代原「已添加《xx》」纯文本）；提醒未自动落库的说明（reminderNotice）
       // 仍追加一条纯文本消息，Alert 提示行为不变。
