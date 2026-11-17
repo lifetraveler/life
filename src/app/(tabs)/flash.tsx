@@ -10,7 +10,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import FlashConfirmCard from '../../ui/FlashConfirmCard';
@@ -114,6 +114,14 @@ export default function FlashScreen() {
     return null;
   }, [chat.messages]);
 
+  // 切片 30（§7.41 D2）：页面聚焦时批量 reconcile 已删除卡——从详情页删除后
+  // 返回聊天（或切 Tab 回来）即触发，一次性批量查询不轮询（切片 27 惯例）。
+  useFocusEffect(
+    useCallback(() => {
+      void chat.reconcileDeletedCards();
+    }, [chat.reconcileDeletedCards]),
+  );
+
   // 切片 22 阶段 2（AGENTS.md §7.34）：结果卡片消息走 FlashResultCard；
   // cardPayload 属性窄化不进闭包，先捕获到局部 const 再用于 onPress。
   // 卡片直接作为 FlatList 单元渲染（不包 row wrapper：row 主轴按内容测宽
@@ -123,12 +131,19 @@ export default function FlashScreen() {
   const renderMessage = ({ item }: { item: FlashChatMessage }) => {
     if (item.kind === 'card' && item.cardPayload !== undefined) {
       const payload = item.cardPayload;
+      // 切片 30（§7.41 D2）：deleted=true（reconcile 判定条目已删）→ 置灰 +
+      //「已删除」角标 + 点击禁用 + chips 隐藏（FlashResultCard 内部处理）。
+      const deleted = chat.deletedItemIds.has(payload.itemId);
       return (
         <FlashResultCard
           payload={payload}
           tzid={deviceTzid}
           historical={item.id !== lastCardId}
-          onPress={() => router.push(`/item/${payload.itemId}`)}
+          deleted={deleted}
+          onPress={() => {
+            if (deleted) return; // 已删除卡不可点进详情（双保险，Pressable 已 disabled）
+            router.push(`/item/${payload.itemId}`);
+          }}
           onPostpone={(minutes) => {
             void chat.postponeCard(payload.itemId, minutes);
           }}

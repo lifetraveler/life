@@ -55,7 +55,11 @@ import { diffDraftChanges } from '../domain/ai/editDiff';
 import type { DraftFieldChanges } from '../domain/ai/editDiff';
 import { formatAiUsageLine } from '../domain/ai/usage';
 import type { AiUsageSnapshot } from '../domain/ai/usage';
-import { DEFAULT_AI_RETRY_MAX } from '../domain/settings';
+import {
+  DEFAULT_AI_RETRY_MAX,
+  isFlashDeletedCardDisplay,
+} from '../domain/settings';
+import type { FlashDeletedCardDisplay } from '../domain/settings';
 import type { AiConfig } from '../domain/ai/configStore';
 import {
   computePostponedOnceAt,
@@ -196,6 +200,10 @@ export function useFlashChat() {
   // 切片 30（§7.41）阶段 3：放弃后的草稿快照——draft 已清空，此快照仅供
   // 「已放弃」置灰卡展示（内存态，新输入清空、重启消失）。
   const [dismissedDraft, setDismissedDraft] = useState<ParsedItemDraft | null>(null);
+  // 切片 30（§7.41）阶段 4：已删除条目联动——reconcile 判定为「条目已不存在」的
+  // card itemId 集合（mark 模式渲染置灰+角标；remove 模式消息直接移除，不进集合）。
+  // 只增不减（条目删除不可撤销），useFocusEffect 触发批量查询、不轮询。
+  const [deletedItemIds, setDeletedItemIds] = useState<Set<string>>(new Set());
   const [categories, setCategories] = useState<Category[]>([]);
 
   const historyRef = useRef<ChatMessage[]>([]);
@@ -519,6 +527,58 @@ export function useFlashChat() {
     setDraft(null);
     setDismissedDraft(abandoned);
   }, [cancelPendingConfirm]);
+
+  // 切片 30（§7.41）阶段 4：已删除卡 reconcile——收集当前 card 消息的 itemId
+  // 去重，批量存在性查询（Repository 只读扩展，useFocusEffect 触发不轮询），
+  // 按 flash_deleted_card_display 分流：mark → deletedItemIds 并集（渲染置灰 +
+  // 「已删除」角标 + 点击禁用 + chips 隐藏）；remove → 直接从对话移除对应 card
+  // 消息。查询/设置读取失败保持原样（防御性，不阻断聊天——条目真被删了，
+  // 后续 postponeCard 点击也会走 Repository 明确报错路径）。
+  const reconcileDeletedCards = useCallback(async (): Promise<void> => {
+    const itemIds = new Set<string>();
+    for (const message of messagesRef.current) {
+      if (message.kind === 'card' && message.cardPayload !== undefined) {
+        itemIds.add(message.cardPayload.itemId);
+      }
+    }
+    if (itemIds.size === 0) return;
+    let displayMode: FlashDeletedCardDisplay = 'mark';
+    let existing: Set<string>;
+    try {
+      const [settings, found] = await Promise.all([
+        itemRepository.getSettings(),
+        itemRepository.filterExistingItemIds([...itemIds]),
+      ]);
+      if (isFlashDeletedCardDisplay(settings.flashDeletedCardDisplay)) {
+        displayMode = settings.flashDeletedCardDisplay;
+      }
+      existing = found;
+    } catch (error) {
+      console.warn('[slice-30] 已删除卡 reconcile 失败，保持原样', error);
+      return;
+    }
+    const deleted = [...itemIds].filter((id) => !existing.has(id));
+    if (deleted.length === 0) return;
+    if (displayMode === 'remove') {
+      const removedSet = new Set(deleted);
+      setMessages((prev) =>
+        prev.filter(
+          (message) =>
+            !(
+              message.kind === 'card' &&
+              message.cardPayload !== undefined &&
+              removedSet.has(message.cardPayload.itemId)
+            ),
+        ),
+      );
+      return;
+    }
+    setDeletedItemIds((prev) => {
+      const next = new Set(prev);
+      for (const id of deleted) next.add(id);
+      return next;
+    });
+  }, []);
 
   /**
    * 追加认真模式确认消息（拦截轮专用）。消息 id 在 setMessages updater 外先
@@ -872,6 +932,8 @@ export function useFlashChat() {
     retryNotice,
     // 切片 30（§7.41）阶段 3：放弃后的草稿快照（null=无；新输入时清空）。
     dismissedDraft,
+    // 切片 30（§7.41）阶段 4：已删除条目的 card itemId 集合（mark 模式渲染判定）。
+    deletedItemIds,
     categories,
     send,
     applyEdit,
@@ -880,5 +942,6 @@ export function useFlashChat() {
     applyConfirm,
     dismissConfirm,
     dismissDraft,
+    reconcileDeletedCards,
   };
 }

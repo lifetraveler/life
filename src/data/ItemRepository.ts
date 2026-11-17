@@ -359,4 +359,13 @@ export interface ItemRepository {
    * 非只读冲突均计入 skippedDuplicateCount（结果页统一呈现为「跳过（重复）」）。
    */
   importSystemCalendarEntries(inputs: ImportedItemInput[]): Promise<ImportBatchResult>;
+
+  // —— 切片 30 阶段 4：闪电录入已删除卡联动（契约外显式只读扩展，先例依据同
+  //    deleteItem / getCalendars color：AGENTS.md §7.41 D2——聊天结果卡需要按
+  //    itemId 批量判定条目是否仍存在，useFocusEffect 一次性调用、不轮询）——
+  /**
+   * 批量返回 ids 中实际存在于 items 表的 id 子集（输入重复安全，顺序不保证）。
+   * 空输入直接返回空集合（不发查询）。
+   */
+  filterExistingItemIds(ids: readonly string[]): Promise<Set<string>>;
 }

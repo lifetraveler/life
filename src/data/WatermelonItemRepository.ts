@@ -921,6 +921,20 @@ export class WatermelonItemRepository implements ItemRepository {
   }
 
   /**
+   * 切片 30 阶段 4（契约外扩展，见接口注释）：批量 id 存在性查询。
+   * Q.oneOf 走 SQLite IN 语义；空输入短路返回空集合（不发查询）。
+   */
+  async filterExistingItemIds(ids: readonly string[]): Promise<Set<string>> {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return new Set();
+    const models = await this.db
+      .get<ItemModel>(ITEMS_TABLE)
+      .query(Q.where('id', Q.oneOf(unique)))
+      .fetch();
+    return new Set(models.map((model) => model.id));
+  }
+
+  /**
    * 切片 6（§4.24 冻结）：只更新时间字段；updatedAt 由 prepareUpdate 自动刷新。
    * - patch 值必须为有限数字或 null（NaN/Infinity 抛错）；
    * - 合并既有值后，startAt/endAt 同时非 null 时校验 endAt >= startAt；
