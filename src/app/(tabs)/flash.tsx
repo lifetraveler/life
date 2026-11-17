@@ -10,7 +10,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import FlashConfirmCard from '../../ui/FlashConfirmCard';
@@ -114,6 +114,14 @@ export default function FlashScreen() {
     return null;
   }, [chat.messages]);
 
+  // 切片 30（§7.41 D2）：页面聚焦时批量 reconcile 已删除卡——从详情页删除后
+  // 返回聊天（或切 Tab 回来）即触发，一次性批量查询不轮询（切片 27 惯例）。
+  useFocusEffect(
+    useCallback(() => {
+      void chat.reconcileDeletedCards();
+    }, [chat.reconcileDeletedCards]),
+  );
+
   // 切片 22 阶段 2（AGENTS.md §7.34）：结果卡片消息走 FlashResultCard；
   // cardPayload 属性窄化不进闭包，先捕获到局部 const 再用于 onPress。
   // 卡片直接作为 FlatList 单元渲染（不包 row wrapper：row 主轴按内容测宽
@@ -123,12 +131,19 @@ export default function FlashScreen() {
   const renderMessage = ({ item }: { item: FlashChatMessage }) => {
     if (item.kind === 'card' && item.cardPayload !== undefined) {
       const payload = item.cardPayload;
+      // 切片 30（§7.41 D2）：deleted=true（reconcile 判定条目已删）→ 置灰 +
+      //「已删除」角标 + 点击禁用 + chips 隐藏（FlashResultCard 内部处理）。
+      const deleted = chat.deletedItemIds.has(payload.itemId);
       return (
         <FlashResultCard
           payload={payload}
           tzid={deviceTzid}
           historical={item.id !== lastCardId}
-          onPress={() => router.push(`/item/${payload.itemId}`)}
+          deleted={deleted}
+          onPress={() => {
+            if (deleted) return; // 已删除卡不可点进详情（双保险，Pressable 已 disabled）
+            router.push(`/item/${payload.itemId}`);
+          }}
           onPostpone={(minutes) => {
             void chat.postponeCard(payload.itemId, minutes);
           }}
@@ -201,6 +216,15 @@ export default function FlashScreen() {
             onPress={() => setEditVisible(true)}
           />
           <View style={styles.actionRow}>
+            {/* 切片 30（§7.41）阶段 3：第三条本地操作「放弃」——纯本地清草稿
+                （不发起 AI 轮次、不落库、不播种），卡片原地转弃置态。 */}
+            <Pressable
+              style={styles.secondaryButton}
+              onPress={chat.dismissDraft}
+              disabled={chat.busy}
+            >
+              <Text style={styles.secondaryText}>放弃</Text>
+            </Pressable>
             <Pressable
               style={styles.secondaryButton}
               onPress={() => setEditVisible(true)}
@@ -217,6 +241,29 @@ export default function FlashScreen() {
               </Text>
             </Pressable>
           </View>
+        </View>
+      ) : chat.dismissedDraft !== null ? (
+        // 切片 30（§7.41）阶段 3：弃置卡——原地置灰 +「已放弃」角标，无按钮行；
+        // 快照仅活到下一个动作（send 清空），内存态、不落库。
+        <View style={styles.cardWrap}>
+          <FlashPreviewCard
+            draft={chat.dismissedDraft}
+            categories={chat.categories}
+            tzid={deviceTzid}
+            dismissed={true}
+            onPress={() => {
+              /* 弃置卡不可编辑（disabled），onPress 恒不触发 */
+            }}
+          />
+        </View>
+      ) : null}
+
+      {/* 切片 30（§7.41）：重试即时提示——仅轮进行中存在（send finally 清空），
+          不进聊天历史；行本身随提示消失，无额外占位。 */}
+      {chat.retryNotice !== null ? (
+        <View style={styles.retryNoticeRow}>
+          <ActivityIndicator size="small" color={colors.textMuted} />
+          <Text style={styles.retryNoticeText}>{chat.retryNotice}</Text>
         </View>
       ) : null}
 
@@ -357,14 +404,26 @@ function makeStyles(c: ThemeColors) {
     disabled: {
       opacity: 0.5,
     },
+    // 切片 30（§7.41）：重试即时提示行（输入栏上方；Token 化，深浅色可读）。
+    retryNoticeRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+    },
+    retryNoticeText: {
+      fontSize: 12,
+      color: c.textMuted,
+      flexShrink: 1,
+    },
     inputRow: {
       flexDirection: 'row',
       alignItems: 'flex-end',
       gap: 8,
       padding: 12,
       backgroundColor: c.card,
-      borderTopWidth: StyleSheet.hairlineWidth,
-      borderTopColor: c.border,
+      borderTopWidth: StyleSheet.hairlineWidth,      borderTopColor: c.border,
     },
     input: {
       flex: 1,

@@ -1,7 +1,7 @@
 import { Model } from '@nozbe/watermelondb';
 import { field, text } from '@nozbe/watermelondb/decorators';
 
-import type { TagDisplayMode } from '../../domain/settings';
+import type { FlashDeletedCardDisplay, TagDisplayMode } from '../../domain/settings';
 
 /**
  * app_settings 表的 WatermelonDB model（切片 14，AGENTS.md §7.22，schema v6；
@@ -48,4 +48,18 @@ export default class AppSettingsModel extends Model {
    * 写路径校验（validateDisplayCalendarIds：仅非空字符串、去重）。
    */
   @text('display_calendar_ids_json') displayCalendarIdsJson!: string | null;
+  /**
+   * 切片 30（schema v15，AGENTS.md §7.41）：AI 远端解析传输层自动重试次数
+   * （0–5 整数，0=关闭，默认 3）。isOptional：既有行回填 null（非可选 number 会
+   * 回填 0 与「关闭」语义混淆），读取层归一（domain/settings.ts parseAiRetryMax：
+   * null/越界/非整数 → 默认 3），写路径校验（validateAiRetryMax 否则抛错）。
+   */
+  @field('ai_retry_max') aiRetryMax!: number | null;
+  /**
+   * 切片 30（schema v15，AGENTS.md §7.41）：已删除条目在聊天结果卡中的显示方式
+   * 'mark'（置灰+角标+禁用，默认）| 'remove'（从对话移除）；null/坏值由读取层
+   * 归一（domain/settings.ts isFlashDeletedCardDisplay 回退 'mark'），写路径校验
+   * （枚举外抛错）。
+   */
+  @text('flash_deleted_card_display') flashDeletedCardDisplay!: FlashDeletedCardDisplay | null;
 }

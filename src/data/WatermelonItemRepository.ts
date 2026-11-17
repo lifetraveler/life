@@ -40,12 +40,15 @@ import {
   APP_SETTINGS_ROW_ID,
   DEFAULT_APP_SETTINGS,
   isTagDisplayMode,
+  isFlashDeletedCardDisplay,
+  parseAiRetryMax,
   parseChipsIncrements,
   parseDefaultChannels,
   parseDisplayCalendarIds,
   serializeChipsIncrements,
   serializeDefaultChannels,
   serializeDisplayCalendarIds,
+  validateAiRetryMax,
   validateDisplayCalendarIds,
   validateChipsIncrements,
   validateDefaultChannels,
@@ -235,6 +238,14 @@ function toDomainSettings(model: AppSettingsModel): AppSettings {
       ? model.showAiUsage
       : DEFAULT_APP_SETTINGS.showAiUsage,
     displayCalendarIds: parseDisplayCalendarIds(model.displayCalendarIdsJson),
+    // 切片 30（§7.41，schema v15）：ai_retry_max number isOptional 列——既有行回填
+    // null（非可选 number 会回填 0 与「关闭」语义混淆），parseAiRetryMax 归一
+    // （null/越界/非整数 → 默认 3，不抛错）；flash_deleted_card_display string
+    // isOptional 列——非枚举值回退 'mark'（isFlashDeletedCardDisplay 守卫）。
+    aiRetryMax: parseAiRetryMax(model.aiRetryMax),
+    flashDeletedCardDisplay: isFlashDeletedCardDisplay(model.flashDeletedCardDisplay)
+      ? model.flashDeletedCardDisplay
+      : DEFAULT_APP_SETTINGS.flashDeletedCardDisplay,
   };
 }
 
@@ -907,6 +918,20 @@ export class WatermelonItemRepository implements ItemRepository {
       this.db.get<ItemModel>(ITEMS_TABLE).query(Q.where('id', id)),
     );
     return found.length > 0 ? found[0] : null;
+  }
+
+  /**
+   * 切片 30 阶段 4（契约外扩展，见接口注释）：批量 id 存在性查询。
+   * Q.oneOf 走 SQLite IN 语义；空输入短路返回空集合（不发查询）。
+   */
+  async filterExistingItemIds(ids: readonly string[]): Promise<Set<string>> {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return new Set();
+    const models = await this.db
+      .get<ItemModel>(ITEMS_TABLE)
+      .query(Q.where('id', Q.oneOf(unique)))
+      .fetch();
+    return new Set(models.map((model) => model.id));
   }
 
   /**
@@ -1841,6 +1866,10 @@ export class WatermelonItemRepository implements ItemRepository {
           record.displayCalendarIdsJson = serializeDisplayCalendarIds(
             DEFAULT_APP_SETTINGS.displayCalendarIds,
           );
+          // 切片 30（schema v15）：补插默认行时写重试次数/已删除卡显示默认值
+          // （读层有归一，此处求自描述）。
+          record.aiRetryMax = DEFAULT_APP_SETTINGS.aiRetryMax;
+          record.flashDeletedCardDisplay = DEFAULT_APP_SETTINGS.flashDeletedCardDisplay;
         });
         return { ...DEFAULT_APP_SETTINGS };
       }
@@ -1880,6 +1909,12 @@ export class WatermelonItemRepository implements ItemRepository {
       patch.displayCalendarIds !== undefined
         ? serializeDisplayCalendarIds(validateDisplayCalendarIds(patch.displayCalendarIds))
         : undefined;
+    // 切片 30（§7.41）：aiRetryMax 写路径严格校验（0–5 整数，违反抛错）；
+    // flashDeletedCardDisplay 枚举校验（'mark'|'remove' 之外抛错）。
+    const aiRetryMax = patch.aiRetryMax !== undefined ? validateAiRetryMax(patch.aiRetryMax) : undefined;
+    if (patch.flashDeletedCardDisplay !== undefined && !isFlashDeletedCardDisplay(patch.flashDeletedCardDisplay)) {
+      throw new Error('updateSettings: invalid flashDeletedCardDisplay');
+    }
     await this.db.write(async () => {
       const models = await this.db.get<AppSettingsModel>(APP_SETTINGS_TABLE).query().fetch();
       const model = models[0];
@@ -1901,6 +1936,9 @@ export class WatermelonItemRepository implements ItemRepository {
           record.displayCalendarIdsJson =
             displayCalendarIds ??
             serializeDisplayCalendarIds(DEFAULT_APP_SETTINGS.displayCalendarIds);
+          record.aiRetryMax = aiRetryMax ?? DEFAULT_APP_SETTINGS.aiRetryMax;
+          record.flashDeletedCardDisplay =
+            patch.flashDeletedCardDisplay ?? DEFAULT_APP_SETTINGS.flashDeletedCardDisplay;
         });
         return;
       }
@@ -1934,6 +1972,12 @@ export class WatermelonItemRepository implements ItemRepository {
         }
         if (displayCalendarIds !== undefined) {
           draft.displayCalendarIdsJson = displayCalendarIds;
+        }
+        if (aiRetryMax !== undefined) {
+          draft.aiRetryMax = aiRetryMax;
+        }
+        if (patch.flashDeletedCardDisplay !== undefined) {
+          draft.flashDeletedCardDisplay = patch.flashDeletedCardDisplay;
         }
       });
     });

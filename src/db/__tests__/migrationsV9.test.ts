@@ -27,16 +27,16 @@ afterAll(() => {
 });
 
 describe('schema v9（切片 17 阶段 1）', () => {
-  it('SCHEMA_VERSION = 14 且 migrations 链 maxVersion = 14（切片 27 追加 v14 后例行更新）', () => {
-    expect(SCHEMA_VERSION).toBe(14);
-    expect(schema.version).toBe(14);
-    expect(migrations.maxVersion).toBe(14);
+  it('SCHEMA_VERSION = 15 且 migrations 链 maxVersion = 15（切片 30 追加 v15 后例行更新）', () => {
+    expect(SCHEMA_VERSION).toBe(15);
+    expect(schema.version).toBe(15);
+    expect(migrations.maxVersion).toBe(15);
     expect(migrations.minVersion).toBe(1);
   });
 
   it('migration 链 toVersion 从 2 连续递增到 14，无跳号（v2–v13 已发布 step 未回改）', () => {
     const versions = migrations.sortedMigrations.map((entry) => entry.toVersion);
-    expect(versions).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+    expect(versions).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
   });
 
   it('v9 step：仅一个 create_table（channel_presets），列定义与 schema.ts 逐字段一致', () => {

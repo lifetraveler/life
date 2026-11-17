@@ -21,6 +21,9 @@
  *   快捷推迟 chips 保留可用（已保存条目语义仍正确）。角标是 Pressable 的
  *   absolute 子元素（不出现在文本流内、不新增 FlatList 行包裹层——切片 22
  *   教训：行包裹会致 flex:1 body 塌缩 0 宽）。
+ * - 已删除联动态（切片 30 / AGENTS.md §7.41 D2）：deleted=true（对应条目已在
+ *   详情页删除）时整卡降透明 +「已删除」角标（deleted 优先于 historical）、
+ *   点击禁用、chips 整行不渲染；mark/remove 分流由 useFlashChat 承担。
  */
 
 import { useMemo } from 'react';
@@ -109,6 +112,12 @@ interface FlashResultCardProps {
    * （当前卡），当前卡不渲染角标、不加额外标识。
    */
   historical?: boolean;
+  /**
+   * 已删除联动态（切片 30 / AGENTS.md §7.41 D2，默认 false）：对应条目已在
+   * 详情页删除（useFocusEffect reconcile 判定）——整卡降透明 +「已删除」角标
+   * （与「历史」同位，deleted 优先）、点击禁用、chips 整行不渲染。
+   */
+  deleted?: boolean;
 }
 
 export default function FlashResultCard({
@@ -117,17 +126,24 @@ export default function FlashResultCard({
   onPress,
   onPostpone,
   historical = false,
+  deleted = false,
 }: FlashResultCardProps) {
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const timeLine = describeCardTimeLine(payload, tzid);
   const reminderLine = describeCardReminderLine(payload.reminder);
   const categoryColor = payload.category?.color ?? FALLBACK_CATEGORY_COLOR;
-  const showPostponeChips = payload.startAt !== null && !payload.allDay;
+  // 切片 30（§7.41 D2）：已删除卡不渲染 chips（chips 语义已无操作对象）；
+  // 历史判定保持不变（deleted 与 historical 可同时为 true，角标 deleted 优先）。
+  const showPostponeChips = payload.startAt !== null && !payload.allDay && !deleted;
   return (
     <Pressable
-      style={[styles.card, historical ? styles.cardHistorical : null]}
+      style={[
+        styles.card,
+        historical || deleted ? styles.cardHistorical : null,
+      ]}
       onPress={onPress}
+      disabled={deleted}
     >
       <View style={[styles.colorBar, { backgroundColor: categoryColor }]} />
       <View style={styles.body}>
@@ -199,8 +215,13 @@ export default function FlashResultCard({
         ) : null}
       </View>
       {/* 切片 29：历史卡右上角「历史」角标——absolute 定位不占文本流，
-          pointerEvents none 不拦截卡片本体点击（触点穿透回 Pressable）。 */}
-      {historical ? (
+          pointerEvents none 不拦截卡片本体点击（触点穿透回 Pressable）。
+          切片 30：deleted 优先渲染「已删除」角标（互斥：一卡一右上角标）。 */}
+      {deleted ? (
+        <View style={styles.historicalBadge} pointerEvents="none">
+          <Text style={styles.historicalBadgeText}>已删除</Text>
+        </View>
+      ) : historical ? (
         <View style={styles.historicalBadge} pointerEvents="none">
           <Text style={styles.historicalBadgeText}>历史</Text>
         </View>

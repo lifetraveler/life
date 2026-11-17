@@ -629,6 +629,8 @@ describe('getSettings / updateSettings · 小组件显示开关（阶段 7a）',
       carefulMode: false,
       showAiUsage: false,
       displayCalendarIds: [], // 切片 27 v14：默认 [] = 功能关闭
+      aiRetryMax: 3, // 切片 30 v15：默认 3 次
+      flashDeletedCardDisplay: 'mark', // 切片 30 v15：默认标记已删除
       defaultChannels: ['system-notification'],
     });
   });

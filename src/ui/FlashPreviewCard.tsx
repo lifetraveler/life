@@ -36,6 +36,11 @@ interface FlashPreviewCardProps {
   categories: ReadonlyArray<Category>;
   tzid: string;
   onPress: () => void;
+  /**
+   * 切片 30（§7.41）阶段 3：草稿放弃态——整体降透明 +「已放弃」角标
+   * （复用切片 29 历史卡视觉语言），点击禁用。默认 false。
+   */
+  dismissed?: boolean;
 }
 
 export function describeRecurrenceRule(rule: RecurrenceRule): string {
@@ -82,6 +87,7 @@ export default function FlashPreviewCard({
   categories,
   tzid,
   onPress,
+  dismissed = false,
 }: FlashPreviewCardProps) {
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -95,7 +101,17 @@ export default function FlashPreviewCard({
       : describeDraftTime(draft, tzid);
 
   return (
-    <Pressable style={styles.card} onPress={onPress}>
+    <Pressable
+      style={[styles.card, dismissed ? styles.cardDismissed : null]}
+      onPress={onPress}
+      disabled={dismissed}
+    >
+      {/* 切片 30（§7.41）：「已放弃」角标（切片 29 历史卡同款 pill）。 */}
+      {dismissed ? (
+        <View style={styles.dismissedBadge} pointerEvents="none">
+          <Text style={styles.dismissedBadgeText}>已放弃</Text>
+        </View>
+      ) : null}
       <View style={styles.headerRow}>
         <Text style={styles.typeBadge}>{TYPE_LABELS[draft.type]}</Text>
         <Text style={styles.cardTitle} numberOfLines={2}>
@@ -128,7 +144,9 @@ export default function FlashPreviewCard({
           提醒：{draft.reminderDelayMinutes}分钟后
         </Text>
       ) : null}
-      <Text style={styles.editHint}>点击卡片可修改字段</Text>
+      <Text style={styles.editHint}>
+        {dismissed ? '草稿已放弃，重新输入可新建条目' : '点击卡片可修改字段'}
+      </Text>
     </Pressable>
   );
 }
@@ -142,6 +160,27 @@ function makeStyles(c: ThemeColors) {
       borderColor: c.border,
       padding: 12,
       gap: 6,
+    },
+    // 切片 30（§7.41）阶段 3：弃置态仅降透明（切片 29 历史卡同款 0.55），
+    // 不包外层 wrapper（切片 22 教训：FlatList/行容器测宽塌缩）。
+    cardDismissed: {
+      opacity: 0.55,
+    },
+    dismissedBadge: {
+      position: 'absolute',
+      top: 6,
+      right: 6,
+      backgroundColor: c.card,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.border,
+      borderRadius: 8,
+      paddingVertical: 1,
+      paddingHorizontal: 6,
+    },
+    dismissedBadgeText: {
+      fontSize: 10,
+      color: c.textMuted,
+      fontWeight: '600',
     },
     headerRow: {
       flexDirection: 'row',

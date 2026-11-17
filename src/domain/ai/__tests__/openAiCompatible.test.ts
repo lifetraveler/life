@@ -802,3 +802,175 @@ describe('OpenAICompatibleProvider DeepSeek 峰谷分层（阶段 2b / v0.21）'
     expect(provider.lastUsage?.estimatedCost).toBe(0.0018);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 切片 30（AGENTS.md §7.41）：传输层自动重试——可重试=网络/超时/5xx/429/响应
+// JSON 解析失败；不可重试=401/403/400/schema-mismatch 立即抛出；固定间隔
+// 1000ms；耗尽披露「（已重试 N 次）」；usage 只报成功轮。
+// ---------------------------------------------------------------------------
+
+describe('OpenAICompatibleProvider 自动重试（切片 30 §7.41）', () => {
+  const zeroDelay = async (): Promise<void> => undefined;
+
+  function makeRetryProvider(
+    fetchImpl: (url: string, init: RequestInit) => Promise<Response>,
+    retryMax: number | undefined,
+    onRetry?: (attempt: number, maxRetries: number, kind: string) => void,
+    delays?: number[],
+  ): OpenAICompatibleProvider {
+    return new OpenAICompatibleProvider(
+      {
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: API_KEY,
+        model: 'test-model',
+        retryMax,
+        onRetry,
+      },
+      fetchImpl,
+      Date.now,
+      // 注入等待记录器：断言固定间隔 1000ms，同时避免测试真等 1s。
+      async (ms: number) => {
+        delays?.push(ms);
+      },
+    );
+  }
+
+  /** 顺序响应队列：依次弹出；队列空后重复最后一项。 */
+  function sequenceFetch(
+    steps: Array<Response | Error>,
+  ): (url: string, init: RequestInit) => Promise<Response> {
+    let index = 0;
+    return async () => {
+      const step = steps[Math.min(index, steps.length - 1)];
+      index += 1;
+      if (step instanceof Error) {
+        throw step;
+      }
+      return step;
+    };
+  }
+
+  it('网络错误一次后成功：重试一次返回草稿，onRetry 回调 (1, maxRetries)', async () => {
+    const onRetryCalls: Array<[number, number, string]> = [];
+    const provider = makeRetryProvider(
+      sequenceFetch([new Error('ECONNREFUSED'), okEnvelope(validWireJson)]),
+      3,
+      (attempt, maxRetries, kind) => onRetryCalls.push([attempt, maxRetries, kind]),
+    );
+    const draft = await provider.parse('明天下午3点开会', CONTEXT);
+    expect(draft.title).toBe('开会');
+  });
+
+  it('重试间隔恒 1000ms 且只在实际重试前等待（次数 = 重试次数）', async () => {
+    const delays: number[] = [];
+    const provider = makeRetryProvider(
+      sequenceFetch([new Error('boom'), new Error('boom'), okEnvelope(validWireJson)]),
+      3,
+      undefined,
+      delays,
+    );
+    await provider.parse('明天下午3点开会', CONTEXT);
+    expect(delays).toEqual([1000, 1000]);
+  });
+
+  it('HTTP 500 → 重试成功；429 → 重试成功', async () => {
+    const provider = makeRetryProvider(
+      sequenceFetch([new Response('oops', { status: 500 }), okEnvelope(validWireJson)]),
+      3,
+    );
+    const draft = await provider.parse('明天下午3点开会', CONTEXT);
+    expect(draft.title).toBe('开会');
+
+    const provider429 = makeRetryProvider(
+      sequenceFetch([new Response('slow down', { status: 429 }), okEnvelope(validWireJson)]),
+      3,
+    );
+    const draft429 = await provider429.parse('明天下午3点开会', CONTEXT);
+    expect(draft429.title).toBe('开会');
+  });
+
+  it('HTTP 401 / 400 不可重试：单次调用立即抛出，onRetry 不回调', async () => {
+    const onRetryCalls: Array<[number, number, string]> = [];
+    const provider = makeRetryProvider(
+      sequenceFetch([new Response('bad key', { status: 401 })]),
+      3,
+      (attempt, maxRetries, kind) => onRetryCalls.push([attempt, maxRetries, kind]),
+    );
+    await expect(provider.parse('明天下午3点开会', CONTEXT)).rejects.toThrow(AiParseError);
+    expect(onRetryCalls).toEqual([]);
+  });
+
+  it('schema-mismatch 不可重试：同 prompt 重试无意义，立即抛出', async () => {
+    const badShape = JSON.stringify({ title: '缺字段的残缺对象' });
+    const provider = makeRetryProvider(
+      sequenceFetch([
+        okEnvelope(badShape),
+        okEnvelope(badShape),
+        okEnvelope(badShape),
+        okEnvelope(badShape),
+      ]),
+      3,
+    );
+    await expect(provider.parse('明天下午3点开会', CONTEXT)).rejects.toMatchObject({
+      kind: 'schema-mismatch',
+    });
+  });
+
+  it('响应体非合法 JSON → 重试后成功（invalid-json 可重试）', async () => {
+    const provider = makeRetryProvider(
+      sequenceFetch([
+        new Response('not-json-at-all', { status: 200 }),
+        okEnvelope(validWireJson),
+      ]),
+      3,
+    );
+    const draft = await provider.parse('明天下午3点开会', CONTEXT);
+    expect(draft.title).toBe('开会');
+  });
+
+  it('重试耗尽：错误消息追加「（已重试 N 次）」，fetch 调用 1+N 次，onRetry N 次', async () => {
+    const onRetryCalls: Array<[number, number, string]> = [];
+    let calls = 0;
+    const countingFetch = async (): Promise<Response> => {
+      calls += 1;
+      throw new Error('ECONNREFUSED');
+    };
+    const provider = makeRetryProvider(countingFetch, 2, (attempt, maxRetries, kind) =>
+      onRetryCalls.push([attempt, maxRetries, kind]),
+    );
+    await expect(provider.parse('明天下午3点开会', CONTEXT)).rejects.toThrow(
+      /（已重试 2 次）$/,
+    );
+    expect(calls).toBe(3); // 首次 + 2 次重试
+    expect(onRetryCalls).toEqual([
+      [1, 2, 'network'],
+      [2, 2, 'network'],
+    ]);
+  });
+
+  it('retryMax=0（关闭）：单次尝试，消息不带重试计数', async () => {
+    let calls = 0;
+    const provider = makeRetryProvider(async () => {
+      calls += 1;
+      throw new Error('ECONNREFUSED');
+    }, 0);
+    await expect(provider.parse('明天下午3点开会', CONTEXT)).rejects.toThrow(
+      /^AI 请求失败：ECONNREFUSED$/,
+    );
+    expect(calls).toBe(1);
+  });
+
+  it('retryMax 缺省 → 默认 3（共 4 次尝试）；超时错误同样可重试', async () => {
+    let calls = 0;
+    const provider = makeRetryProvider(async () => {
+      calls += 1;
+      if (calls < 4) {
+        throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+      }
+      return okEnvelope(validWireJson);
+    }, undefined);
+    const draft = await provider.parse('明天下午3点开会', CONTEXT);
+    expect(draft.title).toBe('开会');
+    expect(calls).toBe(4);
+  });
+});

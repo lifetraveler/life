@@ -120,4 +120,73 @@ describe('FlashResultCard 历史卡视觉区分（切片 29 §7.40）', () => {
     expect(onPostpone).toHaveBeenCalledTimes(1);
     expect(onPostpone).toHaveBeenCalledWith(15);
   });
+
+  // —— 切片 30 阶段 4（AGENTS.md §7.41 D2）：已删除卡联动态 ——
+  it('deleted=true：「已删除」角标、整卡降透明、Pressable disabled、提示可点文案仍渲染', async () => {
+    let tree!: ReactTestRenderer;
+    await TestRenderer.act(async () => {
+      tree = TestRenderer.create(
+        <FlashResultCard payload={makePayload()} tzid={TZID} deleted onPress={() => undefined} />,
+      );
+    });
+    const texts = collectTexts(tree.root);
+    expect(texts).toContain('已删除');
+    expect(texts).not.toContain('历史');
+    expect(hasHistoricalDimNode(tree)).toBe(true);
+    // Pressable disabled：deleted 卡主体不可点击。
+    const disabled = tree.root.findAll(
+      (node: ReactTestInstance) => node.props.disabled === true,
+    );
+    expect(disabled.length).toBeGreaterThan(0);
+  });
+
+  it('deleted=true：chips 整行不渲染（点击去操作对象），historical 同传时角标 deleted 优先', async () => {
+    let tree!: ReactTestRenderer;
+    await TestRenderer.act(async () => {
+      tree = TestRenderer.create(
+        <FlashResultCard
+          payload={makePayload()}
+          tzid={TZID}
+          historical
+          deleted
+          onPress={() => undefined}
+          onPostpone={() => undefined}
+        />,
+      );
+    });
+    const texts = collectTexts(tree.root);
+    expect(texts).not.toContain('+15分钟');
+    expect(texts).not.toContain('+1小时');
+    expect(texts).toContain('已删除');
+    expect(texts).not.toContain('历史');
+  });
+
+  it('deleted=true：onPress 不会被触发（disabled 语义回归）', async () => {
+    const onPress = jest.fn();
+    let tree!: ReactTestRenderer;
+    await TestRenderer.act(async () => {
+      tree = TestRenderer.create(
+        <FlashResultCard payload={makePayload()} tzid={TZID} deleted onPress={onPress} />,
+      );
+    });
+    // 无 enabled 的 Pressable-onPress 节点（chips 未渲染，主体已 disabled）。
+    const enabledHandlers = tree.root.findAll(
+      (node: ReactTestInstance) =>
+        typeof node.props.onPress === 'function' && node.props.disabled !== true,
+    );
+    // RN Pressable 会把 onPress/disabled 下发到内部 View：断言收窄到「直接携带
+    // onPress 的最外层节点」——deleted 卡的唯一 onPress 节点必须 disabled。
+    // RN Pressable 会把 onPress 转发到内部节点且不带 disabled（渲染器可见两处
+    // onPress）——断言锁定「同时携带 onPress 与 disabled 的外层卡节点」：
+    // deleted 卡主体必须 disabled（FlashPreviewCard.test.tsx collectPressables 同式）。
+    const cardNode = tree.root.findAll(
+      (node: ReactTestInstance) =>
+        typeof node.props.onPress === 'function' && 'disabled' in node.props,
+    );
+    expect(cardNode.length).toBeGreaterThan(0);
+    for (const node of cardNode) {
+      expect(node.props.disabled).toBe(true);
+    }
+    expect(onPress).not.toHaveBeenCalled();
+  });
 });

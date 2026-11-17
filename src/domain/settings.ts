@@ -79,7 +79,44 @@ export interface AppSettings {
    * 校验（validateDisplayCalendarIds：仅非空字符串、去重；空数组 = 关闭）。
    */
   displayCalendarIds: string[];
+  /**
+   * AI 服务重试次数（切片 30，AGENTS.md §7.41）：远端 provider 传输层对网络错误/
+   * 超时/5xx/429/响应 JSON 解析失败自动重试的次数。0–5 整数，0=关闭（即现状），
+   * 默认 3；固定间隔 1000ms、不做指数退避。存 ai_retry_max 列（number isOptional，
+   * 既有行回填 null——非可选 number 会回填 0 与「关闭」语义混淆）；读层归一
+   * （parseAiRetryMax：null/越界/非整数 → 默认 3），写路径校验（validateAiRetryMax
+   * 否则抛错，tagDisplayMode 同款纪律）。
+   */
+  aiRetryMax: number;
+  /**
+   * 已删除条目在聊天结果卡中的显示方式（切片 30，AGENTS.md §7.41）：
+   * 'mark' = 原地置灰 + 「已删除」角标 + 点击禁用 + chips 隐藏（默认）；
+   * 'remove' = 从对话中直接移除该卡消息（card 消息为内存态，重启清空，
+   * 无需持久化迁移之外的持久化逻辑）。存 flash_deleted_card_display 列
+   * （string isOptional，既有行回填 null）；读层归一（非枚举值 → 'mark'），
+   * 写路径校验（isFlashDeletedCardDisplay 否则抛错）。
+   */
+  flashDeletedCardDisplay: FlashDeletedCardDisplay;
 }
+
+/** 已删除卡显示方式枚举（切片 30，AGENTS.md §7.41） */
+export type FlashDeletedCardDisplay = 'mark' | 'remove';
+
+/** FlashDeletedCardDisplay 全部合法值（用于防御性校验） */
+export const FLASH_DELETED_CARD_DISPLAYS: readonly FlashDeletedCardDisplay[] = ['mark', 'remove'];
+
+/** 类型守卫：库中读到非法枚举值时由 Repository 防御性回退 'mark' */
+export function isFlashDeletedCardDisplay(value: unknown): value is FlashDeletedCardDisplay {
+  return (
+    typeof value === 'string' &&
+    (FLASH_DELETED_CARD_DISPLAYS as readonly string[]).includes(value)
+  );
+}
+
+/** ai_retry_max 约束（切片 30）：0–5 整数；0 = 关闭重试 */
+export const AI_RETRY_MIN = 0;
+export const AI_RETRY_MAX_LIMIT = 5;
+export const DEFAULT_AI_RETRY_MAX = 3;
 
 /** chips_increments 约束（提案 §7，已确认）：最少 1 项、最多 4 项、每项 1–10080 分钟（7 天） */
 export const CHIPS_MIN_ITEMS = 1;
@@ -106,6 +143,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   carefulMode: false,
   showAiUsage: false,
   displayCalendarIds: [],
+  aiRetryMax: DEFAULT_AI_RETRY_MAX,
+  flashDeletedCardDisplay: 'mark',
 };
 
 /** app_settings 单行主键（§7.22） */
@@ -296,4 +335,39 @@ export function validateDisplayCalendarIds(values: readonly string[]): string[] 
 /** display_calendar_ids → 存储字符串（切片 27）：写路径恒 JSON 数组；读层见 parseDisplayCalendarIds。 */
 export function serializeDisplayCalendarIds(values: readonly string[]): string {
   return JSON.stringify(validateDisplayCalendarIds(values));
+}
+
+/**
+ * ai_retry_max 读层防御归一（切片 30，AGENTS.md §7.41）：null/undefined（既有行
+ * isOptional 回填）/非有限数/非整数/越界（AI_RETRY_MIN–AI_RETRY_MAX_LIMIT 之外）
+ * → 回退默认 DEFAULT_AI_RETRY_MAX；合法值原样返回。不抛错：读层永远返回可用数字。
+ */
+export function parseAiRetryMax(raw: number | null | undefined): number {
+  if (raw === null || raw === undefined) {
+    return DEFAULT_AI_RETRY_MAX;
+  }
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || !Number.isInteger(raw)) {
+    return DEFAULT_AI_RETRY_MAX;
+  }
+  if (raw < AI_RETRY_MIN || raw > AI_RETRY_MAX_LIMIT) {
+    return DEFAULT_AI_RETRY_MAX;
+  }
+  return raw;
+}
+
+/**
+ * ai_retry_max 写路径校验（切片 30）：必须是 AI_RETRY_MIN–AI_RETRY_MAX_LIMIT
+ * 的整数（0 = 关闭重试，合法写入），违反抛错（写路径严格纪律，
+ * validateDisplayCalendarIds 同风格）。
+ */
+export function validateAiRetryMax(value: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value)) {
+    throw new Error(`aiRetryMax 必须是整数，收到 ${String(value)}`);
+  }
+  if (value < AI_RETRY_MIN || value > AI_RETRY_MAX_LIMIT) {
+    throw new Error(
+      `aiRetryMax 必须在 ${AI_RETRY_MIN}–${AI_RETRY_MAX_LIMIT} 之间，收到 ${String(value)}`,
+    );
+  }
+  return value;
 }

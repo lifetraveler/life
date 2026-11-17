@@ -198,6 +198,11 @@ class FakeRepository implements ItemRepository {
     return this.items.get(id) ?? null;
   }
 
+  // 切片 30 阶段 4（§7.41 D2）：调度器不触达，stub 仅满足接口编译（§7.13 夹具）。
+  async filterExistingItemIds(ids: readonly string[]): Promise<Set<string>> {
+    return new Set(ids.filter((id) => this.items.has(id)));
+  }
+
   async listEnabledReminders(): Promise<Reminder[]> {
     return [...this.reminders.values()].filter((reminder) => reminder.enabled);
   }
@@ -402,6 +407,8 @@ class FakeRepository implements ItemRepository {
       carefulMode: false, // 切片 25 v12 新列：调度器不触达，stub 仅满足编译
       showAiUsage: false, // 切片 26 v13 新列：调度器不触达，stub 仅满足编译
       displayCalendarIds: [], // 切片 27 v14 新列：调度器不触达，stub 仅满足编译
+      aiRetryMax: 3, // 切片 30 v15 新列：调度器不触达，stub 仅满足编译
+      flashDeletedCardDisplay: 'mark', // 切片 30 v15 新列：调度器不触达，stub 仅满足编译
       defaultChannels: ['system-notification'],
     };
   }
