@@ -220,6 +220,15 @@ export default function FlashScreen() {
         </View>
       ) : null}
 
+      {/* 切片 30（§7.41）：重试即时提示——仅轮进行中存在（send finally 清空），
+          不进聊天历史；行本身随提示消失，无额外占位。 */}
+      {chat.retryNotice !== null ? (
+        <View style={styles.retryNoticeRow}>
+          <ActivityIndicator size="small" color={colors.textMuted} />
+          <Text style={styles.retryNoticeText}>{chat.retryNotice}</Text>
+        </View>
+      ) : null}
+
       <View style={[styles.inputRow, { paddingBottom: 12 + insets.bottom }]}>
         <TextInput
           style={styles.input}
@@ -357,14 +366,26 @@ function makeStyles(c: ThemeColors) {
     disabled: {
       opacity: 0.5,
     },
+    // 切片 30（§7.41）：重试即时提示行（输入栏上方；Token 化，深浅色可读）。
+    retryNoticeRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+    },
+    retryNoticeText: {
+      fontSize: 12,
+      color: c.textMuted,
+      flexShrink: 1,
+    },
     inputRow: {
       flexDirection: 'row',
       alignItems: 'flex-end',
       gap: 8,
       padding: 12,
       backgroundColor: c.card,
-      borderTopWidth: StyleSheet.hairlineWidth,
-      borderTopColor: c.border,
+      borderTopWidth: StyleSheet.hairlineWidth,      borderTopColor: c.border,
     },
     input: {
       flex: 1,

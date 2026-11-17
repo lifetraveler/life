@@ -23,10 +23,12 @@
  */
 
 import { AiParseError } from './errors';
+import type { AiParseErrorKind } from './errors';
 import { isRecurrenceRule, isReminderChannelArray } from './guard';
 import { nextOccurrenceInstant } from './localFallback';
 import { AI_SYSTEM_PROMPT, buildHistoryBriefing, buildNowFacts } from './prompt';
 import { positivePriceOrNull, readAiUsageSnapshot, readAiUsageSnapshotTiered } from './usage';
+import { parseAiRetryMax } from '../settings';
 import type { AiUsageSnapshot } from './usage';
 import type { AiPlatform } from './configStore';
 import { daysInMonth, getZonedParts, resolveCivilTimeToInstant } from '../recurrence/civilTime';
@@ -61,11 +63,46 @@ export interface OpenAiCompatibleConfig {
   priceUncachedOffPeak?: number;
   priceOutputPeak?: number;
   priceOutputOffPeak?: number;
+  /**
+   * 切片 30（§7.41）：自动重试次数上限（0–5 整数；0=关闭即现状，缺省/越界
+   * 回退 DEFAULT_AI_RETRY_MAX=3，经 parseAiRetryMax 归一）。可重试=网络错误/
+   * 超时/5xx/429/响应 JSON 解析失败；不可重试（401/403/400/schema-mismatch 等）
+   * 立即抛出走降级。固定间隔 RETRY_DELAY_MS，不做指数退避。
+   */
+  retryMax?: number;
+  /**
+   * 切片 30（§7.41）：每次实际发起重试前的回调（attempt 第 n 次重试 / maxRetries
+   * 上限 / kind 本轮失败类别）——UI 层借它即时展示「正在重试」提示（不进聊天历史）。
+   * 成功/耗尽/不可重试都不回调。
+   */
+  onRetry?: (attempt: number, maxRetries: number, kind: AiParseErrorKind) => void;
 }
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 
+/** 切片 30（§7.41）：重试固定间隔毫秒数（不做指数退避）。 */
+const RETRY_DELAY_MS = 1_000;
+
 type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
+/** 重试等待注入点（测试传即时 resolve）；默认 setTimeout 真等。 */
+type DelayLike = (ms: number) => Promise<void>;
+
+const defaultDelay: DelayLike = (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * 切片 30（§7.41）：可重试判定——网络错误/超时/响应 JSON 解析失败恒可重试；
+ * http-status 仅 5xx 与 429 可重试（401/403/400 等其余状态立即抛出走降级）；
+ * schema-mismatch / empty-input 为确定性失败，重试同 prompt 无意义，不重试。
+ */
+function isRetryableParseError(error: AiParseError): boolean {
+  if (error.kind === 'network' || error.kind === 'timeout' || error.kind === 'invalid-json') {
+    return true;
+  }
+  if (error.kind === 'http-status') {
+    return error.status !== null && (error.status >= 500 || error.status === 429);
+  }
+  return false;
+}
 
 /** 阶段 2「测试连接」结果：ok 时带往返耗时，失败带可展示原因（绝不含 apiKey）。 */
 export type TestConnectionResult =
@@ -332,13 +369,20 @@ export class OpenAICompatibleProvider implements AiParser {
   private readonly fetchImpl: FetchLike;
   /** 峰谷分层判峰用时钟（阶段 2b；默认 Date.now，测试注入冻结时刻）。 */
   private readonly nowImpl: () => number;
+  /** 切片 30（§7.41）：重试间隔等待注入点（测试传即时 resolve 免真等 1s）。 */
+  private readonly delayImpl: DelayLike;
   /**
    * 切片 26（§7.38 D1）：usage 副通道存值——初始 null；parse() 进入即清空，
    * 成功路径返回前才赋值，任何抛错点保持 null（不残留上一轮数值）。
    */
   private lastUsageSnapshot: AiUsageSnapshot | null = null;
 
-  constructor(config: OpenAiCompatibleConfig, fetchImpl: FetchLike = fetch, now: () => number = Date.now) {
+  constructor(
+    config: OpenAiCompatibleConfig,
+    fetchImpl: FetchLike = fetch,
+    now: () => number = Date.now,
+    delay: DelayLike = defaultDelay,
+  ) {
     if (
       config.baseUrl.trim().length === 0 ||
       config.apiKey.trim().length === 0 ||
@@ -349,6 +393,7 @@ export class OpenAICompatibleProvider implements AiParser {
     this.config = config;
     this.fetchImpl = fetchImpl;
     this.nowImpl = now;
+    this.delayImpl = delay;
   }
 
   /** 切片 26（§7.38）：usage 副通道只读暴露；chat.ts 经 FlashTurnResult 携带到 hook。 */
@@ -407,15 +452,12 @@ export class OpenAICompatibleProvider implements AiParser {
 
   async parse(input: string, context: AiParseContext): Promise<ParsedItemDraft> {
     // 切片 26（§7.38）：进入即清空上轮用量；本轮成功路径返回前才赋值，
-    // 任何抛错点（AiParseError 等）lastUsage 保持 null。
+    // 任何抛错点（AiParseError 等）lastUsage 保持 null。重试期间亦保持
+    // null——usage 只报成功轮（§7.41）。
     this.lastUsageSnapshot = null;
     if (input.trim().length === 0) {
       throw new AiParseError('empty-input', 'AI 解析输入为空');
     }
-    const timeoutMs = this.config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    const url = `${this.config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     // 切片 23 阶段 2：history 里最近一张草稿以民用时间摘要注入 system 消息
     //（buildHistoryBriefing 本地换算 epoch），“改成/改为”编辑以此为准；
@@ -430,6 +472,43 @@ export class OpenAICompatibleProvider implements AiParser {
       ...context.history.map((h: ChatMessage) => ({ role: h.role, content: h.text })),
       { role: 'user', content: input },
     ];
+
+    // 切片 30（§7.41）：自动重试循环——maxRetries 来自 retryMax（经
+    // parseAiRetryMax 归一：缺省/越界/非整数 → 默认 3；0=关闭即现状）。
+    // 可重试错误按固定间隔 RETRY_DELAY_MS 重发（不做指数退避），每次实际
+    // 重试前回调 onRetry；耗尽时抛出的错误消息追加「（已重试 N 次）」
+    // （仅实际重试过才带计数），供 chat.ts 降级注记透出；不可重试错误
+    // （401/403/400/schema-mismatch/empty-input）立即原样抛出。
+    const maxRetries = parseAiRetryMax(this.config.retryMax);
+    let retriesDone = 0;
+    for (;;) {
+      try {
+        return await this.requestParse(messages, context);
+      } catch (e) {
+        if (!(e instanceof AiParseError) || !isRetryableParseError(e)) {
+          throw e;
+        }
+        if (retriesDone >= maxRetries) {
+          throw retriesDone > 0
+            ? new AiParseError(e.kind, `${e.message}（已重试 ${retriesDone} 次）`, e.status)
+            : e;
+        }
+        retriesDone += 1;
+        this.config.onRetry?.(retriesDone, maxRetries, e.kind);
+        await this.delayImpl(RETRY_DELAY_MS);
+      }
+    }
+  }
+
+  /** 单次尝试（切片 30 重构抽出）：超时 AbortController / fetch / 解析管线。 */
+  private async requestParse(
+    messages: Array<{ role: string; content: string }>,
+    context: AiParseContext,
+  ): Promise<ParsedItemDraft> {
+    const timeoutMs = this.config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const url = `${this.config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       let response: Response;

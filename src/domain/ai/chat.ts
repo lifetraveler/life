@@ -35,6 +35,16 @@ export interface FlashTurnDeps {
   previousDraft: ParsedItemDraft | null;
   /** 测试注入；生产用全局 fetch。 */
   fetchImpl?: typeof fetch;
+  /**
+   * 切片 30（§7.41）：远端轮自动重试次数上限（app_settings.ai_retry_max，读层
+   * 已归一 0–5；0=关闭即现状）。缺省=不传给 provider（provider 侧默认 3）。
+   */
+  aiRetryMax?: number;
+  /**
+   * 切片 30（§7.41）：每次实际重试前的回调——UI 借它即时展示「正在重试」
+   * 提示（不进聊天历史）。仅远端轮有效；成功/耗尽/不可重试都不回调。
+   */
+  onRetry?: (attempt: number, maxRetries: number) => void;
 }
 
 export interface FlashTurnResult {
@@ -150,7 +160,20 @@ export async function runFlashTurn(
   const remoteConfig = deps.config?.active ?? null;
   if (remoteConfig !== null) {
     try {
-      const provider = new OpenAICompatibleProvider(remoteConfig, deps.fetchImpl);
+      // 切片 30（§7.41）：重试在 provider 传输层内部完成（fetch 包装），
+      // AiParser.parse 冻结签名与返回类型不变、对上层透明；aiRetryMax 缺省
+      // 不覆盖（provider 侧默认 3），onRetry 直通 UI 即时提示。
+      const provider = new OpenAICompatibleProvider(
+        {
+          ...remoteConfig,
+          retryMax: deps.aiRetryMax,
+          onRetry:
+            deps.onRetry !== undefined
+              ? (attempt, maxRetries) => deps.onRetry?.(attempt, maxRetries)
+              : undefined,
+        },
+        deps.fetchImpl,
+      );
       const draft = await provider.parse(trimmed, {
         now: deps.now,
         tzid: deps.tzid,
@@ -171,9 +194,12 @@ export async function runFlashTurn(
     } catch (e) {
       if (!(e instanceof AiParseError)) throw e;
       // 断网/超时/HTTP 异常/返回残缺 → 降级（ai.md / §7.24），原因注明在会话里。
+      // 切片 30（§7.41）：重试耗尽的错误消息尾带「（已重试 N 次）」，此处
+      // 透传到降级注记（仅实际重试过才带计数；重试中成功则根本不会走到这）。
+      const retryDisclosure = /（已重试 \d+ 次）$/u.exec(e.message)?.[0] ?? '';
       return fallbackTurn(
         trimmed,
-        `AI 服务暂不可用（${KIND_LABELS[e.kind]}），已用本地解析`,
+        `AI 服务暂不可用（${KIND_LABELS[e.kind]}），已用本地解析${retryDisclosure}`,
         deps,
       );
     }

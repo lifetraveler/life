@@ -55,6 +55,7 @@ import { diffDraftChanges } from '../domain/ai/editDiff';
 import type { DraftFieldChanges } from '../domain/ai/editDiff';
 import { formatAiUsageLine } from '../domain/ai/usage';
 import type { AiUsageSnapshot } from '../domain/ai/usage';
+import { DEFAULT_AI_RETRY_MAX } from '../domain/settings';
 import type { AiConfig } from '../domain/ai/configStore';
 import {
   computePostponedOnceAt,
@@ -189,6 +190,9 @@ export function useFlashChat() {
   const [messages, setMessages] = useState<FlashChatMessage[]>([]);
   const [draft, setDraft] = useState<ParsedItemDraft | null>(null);
   const [busy, setBusy] = useState(false);
+  // 切片 30（§7.41）：重试即时提示——「AI 服务异常，正在重试（n/N）…」仅在
+  // 轮进行中展示（send 的 finally 清空），不进聊天历史；null = 无进行中重试。
+  const [retryNotice, setRetryNotice] = useState<string | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
 
   const historyRef = useRef<ChatMessage[]>([]);
@@ -437,20 +441,24 @@ export function useFlashChat() {
    * carefulMode 供认真模式拦截判定、showAiUsage 供用量摘要行。开关即时生效：
    * 每轮重读（设置页改动下一轮即生效），重启保持由 app_settings 持久层保证。
    * 读取失败回退默认：carefulMode=false（不拦）、showAiUsage=false（不显示）。
+   * 切片 30（§7.41）：aiRetryMax 供远端轮自动重试次数（Repository 读层已归一
+   * 0–5，旧数据回退 3）；读取失败回退 DEFAULT_AI_RETRY_MAX（重试档位即时生效）。
    */
   const readTurnSettings = useCallback(async (): Promise<{
     carefulMode: boolean;
     showAiUsage: boolean;
+    aiRetryMax: number;
   }> => {
     try {
       const settings = await itemRepository.getSettings();
       return {
         carefulMode: settings.carefulMode === true,
         showAiUsage: settings.showAiUsage === true,
+        aiRetryMax: settings.aiRetryMax,
       };
     } catch (error) {
-      console.warn('[slice-25/26] 本轮设置读取失败，回退默认', error);
-      return { carefulMode: false, showAiUsage: false };
+      console.warn('[slice-25/26/30] 本轮设置读取失败，回退默认', error);
+      return { carefulMode: false, showAiUsage: false, aiRetryMax: DEFAULT_AI_RETRY_MAX };
     }
   }, []);
 
@@ -555,6 +563,12 @@ export function useFlashChat() {
           storeRef.current = new SecureAiConfigStore();
         }
         configRef.current = await storeRef.current.load();
+        // 切片 26 阶段 2（§7.38）：本轮生效设置一次读取（认真模式 + 用量展示 +
+        // 切片 30 重试次数三项；每轮重读即时生效，读取失败回退默认不拦/不显示/
+        // 重试 3 次）。原切片 25 的拦截分支内懒读取并入此处——getSettings 每轮
+        // 恰一次；切片 30 起提前到 runFlashTurn 之前读（aiRetryMax 须作为入参
+        // 传入远端轮）。
+        const turnSettings = await readTurnSettings();
         const turnStartDraft = draftRef.current;
         const result = await runFlashTurn(input, {
           config: configRef.current,
@@ -562,11 +576,13 @@ export function useFlashChat() {
           tzid,
           history: historyRef.current,
           previousDraft: draftRef.current,
+          // 切片 30（§7.41）：重试次数与即时提示回调——提示经 retryNotice
+          // 状态直出 UI（不进聊天历史），轮结束在 finally 清空。
+          aiRetryMax: turnSettings.aiRetryMax,
+          onRetry: (attempt, maxRetries) => {
+            setRetryNotice(`AI 服务异常，正在重试（${attempt}/${maxRetries}）…`);
+          },
         });
-        // 切片 26 阶段 2（§7.38）：本轮生效设置一次读取（认真模式 + 用量展示两
-        // 开关；每轮重读即时生效，读取失败回退默认不拦/不显示）。原切片 25 的
-        // 拦截分支内懒读取并入此处——getSettings 由每轮最多两次降为一次。
-        const turnSettings = await readTurnSettings();
         // 切片 25 阶段 2（§7.37 认真模式）：仅拦「编辑意图导致 title 或 content
         // 变化」的轮次。守卫谓词——「当前有展示中的卡片」= 本轮开始 draftRef
         // 非空且非澄清待补（澄清轮无展示卡；澄清分支在下方先行处理，不受影响）；
@@ -623,6 +639,9 @@ export function useFlashChat() {
         );
       } finally {
         setBusy(false);
+        // 切片 30（§7.41）：重试即时提示只在轮进行中存在，任何收尾路径清空
+        //（不留在聊天历史）。
+        setRetryNotice(null);
       }
     },
     [busy, push, applyEditToCard, applyEditToDraft, cancelPendingConfirm, readTurnSettings, pushUsageLine, pushConfirm],
@@ -830,6 +849,8 @@ export function useFlashChat() {
     messages,
     draft,
     busy,
+    // 切片 30（§7.41）：进行中重试提示（null=无；轮结束自动清空）。
+    retryNotice,
     categories,
     send,
     applyEdit,

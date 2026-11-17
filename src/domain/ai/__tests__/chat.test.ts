@@ -129,6 +129,9 @@ describe('runFlashTurn（阶段 3 编排）', () => {
       tzid: TZID,
       history,
       previousDraft,
+      // 切片 30（§7.41）：与重试无关的降级语义测试显式关闭重试（0=关闭即现状），
+      // 避免默认 3 引入的 3 次重试真等与注记计数尾巴。
+      aiRetryMax: 0,
       fetchImpl: (async () =>
         new Response('boom', { status: 500 })) as unknown as typeof fetch,
     });
@@ -150,6 +153,8 @@ describe('runFlashTurn（阶段 3 编排）', () => {
       tzid: TZID,
       history: [],
       previousDraft: null,
+      // 切片 30（§7.41）：与重试无关的降级语义测试显式关闭重试（0=关闭即现状）。
+      aiRetryMax: 0,
       fetchImpl: (async () => {
         throw new TypeError('fetch failed');
       }) as unknown as typeof fetch,
@@ -186,6 +191,9 @@ describe('runFlashTurn（阶段 3 编排）', () => {
       tzid: TZID,
       history,
       previousDraft,
+      // 切片 30（§7.41）：与重试无关的降级语义测试显式关闭重试（0=关闭即现状），
+      // 避免默认 3 引入的 3 次重试真等与注记计数尾巴。
+      aiRetryMax: 0,
       fetchImpl: (async () =>
         new Response('boom', { status: 500 })) as unknown as typeof fetch,
     });
@@ -225,6 +233,9 @@ describe('runFlashTurn（阶段 3 编排）', () => {
       tzid: TZID,
       history,
       previousDraft,
+      // 切片 30（§7.41）：与重试无关的降级语义测试显式关闭重试（0=关闭即现状），
+      // 避免默认 3 引入的 3 次重试真等与注记计数尾巴。
+      aiRetryMax: 0,
       fetchImpl: (async () =>
         new Response('boom', { status: 500 })) as unknown as typeof fetch,
     });
@@ -513,5 +524,69 @@ describe('runFlashTurn usage 传输边界（切片 26 / AGENTS.md §7.38，ai.md
     });
     expect(noKey.degraded).toBe(true);
     expect(noKey.usage).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 切片 30（AGENTS.md §7.41）：重试耗尽 → 降级注记透传「（已重试 N 次）」；
+// 重试中成功 → 正常返回；aiRetryMax=0 → 关闭即现状。
+// ---------------------------------------------------------------------------
+
+describe('runFlashTurn 重试披露（切片 30 / AGENTS.md §7.41）', () => {
+  const NOW = new Date('2026-11-10T10:00:00+08:00').getTime();
+  const TZID = 'Asia/Shanghai';
+
+  const config = {
+    active: {
+      provider: 'openai-compatible' as const,
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: 'sk-test-secret-key-do-not-leak',
+      model: 'test-model',
+      timeoutMs: undefined,
+    },
+  };
+
+  function alwaysFailFetch(): typeof fetch {
+    return (async () => {
+      throw new Error('ECONNREFUSED');
+    }) as unknown as typeof fetch;
+  }
+
+  it('重试耗尽（aiRetryMax=2）：降级注记追加（已重试 2 次），onRetry 回调 2 次', async () => {
+    const retryCalls: Array<[number, number]> = [];
+    const result = await runFlashTurn('明天买菜', {
+      config,
+      now: NOW,
+      tzid: TZID,
+      history: [],
+      previousDraft: null,
+      aiRetryMax: 2,
+      onRetry: (attempt, maxRetries) => retryCalls.push([attempt, maxRetries]),
+      fetchImpl: alwaysFailFetch(),
+    });
+    expect(result.degraded).toBe(true);
+    expect(result.assistantNote).toBe(
+      'AI 服务暂不可用（网络错误），已用本地解析（已重试 2 次）',
+    );
+    expect(retryCalls).toEqual([
+      [1, 2],
+      [2, 2],
+    ]);
+    // 降级轮 usage 恒 null（usage 只报成功轮）。
+    expect(result.usage).toBeNull();
+  });
+
+  it('aiRetryMax=0：关闭即现状——单次失败立即降级，注记无重试计数', async () => {
+    const result = await runFlashTurn('明天买菜', {
+      config,
+      now: NOW,
+      tzid: TZID,
+      history: [],
+      previousDraft: null,
+      aiRetryMax: 0,
+      fetchImpl: alwaysFailFetch(),
+    });
+    expect(result.degraded).toBe(true);
+    expect(result.assistantNote).toBe('AI 服务暂不可用（网络错误），已用本地解析');
   });
 });
