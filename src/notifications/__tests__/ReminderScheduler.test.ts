@@ -8,6 +8,10 @@ import { buildOccurrenceKey } from '../../domain/recurrence';
 import type { CreateItemInput, Item } from '../../domain/item';
 import type { Category } from '../../domain/category';
 import type { AppSettings } from '../../domain/settings';
+import type {
+  ConfigSnapshot,
+  ConfigSnapshotApplyResult,
+} from '../../domain/configSnapshot';
 import type { CreateReminderInput, Reminder, UpdateReminderInput } from '../../domain/reminder';
 import type { ItemWithTags, Tag } from '../../domain/tag';
 import type { ItemWithRelations } from '../../domain/relations/itemWithRelations';
@@ -201,6 +205,15 @@ class FakeRepository implements ItemRepository {
   // 切片 30 阶段 4（§7.41 D2）：调度器不触达，stub 仅满足接口编译（§7.13 夹具）。
   async filterExistingItemIds(ids: readonly string[]): Promise<Set<string>> {
     return new Set(ids.filter((id) => this.items.has(id)));
+  }
+
+  // 切片 28 阶段 1（§7.42 D6）：调度器不触达，stub 仅满足接口编译（§7.13 夹具）。
+  async createConfigSnapshot(): Promise<ConfigSnapshot> {
+    throw new Error('FakeRepository.createConfigSnapshot: 调度器测试不触达配置备份');
+  }
+
+  async applyConfigSnapshot(_snapshot: ConfigSnapshot): Promise<ConfigSnapshotApplyResult> {
+    throw new Error('FakeRepository.applyConfigSnapshot: 调度器测试不触达配置备份');
   }
 
   async listEnabledReminders(): Promise<Reminder[]> {

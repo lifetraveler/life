@@ -8,6 +8,10 @@ import type {
   UpdateItemInput,
 } from '../domain/item';
 import type { IcsParseFailure } from '../domain/ics/parseIcs';
+import type {
+  ConfigSnapshot,
+  ConfigSnapshotApplyResult,
+} from '../domain/configSnapshot';
 import type { AppSettings } from '../domain/settings';
 import type {
   CreateReminderInput,
@@ -368,4 +372,24 @@ export interface ItemRepository {
    * 空输入直接返回空集合（不发查询）。
    */
   filterExistingItemIds(ids: readonly string[]): Promise<Set<string>>;
+
+  // —— 切片 28 阶段 1：配置备份 WebDAV（repository.md v0.34 注记节；契约外显式扩展成对，
+  //    先例 filterExistingItemIds；AGENTS.md §7.42 D6——设置页「备份与恢复」的
+  //    组包（只读）/恢复（增量覆盖 writer 事务）落点）——
+  /**
+   * 只读组包当前配置快照（§7.42 D1）：appSettings 全字段（getSettings 同源）+
+   * categories 全部（id/name/color/emoji/priority）+ tags 全部（name/color/emoji），
+   * 外层 {version:1, kind:'config', exportedAt}（本地时区 ISO 8601 含偏移）。
+   */
+  createConfigSnapshot(): Promise<ConfigSnapshot>;
+  /**
+   * 增量覆盖恢复（§7.42 D2 冻结语义）：appSettings 全列覆盖（快照缺列保留本地、
+   * 坏值走读层防御归一回退默认）、categories 按 id 命中覆盖 color/emoji/priority /
+   * 未命中保留不建、tags 按 normalizeTagName 归一键命中覆盖 color/emoji / 未命中
+   * 创建 / 本地独有保留；单 writer 事务原子完成，中途失败整体回滚。
+   * 返回 applied（appSettings 块计 1 + 实际写入的 categories/tags 条目数）/
+   * skipped（categories/tags 形状不符被跳过条目数，UI 披露「已应用 N 项，跳过
+   * M 项（形状不符）」）。整包守卫不过直接抛错，不进事务。
+   */
+  applyConfigSnapshot(snapshot: ConfigSnapshot): Promise<ConfigSnapshotApplyResult>;
 }

@@ -1,4 +1,4 @@
-import { Database, Q, Query } from '@nozbe/watermelondb';
+import { Database, Q, Query, type Model } from '@nozbe/watermelondb';
 
 import type {
   CreateItemInput,
@@ -54,6 +54,15 @@ import {
   validateDefaultChannels,
 } from '../domain/settings';
 import type { AppSettings } from '../domain/settings';
+import {
+  formatExportedAt,
+  isConfigSnapshotCategoryEntry,
+  isConfigSnapshotTagEntry,
+  isConfigSnapshotWire,
+  normalizeSnapshotAppSettings,
+  type ConfigSnapshot,
+  type ConfigSnapshotApplyResult,
+} from '../domain/configSnapshot';
 import AppSettingsModel from '../db/models/AppSettingsModel';
 import CategoryModel from '../db/models/CategoryModel';
 import ChannelPresetModel from '../db/models/ChannelPresetModel';
@@ -932,6 +941,180 @@ export class WatermelonItemRepository implements ItemRepository {
       .query(Q.where('id', Q.oneOf(unique)))
       .fetch();
     return new Set(models.map((model) => model.id));
+  }
+
+  // —— 切片 28 阶段 1：配置备份快照（repository.md v0.34 注记节；契约外显式扩展成对，
+  //    先例 filterExistingItemIds；AGENTS.md §7.42——设置页「备份与恢复」的组包/
+  //    恢复落点。⚠️ Model.update()/collection.create() 内部逐个走 db.batch（单 op
+  //    即单次 adapter.batch，node_modules/@nozbe/watermelondb/Model/index.js:79-84），
+  //    逐 op await 不构成原子事务；本方法按 Database.batch 契约以 prepareUpdate/
+  //    prepareCreate 同步收集全部变更、最后一次 this.db.batch(...) 提交（单次
+  //    adapter.batch = 适配器级原子，中途失败整体不落库））——
+
+  /** 只读组包配置快照：appSettings 全字段 + categories 全部 + tags 全部（§7.42 D1）。 */
+  async createConfigSnapshot(): Promise<ConfigSnapshot> {
+    const [appSettings, categories, tags] = await Promise.all([
+      this.getSettings(),
+      this.getCategories(),
+      this.listTags(),
+    ]);
+    return {
+      version: 1,
+      kind: 'config',
+      exportedAt: formatExportedAt(new Date()),
+      appSettings,
+      categories: categories.map((category) => ({
+        id: category.id,
+        name: category.name,
+        color: category.color,
+        emoji: category.emoji,
+        priority: category.priority,
+      })),
+      tags: tags.map((tag) => ({
+        name: tag.name,
+        color: tag.color,
+        emoji: tag.emoji,
+      })),
+    };
+  }
+
+  /**
+   * 增量覆盖恢复（§7.42 D2 冻结语义，repository.md v0.34）：
+   * - appSettings 全列覆盖：逐字段经 normalizeSnapshotAppSettings（快照缺列保留
+   *   本地、坏值走读层防御归一回退默认、合法值写穿），行不存在时建行；
+   * - categories 按 id 命中覆盖 color/emoji/priority，未命中保留不建（不计入
+   *   applied/skipped）；形状不符条目计入 skipped；
+   * - tags 按 normalizeTagName 归一键（trim + 大小写不敏感，唯一入口，与
+   *   addTagToItem 同纪律；本地去重映射 first-wins 对齐其 find() 语义）命中覆盖
+   *   color/emoji、未命中创建、本地独有保留；同快照重复名后者覆盖前者（不重复建）；
+   * - skipped = categories/tags 形状不符条目数；applied = appSettings 块计 1 +
+   *   实际写入的 categories/tags 条目数。
+   * 整包守卫不过（version/kind/三大块）直接抛错，不进事务。
+   */
+  async applyConfigSnapshot(snapshot: ConfigSnapshot): Promise<ConfigSnapshotApplyResult> {
+    if (!isConfigSnapshotWire(snapshot)) {
+      throw new Error(
+        'applyConfigSnapshot: 快照不符合 ConfigSnapshot 结构（version/kind/appSettings/categories/tags）',
+      );
+    }
+    await this.ensureSeeded();
+    let applied = 0;
+    let skipped = 0;
+    await this.db.write(async () => {
+      // 1) 事务内全量读取本地 categories/tags/app_settings（读取失败 = 整体不落库）。
+      const categoryModels = await this.db.get<CategoryModel>(CATEGORIES_TABLE).query().fetch();
+      const categoryById = new Map(categoryModels.map((model) => [model.id, model]));
+      const tagModels = await this.db.get<TagModel>(TAGS_TABLE).query().fetch();
+      // 本地 tags 键去重 first-wins（addTagToItem allTags.find() 语义）。
+      const tagByDedupKey = new Map<string, TagModel>();
+      for (const model of tagModels) {
+        const key = model.name.toLowerCase();
+        if (!tagByDedupKey.has(key)) {
+          tagByDedupKey.set(key, model);
+        }
+      }
+      const settingsModels = await this.db
+        .get<AppSettingsModel>(APP_SETTINGS_TABLE)
+        .query()
+        .fetch();
+      const settingsModel = settingsModels[0] ?? null;
+
+      // 2) 同步收集全部变更（prepareUpdate/prepareCreate 必须同步送入 batch，
+      //    Database.batch 契约），3) 单次 db.batch 提交（适配器级原子）。
+      const operations: Model[] = [];
+
+      // categories：id 命中覆盖 color/emoji/priority；未命中保留不建（不计数）。
+      for (const entry of snapshot.categories) {
+        if (!isConfigSnapshotCategoryEntry(entry)) {
+          skipped += 1;
+          continue;
+        }
+        const model = categoryById.get(entry.id);
+        if (!model) continue;
+        operations.push(
+          model.prepareUpdate((draft) => {
+            draft.color = entry.color;
+            draft.emoji = entry.emoji;
+            draft.priority = entry.priority;
+          }),
+        );
+        applied += 1;
+      }
+
+      // tags：两遍法——先按归一键归并（同快照重复名后者覆盖，applied 累计），
+      // 再统一 prepare；避免对 prepareCreate 后的同批模型调用 prepareUpdate
+      // （prepareUpdate 拒绝 pending 记录，中途 throw 会让已 prepare 记录
+      // 未同步入 batch 触发 nextTick 不变式）。
+      const pendingTagOps = new Map<string, { name: string; color: string | null; emoji: string | null }>();
+      for (const entry of snapshot.tags) {
+        if (!isConfigSnapshotTagEntry(entry)) {
+          skipped += 1;
+          continue;
+        }
+        const { name, dedupKey } = normalizeTagName(entry.name);
+        const pending = pendingTagOps.get(dedupKey);
+        if (pending) {
+          pending.name = name;
+          pending.color = entry.color;
+          pending.emoji = entry.emoji;
+        } else {
+          pendingTagOps.set(dedupKey, { name, color: entry.color, emoji: entry.emoji });
+        }
+        applied += 1;
+      }
+      for (const [dedupKey, pending] of pendingTagOps) {
+        const existing = tagByDedupKey.get(dedupKey);
+        if (existing) {
+          operations.push(
+            existing.prepareUpdate((draft) => {
+              draft.color = pending.color;
+              draft.emoji = pending.emoji;
+            }),
+          );
+        } else {
+          operations.push(
+            this.db.get<TagModel>(TAGS_TABLE).prepareCreate((record) => {
+              record.name = pending.name;
+              record.color = pending.color;
+              record.emoji = pending.emoji;
+            }),
+          );
+        }
+      }
+
+      // app_settings 全列覆盖：normalize（缺列保留本地）→ 命中行 prepareUpdate /
+      // 缺行 prepareCreate（_raw.id 固定 'global'，getSettings 补行先例）。
+      const localSettings = settingsModel ? toDomainSettings(settingsModel) : { ...DEFAULT_APP_SETTINGS };
+      const normalized = normalizeSnapshotAppSettings(snapshot.appSettings, localSettings);
+      const writeSettingsPatch = (draft: AppSettingsModel) => {
+        draft.tagDisplayMode = normalized.tagDisplayMode;
+        draft.widgetShowOverdue = normalized.widgetShowOverdue;
+        draft.widgetShowTodos = normalized.widgetShowTodos;
+        draft.widgetShowCategoryEmoji = normalized.widgetShowCategoryEmoji;
+        draft.widgetShowTags = normalized.widgetShowTags;
+        draft.chipsIncrementsJson = serializeChipsIncrements(normalized.chipsIncrements);
+        draft.defaultChannelsJson = serializeDefaultChannels(normalized.defaultChannels);
+        draft.displayCalendarIdsJson = serializeDisplayCalendarIds(normalized.displayCalendarIds);
+        draft.carefulMode = normalized.carefulMode;
+        draft.showAiUsage = normalized.showAiUsage;
+        draft.aiRetryMax = validateAiRetryMax(normalized.aiRetryMax);
+        draft.flashDeletedCardDisplay = normalized.flashDeletedCardDisplay;
+      };
+      if (settingsModel) {
+        operations.push(settingsModel.prepareUpdate(writeSettingsPatch));
+      } else {
+        operations.push(
+          this.db.get<AppSettingsModel>(APP_SETTINGS_TABLE).prepareCreate((record) => {
+            record._raw.id = APP_SETTINGS_ROW_ID;
+            writeSettingsPatch(record);
+          }),
+        );
+      }
+      applied += 1;
+
+      await this.db.batch(...operations);
+    });
+    return { applied, skipped };
   }
 
   /**

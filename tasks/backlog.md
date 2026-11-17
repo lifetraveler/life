@@ -31,8 +31,9 @@
   - ~~阶段 1 schema v15（`ai_retry_max` number isOptional + `flash_deleted_card_display` string isOptional，addColumns 两列）+ settings/repository 读写 + profile 设置 UI（重试档位与删除显示 radio 组）；阶段 2 AI 重试（remote provider 传输层 fetch 包装，可重试=网络/超时/5xx/429/JSON 解析失败、不可重试=401/403/400，固定间隔 1000ms，重试提示即时展示不留历史、耗尽披露「（已重试 N 次）」）；阶段 3 草稿放弃（纯本地清 draft+confirm，不落库不播种）；阶段 4 已删除卡联动（useFocusEffect 批量存在性查询 + mark 置灰禁用/remove 移除）；阶段 5 真机验收矩阵 10 项 + 切片 29 回归 + closeout。~~
   - 验收终态：tsc 0 错 / jest 90 套件·1241 用例（只增不减）/ expo-doctor 2 项预存无新增 / 真机矩阵 10 项全通过（含 401 不重试与网络错误重试 3 次同屏对比、aiRetryMax=0 立即降级、切片 29 播种回归）。遗留披露见 closeout §六（固定间隔无退避、重试轮无 usage、mark/remove 内存态语义）。
 
-- **切片 28：配置备份 WebDAV**（2026-11-18 立项，卡 `tasks/slice-28.md`，基点 main @ 6711cec，分支 `task/slice-28`；提案 `docs/proposals/slice-28-config-backup-webdav.md`——用户 2026-11-18 五问定案：备份拆两类先配置、恢复=增量覆盖、仅手动触发、保留最近 10 份、全量明文上传）
-  - 阶段 1 域+数据层（configSnapshot/webdav 纯域 + WebdavClient PROPFIND/GET/PUT/MKCOL/DELETE 自写客户端 + SecureWebdavConfigStore 独立键 + Repository createConfigSnapshot/applyConfigSnapshot 契约外扩展成对 + repository.md 注记节 + AGENTS v0.34 §7.42）+ 提案/卡随阶段 1 提交；阶段 2 /settings/backup 设置页（连接表单/测试连接/立即备份/快照列表/恢复确认）+ profile navRow；阶段 3 真机验收矩阵 10 项（宿主机临时 node WebDAV 服务器）+ closeout。schema 停留 v15 零迁移；数据备份（items/reminders/channel_presets）与双向同步拆为后续候选。
+- **~~切片 28：配置备份 WebDAV~~**（✅ 已完成 2026-11-18，关闭于切片 28，见 `tasks/slice-28-closeout.md`；提交链 2125ba3（阶段 1 域+数据层）→ 90774f1（阶段 2 UI）→ 1d9006b（Phase 1–2 反馈）→ 阶段 3 收尾提交；分支 `task/slice-28` 基点 main @ 4c8e6ea）
+  - ~~阶段 1 域+数据层（configSnapshot/webdav 纯域 + WebdavClient PROPFIND/GET/PUT/MKCOL/DELETE 自写客户端 + SecureWebdavConfigStore 独立键 + Repository createConfigSnapshot/applyConfigSnapshot 契约外扩展成对 + repository.md 注记节 + AGENTS v0.34 §7.42）+ 提案/卡随阶段 1 提交；阶段 2 /settings/backup 设置页（连接表单/测试连接/立即备份/快照列表/恢复确认）+ profile navRow；阶段 3 真机验收矩阵 10 项（宿主机临时 node WebDAV 服务器）+ closeout。~~
+  - 验收终态：schema 停留 v15 零迁移 / tsc 0 错 / jest 95 套件·1314 用例（基线 90/1241 只增不减）/ expo-doctor 2 项预存无新增 / 真机矩阵 10 项全过 + 损坏快照整包拒绝负例（恢复计数口径与服务器侧裁剪 DELETE 逐条核对）。遗留披露见 closeout §六（测试连接 207 假阳性面、MKCOL 单级、同秒覆盖、设备测试产物 chips=[30,90,120,240] 等）。
 
 ## 2. 待编号路线（用户 2026-11-16 委托按进度/复杂度排序；每切片开工仍按 §7.1 逐切片确认）
 

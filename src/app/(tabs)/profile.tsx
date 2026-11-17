@@ -719,6 +719,11 @@ export default function SettingsPage() {
           <Text style={styles.navLabel}>后台运行保障</Text>
           <Text style={styles.navChevron}>›</Text>
         </Pressable>
+        {/* 切片 28（AGENTS.md §7.42 D7）：配置备份 WebDAV 入口。 */}
+        <Pressable style={styles.navRow} onPress={() => router.push('/settings/backup')}>
+          <Text style={styles.navLabel}>备份与恢复</Text>
+          <Text style={styles.navChevron}>›</Text>
+        </Pressable>
       </View>
 
       <View style={styles.section}>

@@ -324,3 +324,46 @@ SystemImportResult：
   不参与提醒调度、搜索、筛选谓词、小组件快照、闪电录入、ICS 与数据导出。
 - live 视图条目在视图数据管线「filterItems 之后、分组/布局之前」并入；视图查询
   接口签名不变。
+
+## 配置备份快照接口（v0.34，切片 28 阶段 1 落地）
+
+> 依据：AGENTS.md §7.42（配置备份 WebDAV）；先例为 filterExistingItemIds
+> （切片 18）与 SystemCalendarReader.getCalendars color 扩展（切片 27）的
+> 契约外显式扩展成对模式。既有全部冻结签名零 diff，本节为追加性注记。
+
+### ItemRepository 成对扩展（createConfigSnapshot / applyConfigSnapshot）
+- `createConfigSnapshot(): Promise<ConfigSnapshot>`：只读组包（getSettings +
+  getCategories + listTags），返回
+  `{version: 1, kind: 'config', exportedAt, appSettings, categories, tags}`；
+  exportedAt 为本地时区 ISO 8601 含 ±HH:MM 偏移；**不包含任何凭据面**
+  （AI Provider 配置存 SecureStore、channel_presets、WebDAV 连接配置均不入快照
+  ——恢复对 app_settings 全列覆盖，连接配置若入快照会被旧快照回滚，自引用防护）。
+- `applyConfigSnapshot(snapshot: ConfigSnapshot): Promise<ConfigSnapshotApplyResult>`：
+  增量覆盖恢复，返回 `{applied, skipped}` 计数。非 ConfigSnapshot 结构
+  （isConfigSnapshotWire 不过）抛错，库零变化。语义冻结：
+  - **appSettings**：全列覆盖，快照缺列保留本地同列值；逐字段经既有归一/校验
+    （tagDisplayMode/flashDeletedCardDisplay 枚举、chipsIncrements/
+    defaultChannels/displayCalendarIds 走 parse* 防御归一坏值回退默认、
+    aiRetryMax 越界回退 3），JSON 列宽容串/值两种形态。
+  - **categories**：按 id 命中覆盖 color/emoji/priority；本地不存在该 id
+    保留不建、不计数；条目形状不符（isConfigSnapshotCategoryEntry 不过）跳过
+    计入 skipped。
+  - **tags**：按 normalizeTagName 归一键（trim + 大小写不敏感，既有唯一入口）
+    命中覆盖 color/emoji；未命中创建（name/color/emoji）；本地独有保留；
+    同快照重复名后者覆盖前者；条目形状不符跳过计入 skipped。
+  - **计数口径**：applied = appSettings 块计 1 + 实际写入的 categories/tags
+    条目数（同快照重复 tag 名按条目累计）；skipped = 形状不符条目数；
+    category id 未命中本地不计入任一计数。UI 披露「已应用 N 项，跳过 M 项
+    （形状不符）」。
+  - **事务原子**：全部读取先行，随后同步 prepareUpdate/prepareCreate 收集，
+    最后单次 `db.batch(...)` 适配器级原子提交（逐 model.update/create 不构成
+    事务）；任一失败整体不落库。tags 采用两遍法（先按归一键归并再统一
+    prepare），避免对同批 prepareCreate 记录调用 prepareUpdate。
+- 配套域层：src/domain/configSnapshot.ts（isConfigSnapshotWire 整包守卫 +
+  isConfigSnapshotCategoryEntry / isConfigSnapshotTagEntry 条目级宽容谓词 +
+  parseConfigSnapshot + 文件名正则 `^life-config-\d{8}-\d{6}\.json$`）。
+
+> 注记节版本标签披露：任务卡（tasks/slice-28.md D6）与提案
+> （docs/proposals/slice-28-config-backup-webdav.md §6）原文标注「v0.22」，
+> 与本文件既有节按 AGENTS.md 版本标注的惯例不一致；本节按惯例标 v0.34
+> （切片 28），语义以本节为准。

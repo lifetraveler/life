@@ -126,6 +126,8 @@ export default function RootLayout() {
         <Stack.Screen name="settings/ai" options={{ title: 'AI 配置' }} />
         {/* 切片 26 阶段 2（AGENTS.md §7.38）：AI 提示词只读查看页。 */}
         <Stack.Screen name="settings/ai-prompt" options={{ title: 'AI 提示词' }} />
+        {/* 切片 28（AGENTS.md §7.42 D7）：配置备份 WebDAV 页。 */}
+        <Stack.Screen name="settings/backup" options={{ title: '备份与恢复' }} />
         <Stack.Screen name="import-result" options={{ title: '导入结果' }} />
         <Stack.Screen name="system-calendar-import" options={{ title: '导入系统日历' }} />
         <Stack.Screen name="export-success" options={{ title: '导出成功' }} />

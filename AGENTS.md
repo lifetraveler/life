@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.33
+版本：v0.34
 
 ## 1. 项目概览
 
@@ -426,8 +426,35 @@ schema 版本 5→6，新增/修改如下：
   冻结签名与返回类型不变（重试对上层透明）；ChatMessage kind 不新增；
   ai.md 契约正文零改动；无新依赖；不做指数退避/手动取消重试/聊天持久化。
 
+### 7.42 配置备份 WebDAV（v0.34，切片 28）
+- **范围冻结**：仅配置备份——app_settings 全字段 + categories（预置 5 条
+  视觉/排序）+ tags（视觉），快照格式 `{version:1, kind:'config', exportedAt,
+  appSettings, categories, tags}`（isConfigSnapshotWire 整包拒绝、条目级宽容
+  跳过+计数披露）。数据备份（items/reminders/channel_presets）与双向同步留
+  后续切片。提案 docs/proposals/slice-28-config-backup-webdav.md（用户
+  2026-11-18 五问定案：先配置备份/增量覆盖恢复/仅手动/保留 10 份/全量明文）。
+- **连接配置存储（自引用防护）**：WebDAV 连接（baseUrl/basePath/username/
+  password）存 expo-secure-store 独立键 `webdav_backup_config_v1`
+  （SecureAiConfigStore 同构），**不入 app_settings、不入快照**——恢复会全列
+  覆盖 app_settings，连接配置若在内会被旧快照回滚。
+- **恢复语义（冻结）**：增量覆盖——appSettings 全列覆盖（快照缺列保留本地）；
+  categories 按 id 命中覆盖、未命中保留不建；tags 按 name（Repository 既有
+  trim + 大小写不敏感归一，唯一入口）命中覆盖、未命中创建、本地独有保留；
+  恢复单 writer 事务原子完成；不做恢复前本地兜底快照（误恢复可再恢复或手动改回）。
+- **Repository 扩展**：`createConfigSnapshot` / `applyConfigSnapshot` 契约外
+  显式扩展成对（filterExistingItemIds 先例）；repository.md 追加非破坏性注记
+  节，冻结签名零 diff。
+- **WebDAV 交互**：自写 fetch 客户端（PROPFIND/GET/PUT/MKCOL/DELETE，Basic
+  Auth，15s AbortController 超时，零新依赖）；快照文件 `<basePath>/
+  life-config-YYYYMMDD-HHmmss.json`，上传后保留最近 10 份滚动 DELETE（仅匹配
+  文件名正则，删除失败仅披露不重试）；仅手动触发；全量明文上传（用户定案，
+  与切片 12 导出先例一致；快照不含 API Key/channel_presets 等凭据面）。
+- **边界**：schema 停留 v15 零迁移；不做自动/定时/回前台备份、包加密、多
+  服务器配置；AI Provider 配置（SecureStore `ai_provider_config_v1`）不进快照；
+  src/domain/export.ts（切片 12 数据导出链路）不动。
+
 ## 8. 当前切片
 
-- **已完成**：切片 1–27、29、30 全部收尾合并（main @ `a75407b`；切片 24 夜间模式 merge `72daa78`，切片 25 认真模式 merge `5ed723f`，切片 26 AI 透明度 merge `73f9807`，切片 27 live 直读 merge `b187c5c`，切片 29 merge `e1c30e8`，切片 30 merge `a75407b`；schema v15，版本 0.23.0/versionCode 10）。各切片历史见对应 `tasks/slice-NN.md` / `tasks/slice-NN-closeout.md`。
-- **当前切片**：暂无立项切片（切片 30 已收尾，见 `tasks/slice-30-closeout.md`）。下一片按 backlog 候选排序执行（28 备份/同步 WebDAV 解除顺延为建议值，设计讨论先行；候选 29b 编号顺延，立项时逐切片确认）。未完成项以 `tasks/backlog.md` 为准。
-- **未完成项以 `tasks/backlog.md` 为准**（2026-11-16 起的惯例）：候选排序（~~切片 25 认真模式~~已完成 → ~~26 AI 透明度~~已完成，关闭于切片 26 → ~~27 系统日历 live 直读~~已完成，关闭于切片 27 → ~~29 闪电录入对话能力强化包~~已完成，关闭于切片 29 → ~~30 草稿放弃/删除联动/AI 重试~~已完成，关闭于切片 30 → 28 备份/同步 WebDAV【设计讨论先行】+ 插队候选「变更 B 网络渠道后台送达」+ 切片 25 收尾新增 4 条待定候选 + 候选 29b 编号顺延）、遗留 L1–L13、手验项 U1–U4、契约化已知限制均记录在 backlog，本节不再罗列候选清单。每切片 closeout 同步更新 backlog.md（划掉完成项并注明关闭切片号）并保持本节精简。
+- **已完成**：切片 1–27、29、30 收尾合并（main @ `a75407b`；切片 24 夜间模式 merge `72daa78`，切片 25 认真模式 merge `5ed723f`，切片 26 AI 透明度 merge `73f9807`，切片 27 live 直读 merge `b187c5c`，切片 29 merge `e1c30e8`，切片 30 merge `a75407b`；schema v15，版本 0.23.0/versionCode 10）。**切片 28 配置备份 WebDAV 已完成**（2026-11-18，分支 `task/slice-28` 基点 `4c8e6ea`；提交链 2125ba3 → 90774f1 → 1d9006b → 阶段 3 收尾提交；merge hash 合并后回填本节——切片 30 先例 6711cec；验收终态：schema 停留 v15 零迁移 / tsc 0 错 / jest 95 套件·1314 用例（基线 90/1241 只增不减）/ expo-doctor 2 项预存无新增 / 真机矩阵 10 项 + 损坏快照负例全过，见 `tasks/slice-28-closeout.md`）。各切片历史见对应 `tasks/slice-NN.md` / `tasks/slice-NN-closeout.md`。
+- **当前切片**：无（切片 28 已完成，下一片按 backlog 候选排序执行——数据备份/双向同步为切片 28 拆分余部候选（设计讨论先行）、插队候选「变更 B 网络渠道后台送达」、候选 29b 编号顺延，立项时逐切片确认）。未完成项以 `tasks/backlog.md` 为准。
+- **未完成项以 `tasks/backlog.md` 为准**（2026-11-16 起的惯例）：候选排序（~~切片 25 认真模式~~已完成 → ~~26 AI 透明度~~已完成，关闭于切片 26 → ~~27 系统日历 live 直读~~已完成，关闭于切片 27 → ~~29 闪电录入对话能力强化包~~已完成，关闭于切片 29 → ~~30 草稿放弃/删除联动/AI 重试~~已完成，关闭于切片 30 → ~~28 备份/同步 WebDAV~~已立项为切片 28（配置备份先行）+ 数据备份（items/reminders/channel_presets）为新增待定候选 + 插队候选「变更 B 网络渠道后台送达」+ 切片 25 收尾新增 4 条待定候选 + 候选 29b 编号顺延）、遗留 L1–L13、手验项 U1–U4、契约化已知限制均记录在 backlog，本节不再罗列候选清单。每切片 closeout 同步更新 backlog.md（划掉完成项并注明关闭切片号）并保持本节精简。
