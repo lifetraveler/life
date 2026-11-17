@@ -186,6 +186,11 @@ describe('AI_SYSTEM_PROMPT：短纠正句与推迟语义（切片 29 §7.40）',
     expect(P).toContain('两种表达可在同一句出现，各按各的基准计算，互不覆盖');
   });
 
+  it('推迟语义加固：禁止把「推迟 X 分钟」原文写入 title/content（真机缺陷：模型曾写入 content）', () => {
+    expect(P).toContain('推迟/延后类修正只调整时间字段');
+    expect(P).toContain('禁止把「推迟 X 分钟」这类原文写入 title 或 content');
+  });
+
   it('反向边界修订：新事由名词短句不是短纠正句，仍全新意图防误伤（切片 29）', () => {
     expect(P).toContain('含新事由名词的短句（如「明天开会」「周六聚餐」）不是短纠正句');
     expect(P).toContain('仍是全新意图照常新建，防误伤');

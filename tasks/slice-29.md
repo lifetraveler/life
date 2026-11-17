@@ -38,6 +38,23 @@
 - 单测：FlashResultCard historical 分支渲染断言（无既有组件套件则新建最小套件）。
 - 真机验收矩阵（§3）+ closeout（`tasks/slice-29-closeout.md`）+ backlog 划项 + AGENTS §8 完成态，按 §7.9 序列提交合并。
 
+### 阶段 3：保存后摘要块接线修补（用户批准的范围修订，2026-11-17）
+
+- 真机验收发现：`useFlashChat.ts:741` `handleConfirmSave` 保存后 `historyRef.current = []`
+  清空上下文 → 下一轮无「上一张卡片草稿摘要」块，多轮节短纠正句/推迟语义条款
+  结构性失活（验收 1/5 post-save 必失败；mid-flow 路径实测通过——条款与 D3 语义
+  在有摘要块时完全生效）。本卡 §0.1 前提「history 有上一张卡」在保存后不成立。
+- 修法（用户选 A 最小接线修补）：保存时不再清空 history，播种
+  `[{ role: 'assistant', text: JSON.stringify(保存时草稿 JSON) }]`（切片 15
+  historyAppend 同格式）；下一轮 buildHistoryBriefing 有摘要块 → 条款 post-save
+  生效；仍不携带更早对话，「每存一张=新对话」设计不变。
+- 同批 prompt D3 加固（真机缺陷：degenerate 草稿上模型曾把「推迟30分钟」写入
+  content，被认真模式拦截兜住）：推迟/延后类修正只调整时间字段，禁止把
+  「推迟 X 分钟」这类原文写入 title/content。
+- 改动面：`src/ui/useFlashChat.ts`（:741 一处）+ `src/domain/ai/prompt.ts`（:92
+  同行追加）+ `src/domain/ai/__tests__/prompt.test.ts`（加固断言 1 例）；其余
+  冻结面不动。
+
 ## 3. 真机验收矩阵
 
 1. 有摘要块＋「还是30分钟后吧」（上一张卡 14:00）→ 卡改 14:30，**不新建**。
