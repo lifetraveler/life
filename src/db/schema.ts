@@ -15,8 +15,10 @@ import { appSchema, tableSchema } from '@nozbe/watermelondb';
  * （AGENTS.md §7.37 闪电录入认真模式）。
  * v13（切片 26 阶段 1）：app_settings 新增 show_ai_usage
  * （AGENTS.md §7.38 AI 透明度——用量展示开关）。
+ * v14（切片 27 阶段 1）：app_settings 新增 display_calendar_ids_json
+ * （AGENTS.md §7.39 系统日历 live 直读显示——显示开关，空/缺省 = 功能关闭）。
  */
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 14;
 
 export const schema = appSchema({
   version: SCHEMA_VERSION,
@@ -149,6 +151,11 @@ export const schema = appSchema({
     // v13（切片 26 阶段 1，AGENTS.md §7.38）：show_ai_usage——AI 用量展示开关
     // （默认 false = 不显示）。非可选 boolean，addColumns 既有行回填 false，
     // careful_mode（v12）同款先例，无需 UPDATE。
+    // v14（切片 27 阶段 1，AGENTS.md §7.39）：display_calendar_ids_json——系统日历
+    // live 直读显示开关，JSON 字符串数组（选中日历 id），空串/null/缺省/[] =
+    // 功能关闭（合法状态，非缺省回退语义）。isOptional：既有行回填 null，读取层
+    // 防御归一（parseDisplayCalendarIds：坏 JSON/非串/空串剔除，不抛错回退 []），
+    // 写路径校验（validateDisplayCalendarIds：仅非空字符串、去重；空数组 = 关闭）。
     tableSchema({
       name: 'app_settings',
       columns: [
@@ -161,6 +168,7 @@ export const schema = appSchema({
         { name: 'default_channels_json', type: 'string', isOptional: true },
         { name: 'careful_mode', type: 'boolean' },
         { name: 'show_ai_usage', type: 'boolean' },
+        { name: 'display_calendar_ids_json', type: 'string', isOptional: true },
       ],
     }),
     // 切片 17 阶段 1（AGENTS.md §7.27 渠道配置中心，schema v9）：渠道预设表。

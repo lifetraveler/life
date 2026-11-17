@@ -17,10 +17,11 @@ declare module 'react-test-renderer' {
     findAll(predicate: (node: ReactTestInstance) => boolean): ReactTestInstance[];
   }
 
-  /** 渲染树句柄（仅声明测试用到的成员） */
+  /** 渲染树句柄（仅声明测试用到的成员；update 为切片 27 hook 重渲染用例新增） */
   export interface ReactTestRenderer {
     root: ReactTestInstance;
     unmount(): void;
+    update(nextElement: ReactElement): void;
   }
 
   export function create(nextElement: ReactElement): ReactTestRenderer;

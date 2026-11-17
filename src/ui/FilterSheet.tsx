@@ -35,7 +35,7 @@ import {
 } from 'react-native';
 
 import { Ionicons } from '@expo/vector-icons';
-import type { ComponentProps } from 'react';
+import type { ComponentProps, ReactNode } from 'react';
 import type { Category } from '../domain/category';
 import type { ItemSourceType, ItemStatus } from '../domain/item';
 import type { AgendaViewKind } from '../domain/views/agenda';
@@ -85,6 +85,13 @@ interface FilterSheetProps {
   filters: ItemFilters;
   /** 当前已应用的视图模式（即时生效：受控值，切片 14 阶段 5b） */
   viewKind: AgendaViewKind;
+  /**
+   * 切片 27（AGENTS.md §7.39 D8）：筛选面板「日历显示」区插槽（日历选择唯一入口）。
+   * 由父级传入 CalendarDisplaySection（自持 settings 写回与权限态）；
+   * FilterSheet 保持纯 UI，不直接访问 Repository / expo-calendar（AGENTS.md §4）。
+   * web 平台由该区组件自身返回 null（不渲染）。
+   */
+  calendarDisplay?: ReactNode;
   /** 任一条件/视图变化：父级提交新筛选 + 视图模式、不负责关闭（即时生效） */
   onChange: (filters: ItemFilters, viewKind: AgendaViewKind) => void;
   /** 「已归档」行点击（阶段 5c 任务 7）：父级关面板并跳转 /archived */
@@ -99,6 +106,7 @@ export default function FilterSheet({
   tags,
   filters,
   viewKind,
+  calendarDisplay,
   onChange,
   onOpenArchived,
   onClose,
@@ -325,6 +333,9 @@ export default function FilterSheet({
                 />
               ))}
             </View>
+
+            {/* 切片 27：日历显示区（日历选择唯一入口；插槽由父级注入，web 不渲染） */}
+            {calendarDisplay ?? null}
 
             <Text style={styles.sectionLabel}>状态</Text>
             <View style={styles.chipWrap}>

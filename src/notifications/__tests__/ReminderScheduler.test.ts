@@ -401,6 +401,7 @@ class FakeRepository implements ItemRepository {
       chipsIncrements: [10, 60],
       carefulMode: false, // 切片 25 v12 新列：调度器不触达，stub 仅满足编译
       showAiUsage: false, // 切片 26 v13 新列：调度器不触达，stub 仅满足编译
+      displayCalendarIds: [], // 切片 27 v14 新列：调度器不触达，stub 仅满足编译
       defaultChannels: ['system-notification'],
     };
   }

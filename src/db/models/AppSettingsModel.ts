@@ -6,7 +6,8 @@ import type { TagDisplayMode } from '../../domain/settings';
 /**
  * app_settings 表的 WatermelonDB model（切片 14，AGENTS.md §7.22，schema v6；
  * v7 阶段 7a 扩展小组件显示开关 4 列，docs/proposals/slice-14-widget-phase7.md；
- * v10/v11 扩展（chips_increments / default_channels_json）见各字段注释）。
+ * v10/v11 扩展（chips_increments / default_channels_json）见各字段注释；
+ * v13/v14 扩展（show_ai_usage / display_calendar_ids_json）见各字段注释）。
  * 单行表：主键固定 'global'（domain/settings.ts APP_SETTINGS_ROW_ID）；
  * 无记录时 Repository 的 getSettings 兜底返回默认值（repository.md v0.14）。
  */
@@ -40,4 +41,11 @@ export default class AppSettingsModel extends Model {
   // v13（切片 26，AGENTS.md §7.38）：AI 用量展示开关（默认 false = 不显示）；
   // 非可选 boolean 同 careful_mode 先例。
   @field('show_ai_usage') showAiUsage!: boolean;
+  /**
+   * 切片 27（schema v14，AGENTS.md §7.39）：系统日历 live 直读显示开关，
+   * JSON 字符串数组（选中日历 id），空串/null/缺省/[] = 功能关闭；null/坏值由
+   * 读取层防御归一（domain/settings.ts parseDisplayCalendarIds，不抛错回退 []），
+   * 写路径校验（validateDisplayCalendarIds：仅非空字符串、去重）。
+   */
+  @text('display_calendar_ids_json') displayCalendarIdsJson!: string | null;
 }

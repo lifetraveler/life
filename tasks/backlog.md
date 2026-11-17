@@ -19,7 +19,7 @@
   - 规划修订：原行「B 涉及 AiParser.parse 返回值扩展」的假设**不成立已修订**——usage 不进 ParsedItemDraft/history，走 provider `lastUsage` 副通道（卡 §1 D1）；ai.md 仅追加非破坏性变更记录条目。切片 25 收尾新增 4 条待定候选已权衡，均不并入本切片（①②同根后续可合并立项、③需变更提案、④纯评估）。
   - 验收终态：tsc 0 错 / jest 81 套件·1145 用例（只增不减） / expo-doctor 2 项预存无新增 / 真机验收矩阵 10 项全通过（含分层计价四轮分毞不差实测：0.002215 / 0.001761 / 0.002638改价 / 0.002289 与 0.004347）。遗留披露见 closeout §五。
 
-- **切片 27：系统日历 live 直读显示（方案 C）**（2026-11-17 立项，卡 `tasks/slice-27.md`，基点 main @ 73f9807，分支 `task/slice-27`；任务卡与 AGENTS.md v0.31 随切片 27 阶段 1 提交）
+- **~~切片 27：系统日历 live 直读显示（方案 C）~~**（✅ 已完成 2026-11-17，关闭于切片 27，见 `tasks/slice-27-closeout.md`；提交 c79fe3d / 97eb070 / aeeed50；迁移占用 v14。口径修正：入口为**筛选面板日历显示区**（取消独立设置页，2026-11-17 用户决策）；真机矩阵 12 项通过 + L10 复核坐实（见 L10 条目）；遗留 = CalDAV 验收未验（MuMu 无环境）+ expo-calendar 15.0.8 权限挂起已 8s 兜底）
   - 前置已解：调研报告 §9 四个开放问题用户 2026-11-17 定案——Q1 四视图全做 / Q2 重叠自动去重 + 设置页提示 / Q3 本片不做写回（如立项走独立变更提案 + 独立切片）/ Q4 weekdays 多选日重复跳过并在 UI 提示。
   - 阶段 1 域+数据层+契约文档（schema v14 `display_calendar_ids_json` + migrations/settings/repository 读写 + SystemCalendarReader 扩 color/sourceName + ui.md/repository.md 新节）；阶段 2 live 管道与 UI（liveCalendar 纯函数 + useSystemCalendarEvents hook + plan.tsx 四视图合并渲染只读徽标 + /settings/calendar-display 设置页）；阶段 3 L10 真机复核 + 验收矩阵 + closeout。设计决策与冻结边界（不落库/不参与调度搜索筛选快照/不写回/不轮询）见卡 §0–§1 与 AGENTS §7.39。
 
@@ -31,7 +31,7 @@
 | --- | --- | --- | --- |
 | ~~切片 25~~ | ~~**认真模式**~~ | ~~中~~ | ~~修改标题/内容前给选项确认（agent 式交互），默认模式按预设直接处理。范围：app_settings 迁移（v12）+ wire 选项字段 + useFlashChat 守卫 + Chat 选项交互 + 设置页开关。~~（✅ 已完成，关闭于切片 25，见 `tasks/slice-25-closeout.md`） |
 | ~~切片 26~~ | ~~**AI 透明度**~~ | ~~中偏小~~ | ~~A. 提示词查看界面（读 AI_SYSTEM_PROMPT 静态串，轻）；B. AI 回答可选显示 token 消耗/缓存命中率/大致价格（openAiCompatible usage 管道 + 设置开关 + app_settings 迁移——B 涉及 AiParser.parse 返回值扩展，ai.md 契约正常演进需成文）。两子项打包（slice-23 closeout §6 候选 2）；与已完成的 25 同域（flash/设置页），迁移列可同批设计。注：迁移版本号届时顺延（v12 已被切片 25 占用）~~（✅ 已完成，关闭于切片 26，见 `tasks/slice-26-closeout.md`。交付含追加阶段 2b（AI 配置平台化 + DeepSeek 峰谷分层计价，提案 `docs/proposals/slice-26-ai-config-enhancement.md`）与 2c（每平台独立配置槽，保存即激活 + 使用中徽标）；迁移占用 v13）~~ |
-| ~~切片 27~~ | ~~**系统日历 live 直读显示**（方案 C）~~ | ~~中偏大（≈1 切片）~~ | ~~Toki 式直读：设置页日历多选（app_settings 新列 display_calendar_ids_json）+ SystemCalendarReader 扩 color/source + live hook + 四视图合并渲染（只读徽标）+ 与已导入项重叠去重（§5 规则）+ 平台 gating + ui.md/repository.md 契约新增节；写回（D1）如立项走独立变更提案 + 独立切片（须改 §7.15 / repository.md:142 冻结语义）~~（✅ 已立项 2026-11-17，卡 `tasks/slice-27.md`，四问已定案见 §1；迁移占用 v14） |
+| ~~切片 27~~ | ~~**系统日历 live 直读显示**（方案 C）~~ | ~~中偏大（≈1 切片）~~ | ~~Toki 式直读：筛选面板日历显示区多选（app_settings 新列 display_calendar_ids_json，取消独立设置页）+ SystemCalendarReader 扩 color/sourceName + live hook + 四视图合并渲染（只读徽标）+ 与已导入项重叠去重（§5 规则）+ 平台 gating + ui.md/repository.md 契约新增节；写回（D1）如立项走独立变更提案 + 独立切片（须改 §7.15 / repository.md:142 冻结语义）~~（✅ 已完成 2026-11-17，关闭于切片 27，见 `tasks/slice-27-closeout.md`；迁移占用 v14） |
 | 切片 28 | **数据备份/同步：配置 + 日程（WebDAV）** | 大（设计讨论先行，提案 §7.5） | 范围澄清见 §3：配置（app_settings/分类/标签）与日程相关数据（items/reminders/channel_presets）都同步；形态（备份恢复 vs 双向同步）与冲突策略待专项讨论，讨论结论落提案再开工。导出已存在（切片 12），主体是导入 + WebDAV |
 | 候选 29a | **闪电录入对话能力强化包** | 中偏小 | 用户 2026-11-17 真机反馈驱动（切片 26 阶段 3 期间发现）：① 编辑意图识别强化——口语纠正短句（「还是30分钟后吧」）在 history 有上一张卡时被远端模型误判为新建（实测：上一轮「10分钟后」编辑成功、下一轮同型短句新建，模型意图判断波动；prompt 需明确「短口语无新事由默认编辑上一张卡」+ 本地兜底评估）；② 「推迟 X 分钟」语义边界 prompt 明确（推迟=基于卡片当前时间；「X分钟后」=说话时刻，实测已按此语义工作，需成文防漂移）；③ 聊天历史预览卡与当前草稿卡视觉区分（历史卡降透明度/加「历史」角标），避免「新添加了一张」误读。①②涉及 prompt.ts（AI_SYSTEM_PROMPT 静态串，切片 26 刚交付只读展示页）+ 可能的 useFlashChat 本地启发式 |
 | 候选 29b | **AI 日程查询/记忆检索（对话式日程管理）** | 大（设计讨论先行） | 用户愿景（2026-11-17 提出）：日程作为「记忆/RAG 系统」——提问「未来一周有什么安排 / 有没有饭局或就医」→ 意图识别为查询 → 到日程库检索（日程相关操作封装为 tool）→ 查询结果返回标准日程卡片 → 可继续对话修改各属性（复用 FlashPreviewCard 形态）。需要：查询意图路由（录入 vs 查询 vs 编辑）、日程检索 tool（Repository 查询层已有基础：viewQueries/filterSheet 多维筛选可复用）、检索结果卡片化与对话修改链路。**与候选 29a 同域（闪电录入对话能力），建议合并立项或先做 29a 打基础；立项前先出设计讨论稿（查询 DSL/tool 接口/上下文注入预算）** |
@@ -62,7 +62,7 @@
 - **L7** 频道级静音时段（slice-18 提案 §10 候选）。
 - **L8** 远端间歇「AI 服务暂不可用（返回结构异常）」——isRemoteDraftWire 整体拒绝→降级，当晚复现率高且内容相关（slice-23 遗留披露 1，「独立问题待后续切片排查」，未排查）。
 - **L9** 创建流「7点半」半点解析——localFallback 只认整点（slice-22 遗留 3 附注，原拟并入切片 23 提案，实际未做）。
-- **L10** 重复系列导入疑缺陷：同一重复系列所有实例共享 event.id → 按现逻辑导入只落首实例（系统日历评估 §3 推论，**待真机复核**；已并入切片 27 阶段 3 复核定性，见 `tasks/slice-27.md`）。
+- **L10** 重复系列导入疑缺陷：同一重复系列所有实例共享 event.id → 按现逻辑导入只落首实例（**已复核坐实**，切片 27 阶段 3：导入 6 条只落 3 条，sqlite 证据见 `tasks/slice-27-closeout.md` §四.1；live 直读不受影响——D2 按设计只精确命中首实例，其余实例正常显示。修复涉去重键语义（repository.md v0.9 冻结），须另立变更提案）。
 - **L11** release 签名与 ABI 拆分：现为 debug keystore + universal 103MB，正式分发前需自有 keystore（slice-20 排期「其他（延续）」）。
 - **L12** 旧列清理：reminders.channel/channel_config 旧列仍在 schema（无 dropColumn 能力，待 schema 清理切片评估，slice-18/19 顺延）。
 - **L13** SDK 55 升级（鸿蒙评估 §7.2 建议：与鸿蒙决策解耦但有独立价值，RN 0.81 已不在主流适配视野）。
@@ -72,6 +72,7 @@
 - **U1** webhook 回前台不双发实机复验（slice-21 遗留）：webhook 渠道造 once 提醒 → 触发后杀/切后台 → 回前台秒级补发，对照 `C:\Users\Public\webhook-receiver-s20.log` 时间戳应只出现一条 POST。
 - **U2** slice-22 真机清单 3/4/5：allDay 卡「全天」无 chips / 无时间待办无日期行无 chips / 保存链失败纯文本不出卡（均有单测覆盖）。
 - **U3** slice-22 两条「开周会」once 提醒（11-16 07:20 与 14:50）实际触发观察。
+- **U4** 切片 27 矩阵 13 补验：装真机（有订阅日历/CalDAV 环境）验证外部日历在筛选面板日历显示区正常列出（分组头=账户名、色点=服务器色）且 live 行正常（slice-27 closeout §三.13，MuMu 无 CalDAV 环境未验）。
 
 ## 6. 契约化已知限制（明确接受，不算任务，防止误判为遗漏）
 

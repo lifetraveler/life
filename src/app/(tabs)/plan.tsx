@@ -66,12 +66,18 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
 import { itemRepository } from '../../data';
+import { expoSystemCalendarReader, sha256Hex } from '../../data/systemCalendarAdapters';
 import type { Category } from '../../domain/category';
 import { daysInMonth, formatLocalDate, getZonedParts } from '../../domain/recurrence/civilTime';
 import type { ItemWithRelations } from '../../domain/relations/itemWithRelations';
 import type { Tag } from '../../domain/tag';
 import { groupItemsForAgenda } from '../../domain/views/agenda';
 import type { AgendaViewKind } from '../../domain/views/agenda';
+import {
+  buildLiveCalendarEntries,
+  isLiveCalendarEntry,
+} from '../../domain/views/liveCalendar';
+import type { LiveCalendarEntry } from '../../domain/views/liveCalendar';
 import { EMPTY_ITEM_FILTERS, filterItems, hasActiveFilters } from '../../domain/views/filters';
 import type { ItemFilters } from '../../domain/views/filters';
 import {
@@ -88,11 +94,17 @@ import {
 import type { CivilMonth } from '../../domain/views/ranges';
 import { itemsByDay } from '../../domain/views/itemsByDay';
 import { layoutDayEvents } from '../../domain/views/dayTimeline';
+import CalendarDisplaySection from '../../ui/CalendarDisplaySection';
 import EmptyState from '../../ui/EmptyState';
 import FilterSheet from '../../ui/FilterSheet';
+import LiveCalendarModal from '../../ui/LiveCalendarModal';
 import { MonthCalendarView } from '../../ui/MonthCalendarView';
 import { MonthPickerPopover } from '../../ui/MonthPickerPopover';
 import { DayTimelineView } from '../../ui/DayTimelineView';
+import {
+  useSystemCalendarEvents,
+  useSystemCalendarList,
+} from '../../ui/useSystemCalendarEvents';
 import { formatAgendaTimeRange, getDeviceTzid, WEEKDAY_LABELS } from '../../ui/timeFormat';
 import { useTheme } from '../../ui/theme';
 import type { ThemeColors } from '../../ui/theme';
@@ -111,6 +123,16 @@ const AGENDA_MONTH_HEADER_BLOCK = 85;
 // 滚动上限（max offset）会卡在「今天组头贴顶之前」（真机实测 header offset 1027.5
 // > max offset 970，差 57.5 永远滚不到）——底部补约一屏留白保证今日组可贴顶。
 const AGENDA_TAIL_PAD_RATIO = 0.9;
+
+/**
+ * 切片 27（AGENTS.md §7.39 D7）：agenda 视图 live 直读窗口 = 今天 00:00 起 +30 天。
+ * week/month/day 视图窗口=viewRange（自然周/锚点月/锚点日）。无轮询；
+ * 刷新=窗口变化防抖 + AppState 回前台 + useFocusEffect（hook 内）。
+ */
+const AGENDA_LIVE_WINDOW_DAYS = 30;
+
+/** 一天毫秒数（live 窗口外扩计算用）。 */
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * agenda 定位目标（阶段 5f）：「今天」pill/冷启动定位到今日分组头（kind='day'，
@@ -147,7 +169,9 @@ interface AgendaRowEmptyToday {
 
 type AgendaRow = AgendaRowHeader | AgendaRowItem | AgendaRowEmptyToday;
 
-/** Agenda 卡片（任务卡：左侧 4px 分类色条 + Emoji + 标题 + 时间段；点击进详情） */
+/** Agenda 卡片（任务卡：左侧 4px 分类色条 + Emoji + 标题 + 时间段；点击进详情）。
+ * 切片 27：live 合成条目渲染=色条用日历色（非法回退 textMuted）+ 🔒 只读徽标 +
+ * 来源日历副行；点击走 handleRowPress（只读弹层，不进详情页）。 */
 function AgendaItemCard({
   item,
   tzid,
@@ -160,9 +184,13 @@ function AgendaItemCard({
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const timeLabel = formatAgendaTimeRange(item, tzid);
-  // 分类色缺失/非法时卡片色条回退 colors.border（切片 24：回退色随主题切换）
-  const stripeColor =
-    item.category?.color && HEX_COLOR_PATTERN.test(item.category.color)
+  const live = isLiveCalendarEntry(item);
+  // live 行色条=日历色（非法/缺失回退 textMuted，区别于普通行的 border 回退）
+  const stripeColor = live
+    ? item.liveColor !== null && HEX_COLOR_PATTERN.test(item.liveColor)
+      ? item.liveColor
+      : colors.textMuted
+    : item.category?.color && HEX_COLOR_PATTERN.test(item.category.color)
       ? item.category.color
       : colors.border;
   const emoji = item.category?.emoji ?? null;
@@ -170,10 +198,25 @@ function AgendaItemCard({
     <Pressable style={styles.card} onPress={() => onPress(item.id)}>
       <View style={[styles.cardStripe, { backgroundColor: stripeColor }]} />
       <View style={styles.cardBody}>
-        <Text style={styles.cardTitle} numberOfLines={2}>
-          {emoji ? `${emoji} ${item.title}` : item.title}
-        </Text>
+        <View style={styles.cardTitleRow}>
+          {live ? (
+            <Ionicons
+              name="lock-closed"
+              size={12}
+              color={colors.textMuted}
+              style={styles.cardLockIcon}
+            />
+          ) : null}
+          <Text style={styles.cardTitle} numberOfLines={2}>
+            {emoji ? `${emoji} ${item.title}` : item.title}
+          </Text>
+        </View>
         {timeLabel ? <Text style={styles.cardTime}>{timeLabel}</Text> : null}
+        {live && item.liveSourceName !== null ? (
+          <Text style={styles.cardSource} numberOfLines={1}>
+            {item.liveSourceName}
+          </Text>
+        ) : null}
       </View>
     </Pressable>
   );
@@ -205,6 +248,11 @@ export default function PlanScreen() {
   const [viewKind, setViewKind] = useState<AgendaViewKind>('agenda');
   const [activeFilters, setActiveFilters] = useState<ItemFilters>(EMPTY_ITEM_FILTERS);
   const [filterSheetVisible, setFilterSheetVisible] = useState(false);
+
+  // 切片 27（§7.39）：日历显示开关（settings.displayCalendarIds；空数组=功能关闭）。
+  // 面板 CalendarDisplaySection 开关乐观更新本 state 并写回 settings；
+  // 挂载时读一次 getSettings 初始化。
+  const [displayCalendarIds, setDisplayCalendarIds] = useState<string[]>([]);
 
   // 阶段 5c 周视图双态：'day'=单日态（周条选中的那天，日程排版）| 'whole'=整周态（7 天按天分组）。
   // 仅 viewKind==='week' 时有意义；「周」pill 切换。
@@ -396,6 +444,25 @@ export default function PlanScreen() {
   useEffect(() => itemRepository.observeItemsWithTags(setItems), []);
   useEffect(() => itemRepository.observeTags(setAllTags), []);
 
+  // 切片 27：displayCalendarIds 初始化（getSettings 无记录静默补插默认值，v0.14 契约）
+  useEffect(() => {
+    let cancelled = false;
+    void itemRepository
+      .getSettings()
+      .then((settings) => {
+        if (!cancelled) {
+          setDisplayCalendarIds(settings.displayCalendarIds);
+        }
+      })
+      .catch((error: unknown) => {
+        // 读失败保持空数组=功能关闭（不崩溃；面板开关可重试）
+        console.warn('[slice-27] getSettings failed:', error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // 分类视觉：挂载时取一次；每次打开筛选面板再现取（设置页改色后即生效）
   const refreshCategories = useCallback((): void => {
     void itemRepository
@@ -417,6 +484,18 @@ export default function PlanScreen() {
     setFilterSheetVisible(true);
   }, [refreshCategories]);
 
+  // 切片 27：面板「日历显示」区数据源（useSystemCalendarList：权限+getCalendars）。
+  // 权限只在面板打开或已选日历时申请（enabled 控制），plan 页挂载不弹窗。
+  const calendarList = useSystemCalendarList({
+    enabled: filterSheetVisible || displayCalendarIds.length > 0,
+    reader: expoSystemCalendarReader,
+  });
+
+  /** 面板开关回调：CalendarDisplaySection 已写回 settings，这里同步 hook 入参。 */
+  const handleCalendarSelectionChange = useCallback((ids: string[]): void => {
+    setDisplayCalendarIds(ids);
+  }, []);
+
   /** FAB 短按：新建条目 → 全屏新建页。 */
   const openNewItem = useCallback((): void => {
     router.push('/item/new');
@@ -432,6 +511,27 @@ export default function PlanScreen() {
       router.push(`/item/${itemId}`);
     },
     [router],
+  );
+
+  // 切片 27：live 只读弹层（点击 live 合成条目时打开；普通条目仍跳详情页）。
+  // liveEntriesRef 供 handleRowPress 查表（ref 同步见下方 live 合成 effect）。
+  const [liveModalEntry, setLiveModalEntry] = useState<LiveCalendarEntry | null>(null);
+  const liveEntriesRef = useRef<LiveCalendarEntry[]>([]);
+
+  /** 行点击分流（§7.39 D8）：live: 前缀 = 合成条目 → 只读弹层；否则进详情页。 */
+  const handleRowPress = useCallback(
+    (itemId: string): void => {
+      if (itemId.startsWith('live:')) {
+        const entry = liveEntriesRef.current.find((candidate) => candidate.id === itemId);
+        if (entry !== undefined) {
+          setLiveModalEntry(entry);
+        }
+        // liveEntries 尚未就绪（理论罕见）：静默忽略，不进详情页（无落库条目可跳）
+        return;
+      }
+      openItemDetail(itemId);
+    },
+    [openItemDetail],
   );
 
   const filtersActive = hasActiveFilters(activeFilters);
@@ -455,6 +555,83 @@ export default function PlanScreen() {
     return getMonthRangeForCivil(viewTime.tzid, anchorMonth.year, anchorMonth.month);
   }, [anchorMonth, anchorMs, viewKind, viewTime, weekMode]);
 
+  // —— 切片 27（§7.39）：系统日历 live 直读 ——
+  // live 读取窗口：agenda=今天 00:00 起 +30 天；week/month/day=viewRange（自然周/
+  // 锚点月/锚点日）。hook 内部：窗口变化 300ms 防抖 + AppState 回前台 +
+  // useFocusEffect 重读；无轮询；live 事件不落库（D6 冻结边界）。
+  const liveRange = useMemo(() => {
+    if (viewRange !== null) {
+      return { startMs: viewRange.startMs, endMs: viewRange.endMs };
+    }
+    const todayStart = resolveDayStart(
+      viewTime.tzid,
+      getZonedParts(viewTime.nowMs, viewTime.tzid),
+    );
+    return {
+      startMs: todayStart,
+      endMs: todayStart + AGENDA_LIVE_WINDOW_DAYS * DAY_MS,
+    };
+  }, [viewRange, viewTime]);
+
+  const liveCalendar = useSystemCalendarEvents({
+    calendarIds: displayCalendarIds,
+    windowStartMs: liveRange.startMs,
+    windowEndMs: liveRange.endMs,
+    reader: expoSystemCalendarReader,
+  });
+
+  // 切片 27 权限恢复联动（真机矩阵发现的缺陷）：面板「重新授权」恢复的是清单
+  // hook；events hook 拒绝态由 doFetch 自愈（回前台/回页签触发），但用户在面板
+  // 弹窗里当场点「允许」的场景没有触发源。这里在清单恢复 ready 且 events 仍处
+  // no-permission 时补一次 retryPermissions（已授权时 expo 直接返回不弹窗）。
+  useEffect(() => {
+    if (calendarList.status === 'ready' && liveCalendar.status === 'no-permission') {
+      liveCalendar.retryPermissions();
+    }
+  }, [calendarList.status, liveCalendar.status, liveCalendar.retryPermissions]);
+
+  // live 合成条目（D2 去重 + D5 映射）：filterItems 之后、分组/布局之前并入四数据
+  // 路径；不参与筛选谓词（不进 filterItems）。buildLiveCalendarEntries 为异步纯
+  // 函数（sha256 端口），结果经 state 供各路径 memo 消费；失败=本轮不并入（保留
+  // 旧渲染，下轮窗口变化/回前台重试）。liveEntriesRef 同步给 handleRowPress 查表。
+  const [liveEntries, setLiveEntries] = useState<LiveCalendarEntry[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (liveCalendar.events.length === 0 || displayCalendarIds.length === 0) {
+      liveEntriesRef.current = [];
+      setLiveEntries([]);
+      return undefined;
+    }
+    void buildLiveCalendarEntries({
+      events: liveCalendar.events,
+      calendars: calendarList.calendars,
+      importedItems: items,
+      sha256: sha256Hex,
+      rangeStartMs: liveRange.startMs,
+      rangeEndMs: liveRange.endMs,
+    })
+      .then((entries) => {
+        if (!cancelled) {
+          liveEntriesRef.current = entries;
+          setLiveEntries(entries);
+        }
+      })
+      .catch((error: unknown) => {
+        console.warn('[slice-27] buildLiveCalendarEntries failed:', error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    calendarList.calendars,
+    displayCalendarIds.length,
+    items,
+    liveCalendar.events,
+    liveRange,
+  ]);
+
+
   // 「今天」民用日期键（组头高亮判定，与 agenda 分组键同源：civilTime）
   const todayKey = useMemo(
     () => formatLocalDate(getZonedParts(viewTime.nowMs, viewTime.tzid)),
@@ -464,6 +641,9 @@ export default function PlanScreen() {
   // 数据链：范围谓词（agenda 不限范围；startAt=null 恒通过）→ 筛选 → 分组。
   // 阶段 5e：周/日视图（含周单日态）不再混入无时间待办——它们是"某天"的视图，
   // 「待办」组仅在日程视图显示。
+  // 切片 27：filterItems 之后并入 live 合成条目（§7.39 冻结边界：不参与筛选谓词）；
+  // containment 路径按 viewRange 再裁（live 窗口=agenda 30 天窗口，与 viewRange
+  // 一致或更宽，此处按视图窗口收口）。
   const agendaGroups = useMemo(() => {
     const ranged =
       viewRange !== null
@@ -477,23 +657,48 @@ export default function PlanScreen() {
     // agenda 也不再经过此函数（月窗口自带 startAt 过滤），统一排除无时间项。
     const scoped = ranged.filter((item) => item.startAt !== null);
     const filtered = filterItems(scoped, activeFilters);
-    return groupItemsForAgenda(filtered, {
+    const withLive =
+      viewRange !== null
+        ? filtered.concat(
+            liveEntries.filter(
+              (entry) =>
+                entry.startAt !== null &&
+                entry.startAt >= viewRange.startMs &&
+                entry.startAt < viewRange.endMs,
+            ),
+          )
+        : filtered.concat(liveEntries);
+    return groupItemsForAgenda(withLive, {
       viewKind,
       nowMs: viewTime.nowMs,
       tzid: viewTime.tzid,
     });
-  }, [activeFilters, items, viewKind, viewRange, viewTime]);
+  }, [activeFilters, items, liveEntries, viewKind, viewRange, viewTime]);
 
   // 月历数据：锚点月范围内、经筛选后的条目按民用日分桶（月历格 chip 用；
   // 无 startAt 的待办天然不进格子）。agendaGroups 的分组结果对月历无用，独立计算。
   // 月历 chip 分桶（阶段 5e 改全量）：标签联动会把 anchorMonth 切到视口月，若按
   // anchorMonth 过滤，翻页后其它月 chip 会空掉——全量分桶一次算好，各页共享。
+  // 切片 27：live 条目并入（按锚点月收口——live 窗口=锚点月；缓冲前后页无 live
+  // chip 是 D7 窗口口径的已知边界，ui.md 固定文案与 closeout 披露）。
   const monthDayItems = useMemo(() => {
     if (viewKind !== 'month') {
       return new Map<string, ItemWithRelations[]>();
     }
-    return itemsByDay(filterItems(items, activeFilters), viewTime.tzid);
-  }, [activeFilters, items, viewKind, viewTime.tzid]);
+    const liveInMonth =
+      viewRange !== null
+        ? liveEntries.filter(
+            (entry) =>
+              entry.startAt !== null &&
+              entry.startAt >= viewRange.startMs &&
+              entry.startAt < viewRange.endMs,
+          )
+        : [];
+    return itemsByDay(
+      filterItems(items, activeFilters).concat(liveInMonth),
+      viewTime.tzid,
+    );
+  }, [activeFilters, items, liveEntries, viewKind, viewRange, viewTime.tzid]);
 
   // 月历定位（阶段 5e）：今天回位/年月选择时 scrollToIndex 到目标月页
   const [monthJumpKey, setMonthJumpKey] = useState(0);
@@ -510,19 +715,20 @@ export default function PlanScreen() {
     }
     // 与当日区间「相交」即入选（5e 后补）：跨天任务在后续日也要呈现——
     // layoutDayEvents 内部会把块裁剪到 0..1440，第二天呈现为 00:00 到结束时刻。
+    // 切片 27：live 条目原样 concat（build 已按 overlapsRange 相交语义收口）。
     const ranged = items.filter(
       (item) =>
         item.startAt !== null &&
         item.startAt < viewRange.endMs &&
         (item.endAt ?? item.startAt) > viewRange.startMs,
     );
-    const filtered = filterItems(ranged, activeFilters);
+    const filtered = filterItems(ranged, activeFilters).concat(liveEntries);
     return {
       layout: layoutDayEvents(filtered, viewRange.startMs),
       unscheduled: filtered.filter((item) => item.startAt === null),
       dayStartMs: viewRange.startMs,
     };
-  }, [activeFilters, items, viewKind, viewRange]);
+  }, [activeFilters, items, liveEntries, viewKind, viewRange]);
 
   /** 月历点格子 → 进入 day 视图并锚定该民用日（civilKey='YYYY-MM-DD'）。 */
   const selectCalendarDay = useCallback(
@@ -596,11 +802,21 @@ export default function PlanScreen() {
         (item) =>
           item.startAt !== null && item.startAt >= range.startMs && item.startAt < range.endMs,
       );
-      const groups = groupItemsForAgenda(filterItems(ranged, activeFilters), {
-        viewKind: 'agenda',
-        nowMs: viewTime.nowMs,
-        tzid: viewTime.tzid,
-      });
+      // 切片 27：live 条目按页窗口收口后并入（filterItems 之后、分组之前）
+      const liveInPage = liveEntries.filter(
+        (entry) =>
+          entry.startAt !== null &&
+          entry.startAt >= range.startMs &&
+          entry.startAt < range.endMs,
+      );
+      const groups = groupItemsForAgenda(
+        filterItems(ranged, activeFilters).concat(liveInPage),
+        {
+          viewKind: 'agenda',
+          nowMs: viewTime.nowMs,
+          tzid: viewTime.tzid,
+        },
+      );
       // 切片 21（AGENTS.md §7.32 空态引导）：「今天」组头恒显示——今天所在月页
       // 若「今天」组缺席（当天无安排/被筛选过滤），合成今天组头（count 0，isToday
       // 高亮与精修定位 ref 同真实组头）+ 空态卡挂其下。header-<todayKey> 由此
@@ -644,6 +860,7 @@ export default function PlanScreen() {
     agendaPages,
     agendaTopMonth,
     items,
+    liveEntries,
     monthLabelOf,
     todayKey,
     viewKind,
@@ -1061,10 +1278,10 @@ export default function PlanScreen() {
         // 切片 21：今日无安排空态卡（v0.21 注记：按钮移除，仅文案提示）
         return <AgendaEmptyTodayCard />;
       }
-      return <AgendaItemCard item={row.item} tzid={viewTime.tzid} onPress={openItemDetail} />;
+      return <AgendaItemCard item={row.item} tzid={viewTime.tzid} onPress={handleRowPress} />;
     },
     // 切片 24：styles 随 colors 重建，须入依赖否则深浅切换瞬间组头沿用旧色（真机实测复现）
-    [openItemDetail, viewTime.tzid, styles],
+    [handleRowPress, viewTime.tzid, styles],
   );
 
   return (
@@ -1222,7 +1439,7 @@ export default function PlanScreen() {
           unscheduled={dayTimeline.unscheduled}
           nowMs={viewTime.nowMs}
           tzid={viewTime.tzid}
-          onSelectItem={openItemDetail}
+          onSelectItem={handleRowPress}
           onShiftDay={(delta) => setAnchorMs((prev) => shiftAnchorDay(prev, viewTime.tzid, delta))}
         />
       ) : viewKind === 'week' ? (
@@ -1327,6 +1544,17 @@ export default function PlanScreen() {
         tags={allTags}
         filters={activeFilters}
         viewKind={viewKind}
+        calendarDisplay={
+          /* 切片 27（§7.39 D8）：面板内「日历显示」区（日历选择唯一入口）；
+             web 由组件自身返回 null */
+          <CalendarDisplaySection
+            calendars={calendarList.calendars}
+            listStatus={calendarList.status}
+            onReloadCalendars={calendarList.reload}
+            selectedIds={displayCalendarIds}
+            onSelectionChange={handleCalendarSelectionChange}
+          />
+        }
         onChange={(nextFilters, nextViewKind) => {
           setActiveFilters(nextFilters);
           setViewKind(nextViewKind);
@@ -1338,6 +1566,13 @@ export default function PlanScreen() {
         onClose={() => {
           setFilterSheetVisible(false);
         }}
+      />
+
+      {/* 切片 27：live 只读弹层（点击 live 合成条目；不跳详情页不提供编辑） */}
+      <LiveCalendarModal
+        entry={liveModalEntry}
+        tzid={viewTime.tzid}
+        onClose={() => setLiveModalEntry(null)}
       />
 
       {/* 年月选择器浮层（阶段 5c 任务 0）：锚定当前标签月；自绘零依赖 */}
@@ -1590,6 +1825,21 @@ function makeStyles(c: ThemeColors) {
     fontSize: 15,
     color: c.text,
     lineHeight: 20,
+  },
+  // 切片 27：live 行标题行（🔒 徽标与标题同行）
+  cardTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  cardLockIcon: {
+    marginTop: 1,
+  },
+  // 切片 27：live 行来源日历副行
+  cardSource: {
+    fontSize: 11,
+    color: c.textMuted,
+    marginTop: 2,
   },
   cardTime: {
     fontSize: 12,

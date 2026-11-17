@@ -628,6 +628,7 @@ describe('getSettings / updateSettings · 小组件显示开关（阶段 7a）',
       chipsIncrements: [10, 60],
       carefulMode: false,
       showAiUsage: false,
+      displayCalendarIds: [], // 切片 27 v14：默认 [] = 功能关闭
       defaultChannels: ['system-notification'],
     });
   });

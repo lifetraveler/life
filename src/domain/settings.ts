@@ -71,6 +71,14 @@ export interface AppSettings {
    * boolean 无枚举语义、无独立 parse/validate 函数（carefulMode 同款）。
    */
   showAiUsage: boolean;
+  /**
+   * 系统日历 live 直读显示开关（切片 27，AGENTS.md §7.39）：选中显示的系统日历
+   * id 集合，JSON 存 display_calendar_ids_json。默认 []（= 功能关闭，合法状态
+   * 而非缺省回退——与 defaultChannels 的「空非法」语义不同）；读取层防御归一
+   * （parseDisplayCalendarIds：坏 JSON/非串/空串剔除，不抛错回退 []），写路径
+   * 校验（validateDisplayCalendarIds：仅非空字符串、去重；空数组 = 关闭）。
+   */
+  displayCalendarIds: string[];
 }
 
 /** chips_increments 约束（提案 §7，已确认）：最少 1 项、最多 4 项、每项 1–10080 分钟（7 天） */
@@ -84,6 +92,7 @@ export const CHIPS_MAX_MINUTES = 10080;
  * 待办/分类 emoji/标签默认不展示；切片 18：chips 默认 [10,60] 与切片 16 硬编码一致；
  * 切片 25：carefulMode 默认 false = 默认模式（AGENTS.md §7.37）；
  * 切片 26：showAiUsage 默认 false = 不显示（AGENTS.md §7.38）；
+ * 切片 27：displayCalendarIds 默认 [] = 功能关闭（AGENTS.md §7.39）；
  * getSettings 无记录时的兜底返回值）。
  */
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -96,6 +105,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   defaultChannels: [...DEFAULT_REMINDER_CHANNELS],
   carefulMode: false,
   showAiUsage: false,
+  displayCalendarIds: [],
 };
 
 /** app_settings 单行主键（§7.22） */
@@ -236,4 +246,54 @@ export function validateDefaultChannels(values: readonly ReminderChannel[]): Rem
 /** default_channels → 存储字符串（切片 19）：写路径恒 JSON 数组；读层见 parseDefaultChannels。 */
 export function serializeDefaultChannels(values: readonly ReminderChannel[]): string {
   return JSON.stringify(validateDefaultChannels(values));
+}
+
+/**
+ * display_calendar_ids_json 读层防御归一（切片 27，AGENTS.md §7.39）：
+ * - null/''/坏 JSON/非数组 → 回退 []（功能关闭，合法状态而非「非法回退默认」语义）；
+ * - 元素非字符串 / trim 后为空串 → 丢弃该项（读层防御回退纪律，坏值不用）；
+ * - 去重（保留首次出现顺序，不重排——日历 id 无 canonical 序概念）。
+ * 不抛错：读层永远返回可用数组；结果允许为空（[] = 功能关闭）。
+ */
+export function parseDisplayCalendarIds(raw: string | null | undefined): string[] {
+  if (raw === null || raw === undefined || raw === '') {
+    return [];
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+  const valid = parsed.filter(
+    (item): item is string => typeof item === 'string' && item.trim().length > 0,
+  );
+  return [...new Set(valid)];
+}
+
+/**
+ * display_calendar_ids 写路径校验（切片 27，AGENTS.md §7.39）：违反约束抛错
+ * （写路径严格纪律，与 validateDefaultChannels 同风格）——
+ * - 必须是数组（空数组合法 = 功能关闭，写 '[]'）；
+ * - 每项必须是非空字符串（trim 判定，存储保留原值——日历 id 不含空白）；
+ * - 通过后返回去重的标准化拷贝（顺序保留）。
+ */
+export function validateDisplayCalendarIds(values: readonly string[]): string[] {
+  if (!Array.isArray(values)) {
+    throw new Error('displayCalendarIds 必须是数组');
+  }
+  for (const id of values) {
+    if (typeof id !== 'string' || id.trim().length === 0) {
+      throw new Error(`displayCalendarIds 每项必须是非空字符串，收到 ${String(id)}`);
+    }
+  }
+  return [...new Set(values)];
+}
+
+/** display_calendar_ids → 存储字符串（切片 27）：写路径恒 JSON 数组；读层见 parseDisplayCalendarIds。 */
+export function serializeDisplayCalendarIds(values: readonly string[]): string {
+  return JSON.stringify(validateDisplayCalendarIds(values));
 }

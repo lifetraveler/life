@@ -3,12 +3,28 @@
  * expo-calendar 的原始返回值由 data 层适配为本文件的纯类型，领域层据此保持可测性。
  */
 
-/** expo-calendar getCalendarsAsync 返回的日历（只取本切片需要的字段）。 */
+/**
+ * expo-calendar getCalendarsAsync 返回的日历（只取本切片需要的字段）。
+ * 切片 27（AGENTS.md §7.39 D5）：扩展 color / sourceName 两字段供筛选面板日历显示区
+ * 消费（端口契约外显式扩展，observeItemsWithTags 先例）；UI 容忍两者为 null。
+ */
 export interface SystemCalendarInfo {
   /** 日历 id（expo-calendar Calendar.id）。 */
   id: string;
   /** 日历显示名；API 未提供时为空串（如实透传，不虚构）。 */
   title: string;
+  /**
+   * 日历颜色（Android CALENDAR_COLOR，expo-calendar 原生序列化为 '#RRGGBB'，
+   * 如 superproductive 的纯黑 '#000000'）；缺失/空串为 null，UI 回退默认色。
+   */
+  color: string | null;
+  /**
+   * 账户名（Android ACCOUNT_NAME，即 expo-calendar Calendar.source.name，如
+   * 'Toki'/'本地日历'/'com.android.calendar - baikal'）；缺失/空串为 null。
+   * 筛选面板按账户分组的组头键（null/空归「其他」组），并兼任视图行副行；
+   * 原样显示，不做本地化改写。
+   */
+  sourceName: string | null;
 }
 
 /**

@@ -28,6 +28,8 @@ import { APP_SETTINGS_ROW_ID, DEFAULT_APP_SETTINGS } from '../domain/settings';
  *        chips_increments，channel_presets 新增 is_default（切片 18 阶段 1，AGENTS.md §7.29）
  * - v11：app_settings 新增 default_channels_json（切片 19 阶段 1，AGENTS.md §7.30）
  * - v12：app_settings 新增 careful_mode（切片 25 阶段 1，AGENTS.md §7.37）
+ * - v13：app_settings 新增 show_ai_usage（切片 26 阶段 1，AGENTS.md §7.38）
+ * - v14：app_settings 新增 display_calendar_ids_json（切片 27 阶段 1，AGENTS.md §7.39）
  *
  * 规则（AGENTS.md §4.6）：已发布的 migration step 不得修改，只能在末尾追加；
  * 新增表必须在 migration 中显式创建，不得依赖“删库重装”。
@@ -325,6 +327,25 @@ export default schemaMigrations({
         addColumns({
           table: 'app_settings',
           columns: [{ name: 'show_ai_usage', type: 'boolean' }],
+        }),
+      ],
+    },
+    {
+      // 切片 27 阶段 1（AGENTS.md §7.39 系统日历 live 直读显示）：v14 app_settings 加列；
+      // v2–v13 step 保持原样，不得修改。
+      // - 单条 addColumns，零 unsafeExecuteSql、零 UPDATE：display_calendar_ids_json
+      //   可空 string 列回填 null（= 功能关闭），读取层防御归一
+      //   （domain/settings.ts parseDisplayCalendarIds：null/坏 JSON/非串/空串剔除
+      //   → []，不抛错；[] 与 null 语义一致均为关闭），写路径校验
+      //   （validateDisplayCalendarIds：仅非空字符串、去重；空数组 = 关闭，合法写入）。
+      //   与 v10/v11 可空 JSON 列先例一致——不做 SQL 回填，避免字符串拼接转义风险，
+      //   且 LokiJS 适配器（仅测试用）忽略 'sql' 步骤无法单测；
+      // - 列定义与 schema.ts 的 tableSchema 严格一致（漂移会被模式不匹配检测抛错）。
+      toVersion: 14,
+      steps: [
+        addColumns({
+          table: 'app_settings',
+          columns: [{ name: 'display_calendar_ids_json', type: 'string', isOptional: true }],
         }),
       ],
     },
