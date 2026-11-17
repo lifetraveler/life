@@ -193,6 +193,9 @@ export function useFlashChat() {
   // 切片 30（§7.41）：重试即时提示——「AI 服务异常，正在重试（n/N）…」仅在
   // 轮进行中展示（send 的 finally 清空），不进聊天历史；null = 无进行中重试。
   const [retryNotice, setRetryNotice] = useState<string | null>(null);
+  // 切片 30（§7.41）阶段 3：放弃后的草稿快照——draft 已清空，此快照仅供
+  // 「已放弃」置灰卡展示（内存态，新输入清空、重启消失）。
+  const [dismissedDraft, setDismissedDraft] = useState<ParsedItemDraft | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
 
   const historyRef = useRef<ChatMessage[]>([]);
@@ -504,6 +507,19 @@ export function useFlashChat() {
     });
   }, []);
 
+  // 切片 30（§7.41）阶段 3：草稿放弃——第三条本地操作（与切片 25「放弃修改」
+  // 同层：纯本地处理、不发起 AI 轮次）。draft 立即清空（下一轮按全新意图处理，
+  // 窄规则/previousDraft 不再看见它），快照仅承载「已放弃」卡的置灰视觉呈现；
+  // 不落库、不播种 history；新一轮 send 时清空（见 send 入口）。
+  const dismissDraft = useCallback((): void => {
+    const abandoned = draftRef.current;
+    if (abandoned === null) return;
+    cancelPendingConfirm();
+    draftRef.current = null;
+    setDraft(null);
+    setDismissedDraft(abandoned);
+  }, [cancelPendingConfirm]);
+
   /**
    * 追加认真模式确认消息（拦截轮专用）。消息 id 在 setMessages updater 外先
    * 捕获（切片 25 阶段 2 已把 push()/pushCard() 一并改为该模式）——updater 内
@@ -546,6 +562,9 @@ export function useFlashChat() {
       // 切片 25 阶段 2（§7.37）：待确认期间任何新输入取消待确认状态（作废
       // pendingDraft 与缓冲 history），按普通轮处理——包括编辑窄规则与正常解析。
       cancelPendingConfirm();
+      // 切片 30（§7.41）：新输入开始新对话轮——上一张「已放弃」卡随之移除
+      //（快照仅活到下一个动作，与待确认取消同语义）。
+      setDismissedDraft(null);
       setBusy(true);
       push('user', input);
       const tzid = getDeviceTzid();
@@ -851,6 +870,8 @@ export function useFlashChat() {
     busy,
     // 切片 30（§7.41）：进行中重试提示（null=无；轮结束自动清空）。
     retryNotice,
+    // 切片 30（§7.41）阶段 3：放弃后的草稿快照（null=无；新输入时清空）。
+    dismissedDraft,
     categories,
     send,
     applyEdit,
@@ -858,5 +879,6 @@ export function useFlashChat() {
     postponeCard,
     applyConfirm,
     dismissConfirm,
+    dismissDraft,
   };
 }

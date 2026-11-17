@@ -201,6 +201,15 @@ export default function FlashScreen() {
             onPress={() => setEditVisible(true)}
           />
           <View style={styles.actionRow}>
+            {/* 切片 30（§7.41）阶段 3：第三条本地操作「放弃」——纯本地清草稿
+                （不发起 AI 轮次、不落库、不播种），卡片原地转弃置态。 */}
+            <Pressable
+              style={styles.secondaryButton}
+              onPress={chat.dismissDraft}
+              disabled={chat.busy}
+            >
+              <Text style={styles.secondaryText}>放弃</Text>
+            </Pressable>
             <Pressable
               style={styles.secondaryButton}
               onPress={() => setEditVisible(true)}
@@ -217,6 +226,20 @@ export default function FlashScreen() {
               </Text>
             </Pressable>
           </View>
+        </View>
+      ) : chat.dismissedDraft !== null ? (
+        // 切片 30（§7.41）阶段 3：弃置卡——原地置灰 +「已放弃」角标，无按钮行；
+        // 快照仅活到下一个动作（send 清空），内存态、不落库。
+        <View style={styles.cardWrap}>
+          <FlashPreviewCard
+            draft={chat.dismissedDraft}
+            categories={chat.categories}
+            tzid={deviceTzid}
+            dismissed={true}
+            onPress={() => {
+              /* 弃置卡不可编辑（disabled），onPress 恒不触发 */
+            }}
+          />
         </View>
       ) : null}
 
