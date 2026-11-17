@@ -15,7 +15,12 @@
  * - 快捷推迟 chips（+15分钟/+1小时）本阶段仅禁用占位（onPostpone 未接线），
  *   阶段 3 接线并联动顺延 once 提醒 onceAt；
  * - 样式沿用闪电录入设计语言（白卡 hairline 描边 colors.border、主色 colors.primary），
- *   chip 容器 flexWrap 自适应宽（§7.32 高分屏响应）。
+ *   chip 容器 flexWrap 自适应宽（§7.32 高分屏响应）；
+ * - 历史卡样式（切片 29 / AGENTS.md §7.40）：historical=true（聊天列表非最后
+ *   一条的 kind:'card' 消息）时整卡降透明度 + 右上角「历史」角标（Token 化），
+ *   快捷推迟 chips 保留可用（已保存条目语义仍正确）。角标是 Pressable 的
+ *   absolute 子元素（不出现在文本流内、不新增 FlatList 行包裹层——切片 22
+ *   教训：行包裹会致 flex:1 body 塌缩 0 宽）。
  */
 
 import { useMemo } from 'react';
@@ -98,6 +103,12 @@ interface FlashResultCardProps {
    * 未传时 chips 呈禁用占位态（阶段 2 不接线）。
    */
   onPostpone?: (minutes: number) => void;
+  /**
+   * 历史卡样式（切片 29 / AGENTS.md §7.40）：flash.tsx 以「聊天列表最后一条
+   * kind:'card' 消息＝当前卡」判定传入——非最后的 card 消息 true。默认 false
+   * （当前卡），当前卡不渲染角标、不加额外标识。
+   */
+  historical?: boolean;
 }
 
 export default function FlashResultCard({
@@ -105,6 +116,7 @@ export default function FlashResultCard({
   tzid,
   onPress,
   onPostpone,
+  historical = false,
 }: FlashResultCardProps) {
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -113,7 +125,10 @@ export default function FlashResultCard({
   const categoryColor = payload.category?.color ?? FALLBACK_CATEGORY_COLOR;
   const showPostponeChips = payload.startAt !== null && !payload.allDay;
   return (
-    <Pressable style={styles.card} onPress={onPress}>
+    <Pressable
+      style={[styles.card, historical ? styles.cardHistorical : null]}
+      onPress={onPress}
+    >
       <View style={[styles.colorBar, { backgroundColor: categoryColor }]} />
       <View style={styles.body}>
         {payload.category !== null ? (
@@ -183,6 +198,13 @@ export default function FlashResultCard({
           </View>
         ) : null}
       </View>
+      {/* 切片 29：历史卡右上角「历史」角标——absolute 定位不占文本流，
+          pointerEvents none 不拦截卡片本体点击（触点穿透回 Pressable）。 */}
+      {historical ? (
+        <View style={styles.historicalBadge} pointerEvents="none">
+          <Text style={styles.historicalBadgeText}>历史</Text>
+        </View>
+      ) : null}
     </Pressable>
   );
 }
@@ -266,6 +288,28 @@ function makeStyles(c: ThemeColors) {
     },
     chipTextDisabled: {
       color: c.textMuted,
+    },
+    // 切片 29（§7.40）：历史卡整体降透明度（dim 全卡含 chips，仍可点击）+
+    // 右上角「历史」角标（Token 化，深浅色两态可读；styles.card 已有
+    // overflow hidden，角标 top/right 6 在卡内边界不受裁切影响）。
+    cardHistorical: {
+      opacity: 0.55,
+    },
+    historicalBadge: {
+      position: 'absolute',
+      top: 6,
+      right: 6,
+      backgroundColor: c.card,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.border,
+      borderRadius: 8,
+      paddingVertical: 1,
+      paddingHorizontal: 6,
+    },
+    historicalBadgeText: {
+      fontSize: 10,
+      color: c.textMuted,
+      fontWeight: '600',
     },
   });
 }

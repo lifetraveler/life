@@ -101,6 +101,19 @@ export default function FlashScreen() {
     scrollToBottom(lastIsUserSent);
   }, [scrollToBottom, lastIsUserSent, hasDraft]);
 
+  // 切片 29（AGENTS.md §7.40）：聊天列表最后一条 kind:'card' 消息＝当前卡，
+  // 其余 card 消息传 historical（降透明度 +「历史」角标，FlashResultCard）。
+  // confirm/文本消息不参与判定；FlashConfirmCard 不传此 prop。
+  const lastCardId = useMemo(() => {
+    for (let i = chat.messages.length - 1; i >= 0; i -= 1) {
+      const message = chat.messages[i];
+      if (message.kind === 'card' && message.cardPayload !== undefined) {
+        return message.id;
+      }
+    }
+    return null;
+  }, [chat.messages]);
+
   // 切片 22 阶段 2（AGENTS.md §7.34）：结果卡片消息走 FlashResultCard；
   // cardPayload 属性窄化不进闭包，先捕获到局部 const 再用于 onPress。
   // 卡片直接作为 FlatList 单元渲染（不包 row wrapper：row 主轴按内容测宽
@@ -114,6 +127,7 @@ export default function FlashScreen() {
         <FlashResultCard
           payload={payload}
           tzid={deviceTzid}
+          historical={item.id !== lastCardId}
           onPress={() => router.push(`/item/${payload.itemId}`)}
           onPostpone={(minutes) => {
             void chat.postponeCard(payload.itemId, minutes);
