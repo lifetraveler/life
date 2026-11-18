@@ -69,6 +69,13 @@
 - #11 切片 12「导出 JSON」回归——未真机点按（export.ts 零改动，风险低）。
 - chips [30,90,120,240]→[10,60]（设备设置页操作，切片 28 遗留）。
 
+**补做结果（2026-11-19，backlog 条目关闭）**：
+- #4 全量还原（上会话随猴王实例重置完成）：卸载重装 → WebDAV 快照恢复 S2 →「已应用 12 项」→ life://debug-reminders 30 条调度通知回归（f4-30-scheduled.png）。
+- #10 断网/401 文案：401 分支上会话已过；本会话停 WebDAV 服务器后复触发备份——错误以**页内红字**呈现（非 Alert，与损坏快照负例同型）：「数据备份失败：网络错误：WebDAV 网络错误：Network request failed」+ 两条「快照列表读取失败：网络错误：…」（深色 f10-network-error.png / 浅色 f10-network-error-light.png，uimode 切换复触发后已还原 night yes）。恢复 sanity：重启 WebDAV 服务器 → tap 立即备份 → Alert「数据备份完成：life-data-20261119-002333.json 已上传。」→ 服务器侧落地 1969B（f10-recovery-success.png），快照列表恢复加载。
+- #11 切片 12 导出回归：profile → 导出 JSON → 分享面板「正在分享 1 个文件」life-export-20261119-003329.json（f11-export-share.png）；关闭后页内提示「导出成功：life-export-20261119-003329.json（3 条，已打开分享面板）」（f11-export-hint.png；3 条与 S2 恢复态一致）。
+- chips：实例重置后 app_settings 全新，settings/chips 页即为默认 [10, 60]（预览「+10分钟」「+1小时」，f-chips-1060.png）——无需改 UI。
+- 过程事故：#11 首次点按后猴王 VM 进程意外退出（`is_process_started:false error_code:900`，adb 16384 拒连、emu 5554 消失；实例 1/猜猜 16416 健在）——MuMu 15 管理器为 **mumu-cli.exe**（`E:\Program Files\Netease\MuMu\nx_main\`，语法 `info --vmindex all` / `control --vmindex 0 launch`；§五.4 的 MuMuManager.exe 属旧版布局），`control --vmindex 0 launch` ~40s 恢复、VM 磁盘数据无损，#11 于重启后冷启动重跑通过。
+
 **事故记录**：#10 断网步骤采用 `adb shell svc wifi disable` → 猴王唯一网卡 down 且状态持久化于 VM 磁盘快照 → adbd 无网络监听 → adb 16384 死锁 offline；MuMuManager restart/shutdown-launch/reboot（不支持）/双 adb 客户端均未恢复。**教训：模拟器断网测试禁用 svc wifi/data disable**（应关闭宿主机 WebDAV 服务器进程或用防火墙断模拟器出站）。猴王内测试数据完好（VM 磁盘内），恢复途径=MuMu 窗口手动开 wifi 或重置实例。
 
 ## §五 踩坑教训
@@ -86,8 +93,8 @@
 
 ## §六 遗留披露
 
-1. **4 项真机 pending**（#4 全量还原/#10 断网文案/#11 导出回归/chips 改回）——已在 backlog 登记为「切片 31 真机验收补做」条目，猴王恢复后一次补齐（预计 30 分钟）；其中 chips 属切片 28 遗留设备态。
-2. 猴王实例 adb 死锁未修复（数据完好）；修复或重置由用户后续处理；重置路径顺带完成 #4（重装 → WebDAV 快照恢复）与 chips 回默认。
+1. ~~4 项真机 pending~~（#4 全量还原/#10 断网文案/#11 导出回归/chips 改回）——✅ 已于 2026-11-19 补做完成（见 §四 补做结果；#4 上会话随实例重置完成），backlog 条目已关闭。
+2. 猴王实例 adb 死锁已随上会话实例重置解决（重置路径顺带完成 #4 与 chips 回默认）；2026-11-19 补做期间 VM 进程一次意外退出（error_code 900），经 mumu-cli `control --vmindex 0 launch` 恢复、数据无损（见 §四 补做结果过程事故）。
 3. 服务器测试快照 21 份（config 10 + data 11）留存 `.tmp-s28/webdav-root/` 不提交；猴王设备测试产物（items/tags/presets/提醒）随实例存续。
 4. WebDAV 基础设施遗留（承切片 28）：测试连接 PROPFIND 207 假阳性面、MKCOL 单级、同秒上传覆盖——本片未改动该层语义。
 5. 数据快照含 channel_presets config_json 明文上云（用户知情定案）；AI Provider 配置（SecureStore）不进快照。
