@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.34
+版本：v0.35
 
 ## 1. 项目概览
 
@@ -453,8 +453,37 @@ schema 版本 5→6，新增/修改如下：
   服务器配置；AI Provider 配置（SecureStore `ai_provider_config_v1`）不进快照；
   src/domain/export.ts（切片 12 数据导出链路）不动。
 
+### 7.43 数据备份 WebDAV（v0.35，切片 31）
+- **范围冻结**：数据快照六块——items（全字段含 categoryId/priority）+ tags（含 id，
+  供 itemTags join）+ reminders（v10 语义列全量，不含调度态 last_fired_occurrence_key/
+  last_reconciled_at 与 deprecated channel/channel_config）+ channel_presets（**进快照**，
+  用户 2026-11-18 定案，config_json 明文上云知情）+ itemTags join 重建依据；格式
+  `{version:1, kind:'data', exportedAt, items, tags, reminders, channelPresets, itemTags}`
+  （isDataSnapshotWire 整包拒绝、条目级 skipped+计数披露）。提案
+  docs/proposals/slice-31-data-backup-webdav.md（六问定案：仅手动备份+恢复/
+  channel_presets 进快照/恢复与配置快照同构/独立 life-data-*.json/旧导出保留不动）。
+- **id 保真与恢复语义（冻结）**：新建行 `_raw.id` 写快照 id（app_settings `_raw.id='global'`
+  先例）、created_at/updated_at 新建行经 `_raw` 保真；items 按 id 命中覆盖/未命中创建/
+  本地独有保留（categoryId 悬挂→skipped）；tags 按 name 归一命中（normalizeTagName
+  同构）/未命中创建（带快照 id）/事务内 tagId 映射；reminders 按 id 命中覆盖（调度态
+  两列不动）/未命中创建（item_id 解析失败→skipped；channel='system-notification' 兜底）；
+  channelPresets 按 id 命中覆盖/未命中创建/事务内同 type 单 default 规范化；itemTags
+  对快照 item 删除重建 join（tagId 解析失败→skipped）。
+- **事务与调度联动**：单 db.write + prepareUpdate/prepareCreate 同步收集 + 单次 db.batch
+  （切片 28 两遍法照抄）；恢复成功后 `reminderScheduler.reconcile()` 显式一次（失败不
+  阻断仅披露，useFlashChat 保存先例）；`src/notifications/` 实现文件零改动。
+- **WebDAV 交互**：`life-data-YYYYMMDD-HHmmss.json` + DATA_SNAPSHOT_FILE_PATTERN；
+  WebdavClient listSnapshots/uploadSnapshot 文件名过滤方法级参数化（缺省 CONFIG
+  pattern 向后兼容）；数据快照独立保留最近 10 份（与配置快照互不挤占）；仅手动；
+  全量明文（切片 28 定案延续）。
+- **切片 12 导出保留不动**：单向「导出 JSON」按钮与 src/domain/export.ts 保留；
+  version=1 无 kind 文件不进恢复链路（数据恢复只认 kind:'data'）。
+- **边界**：schema 停留 v15 零迁移；不做双向同步/自动备份/包加密/多服务器/条目级
+  diff 预览；AI Provider 配置不进快照；无新依赖；repository.md 追加非破坏性注记节
+  （createDataSnapshot/applyDataSnapshot 契约外显式扩展成对）。
+
 ## 8. 当前切片
 
 - **已完成**：切片 1–30 全部收尾合并（main @ `edacad5`；切片 24 夜间模式 merge `72daa78`，切片 25 认真模式 merge `5ed723f`，切片 26 AI 透明度 merge `73f9807`，切片 27 live 直读 merge `b187c5c`，切片 29 merge `e1c30e8`，切片 30 merge `a75407b`，切片 28 merge `edacad5`；schema v15，版本 0.23.0/versionCode 10）。**切片 28 配置备份 WebDAV 已完成**（2026-11-18，分支 `task/slice-28` 基点 `4c8e6ea`；提交链 2125ba3 → 90774f1 → 1d9006b → 6b4d827，merge `edacad5`；验收终态：schema 停留 v15 零迁移 / tsc 0 错 / jest 95 套件·1314 用例（基线 90/1241 只增不减）/ expo-doctor 2 项预存无新增 / 真机矩阵 10 项 + 损坏快照负例全过，见 `tasks/slice-28-closeout.md`）。各切片历史见对应 `tasks/slice-NN.md` / `tasks/slice-NN-closeout.md`。
-- **当前切片**：无（切片 28 已完成，下一片按 backlog 候选排序执行——数据备份/双向同步为切片 28 拆分余部候选（设计讨论先行）、插队候选「变更 B 网络渠道后台送达」、候选 29b 编号顺延，立项时逐切片确认）。未完成项以 `tasks/backlog.md` 为准。
-- **未完成项以 `tasks/backlog.md` 为准**（2026-11-16 起的惯例）：候选排序（~~切片 25 认真模式~~已完成 → ~~26 AI 透明度~~已完成，关闭于切片 26 → ~~27 系统日历 live 直读~~已完成，关闭于切片 27 → ~~29 闪电录入对话能力强化包~~已完成，关闭于切片 29 → ~~30 草稿放弃/删除联动/AI 重试~~已完成，关闭于切片 30 → ~~28 备份/同步 WebDAV~~已立项为切片 28（配置备份先行）+ 数据备份（items/reminders/channel_presets）为新增待定候选 + 插队候选「变更 B 网络渠道后台送达」+ 切片 25 收尾新增 4 条待定候选 + 候选 29b 编号顺延）、遗留 L1–L13、手验项 U1–U4、契约化已知限制均记录在 backlog，本节不再罗列候选清单。每切片 closeout 同步更新 backlog.md（划掉完成项并注明关闭切片号）并保持本节精简。
+- **当前切片**：切片 31 数据备份 WebDAV 已完成（2026-11-18，分支 `task/slice-31` 基点 `5edeeec`；提交链 659a9bb → 0ac3e10 → 94714b4 → 收尾提交；验收终态：schema 停留 v15 零迁移 / tsc 0 错 / jest 98 套件·1365 用例（基线 95/1314 只增不减）/ expo-doctor 2 项预存无新增 / 真机矩阵 9 项 + 损坏快照负例全过，**4 项真机 pending 经用户批准移入 backlog**（#4 全量还原、#10 断网/401 文案、#11 导出回归、chips 改回 [10,60]；猴王 adb 死锁事故见 closeout §四），见 `tasks/slice-31-closeout.md`）。下一片候选：双向同步（设计讨论先行）、插队「变更 B 网络渠道后台送达」、候选 29b 编号顺延、切片 31 真机验收补做（立项时逐切片确认）。未完成项以 `tasks/backlog.md` 为准。
+- **未完成项以 `tasks/backlog.md` 为准**（2026-11-16 起的惯例）：候选排序（~~切片 25 认真模式~~已完成 → ~~26 AI 透明度~~已完成，关闭于切片 26 → ~~27 系统日历 live 直读~~已完成，关闭于切片 27 → ~~29 闪电录入对话能力强化包~~已完成，关闭于切片 29 → ~~30 草稿放弃/删除联动/AI 重试~~已完成，关闭于切片 30 → ~~28 备份/同步 WebDAV~~已立项为切片 28（配置备份先行）→ ~~数据备份（items/reminders/channel_presets）~~已立项为切片 31（2026-11-18）+ 双向同步为待定候选 + 插队候选「变更 B 网络渠道后台送达」+ 切片 25 收尾新增 4 条待定候选 + 候选 29b 编号顺延）、遗留 L1–L13、手验项 U1–U4、契约化已知限制均记录在 backlog，本节不再罗列候选清单。每切片 closeout 同步更新 backlog.md（划掉完成项并注明关闭切片号）并保持本节精简。

@@ -63,6 +63,28 @@ import {
   type ConfigSnapshot,
   type ConfigSnapshotApplyResult,
 } from '../domain/configSnapshot';
+import {
+  dataSnapshotExportedAt,
+  isDataSnapshotChannelPresetEntry,
+  isDataSnapshotItemEntry,
+  isDataSnapshotItemTagEntry,
+  isDataSnapshotReminderEntry,
+  isDataSnapshotTagEntry,
+  isDataSnapshotWire,
+  toDataSnapshotChannelPreset,
+  toDataSnapshotItem,
+  type DataSnapshot,
+  type DataSnapshotApplyResult,
+  type DataSnapshotChannelPreset,
+  type DataSnapshotReminder,
+  type DataSnapshotTag,
+} from '../domain/dataSnapshot';
+import {
+  DEFAULT_REMINDER_CHANNEL,
+  isExpoReminderChannel,
+  isReminderChannel,
+  type ReminderChannel,
+} from '../domain/reminder';
 import AppSettingsModel from '../db/models/AppSettingsModel';
 import CategoryModel from '../db/models/CategoryModel';
 import ChannelPresetModel from '../db/models/ChannelPresetModel';
@@ -357,6 +379,105 @@ async function unsetOtherDefaultPresets(
       });
     }
   }
+}
+
+// —— 切片 31 阶段 1（AGENTS.md §7.43）：数据快照恢复的深层校验帮手（仓库层）——
+// 目的：恢复不写入任何会让读路径（toDomainReminder 等）抛错的行（防砖）：
+// reminderRuleMapping 的 parseWeekdaysJson/parseOnceCivilJson 读路径抛错，恢复
+// 必须提前把它们拦截为条目级 skipped（isDataSnapshotReminderEntry 只做原始形状面）。
+
+/** channelsJson 列串校验：非空 JSON 数组 + 全元素合法渠道 + 去重后 expo ≤1（互斥）。 */
+function isValidSnapshotChannelsJson(raw: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    return false;
+  }
+  const seen: ReminderChannel[] = [];
+  let expoCount = 0;
+  for (const item of parsed) {
+    if (!isReminderChannel(item)) {
+      return false;
+    }
+    if (!seen.includes(item)) {
+      seen.push(item);
+      if (isExpoReminderChannel(item)) {
+        expoCount += 1;
+      }
+    }
+  }
+  return expoCount <= 1;
+}
+
+/** channelConfigsJson 列串校验：null 已在上层放过；此处要求 JSON 对象且值全为字符串。 */
+function isValidSnapshotChannelConfigsJson(raw: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return false;
+  }
+  return Object.values(parsed).every((value) => typeof value === 'string');
+}
+
+/**
+ * 数据快照 reminder 条目深层校验（恢复前，失败计 skipped）：
+ * - weekdaysJson 可解析（''=空；JSON 数组元素 1–7）——读路径 parseWeekdaysJson 抛错点；
+ * - 规则字段一致性（normalizeReminderRuleFields：daily hour/minute 范围、weekly
+ *   必有 1–7 weekdays、monthly 必有 1–31 dayOfMonth）；
+ * - once 频率必须携带可解析 onceCivilJson；非 null 的 onceCivilJson 一律可解析
+ *   （读路径 parseOnceCivilJson 抛错点）；
+ * - channelsJson 非空合法渠道数组且 expo ≤1；
+ * - channelConfigsJson 为 null 或字符串字典 JSON；
+ * - tzid 在白名单内（assertWhitelistedReminderTz）。
+ */
+function isValidDataSnapshotReminderEntry(entry: DataSnapshotReminder): boolean {
+  let weekdays: number[];
+  try {
+    weekdays = parseWeekdaysJson(entry.weekdaysJson);
+  } catch {
+    return false;
+  }
+  try {
+    normalizeReminderRuleFields({
+      frequency: entry.frequency,
+      localTimeHour: entry.localTimeHour,
+      localTimeMinute: entry.localTimeMinute,
+      weekdays,
+      dayOfMonth: entry.dayOfMonth,
+    });
+  } catch {
+    return false;
+  }
+  if (entry.frequency === 'once' && entry.onceCivilJson === null) {
+    return false;
+  }
+  if (entry.onceCivilJson !== null) {
+    try {
+      parseOnceCivilJson(entry.onceCivilJson);
+    } catch {
+      return false;
+    }
+  }
+  if (!isValidSnapshotChannelsJson(entry.channelsJson)) {
+    return false;
+  }
+  if (entry.channelConfigsJson !== null && !isValidSnapshotChannelConfigsJson(entry.channelConfigsJson)) {
+    return false;
+  }
+  try {
+    assertWhitelistedReminderTz(entry.tzid);
+  } catch {
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -1111,6 +1232,441 @@ export class WatermelonItemRepository implements ItemRepository {
         );
       }
       applied += 1;
+
+      await this.db.batch(...operations);
+    });
+    return { applied, skipped };
+  }
+
+  // —— 切片 31 阶段 1：数据备份 WebDAV（AGENTS.md §7.43 D1/D3；repository.md v0.35 注记节）——
+
+  /**
+   * 只读组包当前数据快照（§7.43 D1 六块，端口契约外显式扩展成对，先例
+   * createConfigSnapshot）：items 全库（listItemsWithTags ∪ listArchivedItemsWithTags，
+   * 含 archived/done）全字段 id 保真 + tags（含 id 供 join）+ reminders（v10 语义
+   * 列全量；调度态两列与 deprecated 两列不进快照）+ channelPresets + itemTags join
+   * 全量（item_tags 直查，不经领域层）。外层 {version:1, kind:'data', exportedAt}。
+   */
+  async createDataSnapshot(): Promise<DataSnapshot> {
+    const [activeItems, archivedItems, reminders, tags, channelPresets, joinModels] =
+      await Promise.all([
+        this.listItemsWithTags(),
+        this.listArchivedItemsWithTags(),
+        this.listAllReminders(),
+        this.listTags(),
+        this.listChannelPresets(),
+        this.itemTagsJoinQuery().fetch(),
+      ]);
+    return {
+      version: 1,
+      kind: 'data',
+      exportedAt: dataSnapshotExportedAt(new Date()),
+      items: [...activeItems, ...archivedItems].map((entry) => toDataSnapshotItem(entry)),
+      tags: tags.map((tag) => ({
+        id: tag.id,
+        name: tag.name,
+        color: tag.color,
+        emoji: tag.emoji,
+      })),
+      reminders: reminders.map((reminder) => ({
+        id: reminder.id,
+        itemId: reminder.itemId,
+        frequency: reminder.frequency,
+        localTimeHour: reminder.localTimeHour,
+        localTimeMinute: reminder.localTimeMinute,
+        weekdaysJson: serializeWeekdays(reminder.weekdays),
+        dayOfMonth: reminder.dayOfMonth,
+        tzid: reminder.tzid,
+        startAt: reminder.startAt,
+        enabled: reminder.enabled,
+        onceCivilJson: reminder.onceAt === null ? null : serializeOnceCivilJson(reminder.onceAt),
+        channelsJson: serializeReminderChannels(reminder.channels),
+        channelConfigsJson: serializeReminderChannelConfigs(reminder.channelConfigs),
+      })),
+      channelPresets: channelPresets.map((preset) => toDataSnapshotChannelPreset(preset)),
+      itemTags: joinModels.map((model) => ({ itemId: model.itemId, tagId: model.tagId })),
+    };
+  }
+
+  /**
+   * 增量覆盖恢复（§7.43 D3 冻结语义，切片 28 两遍法照抄）：整包守卫不过抛错不进
+   * 事务 → ensureSeeded → 单 db.write（事务内全量读六表 → operations 同步收集 →
+   * 单次 db.batch）→ 返回 {applied, skipped}。逐块语义见 ItemRepository.applyDataSnapshot
+   * 文档注释。恢复成功后的 reminderScheduler.reconcile() 由调用方显式执行。
+   */
+  async applyDataSnapshot(snapshot: DataSnapshot): Promise<DataSnapshotApplyResult> {
+    if (!isDataSnapshotWire(snapshot)) {
+      throw new Error(
+        'applyDataSnapshot: 快照不符合 DataSnapshot 结构（version/kind/items/tags/reminders/channelPresets/itemTags）',
+      );
+    }
+    await this.ensureSeeded();
+    let applied = 0;
+    let skipped = 0;
+    await this.db.write(async () => {
+      // 1) 事务内全量读取本地相关表（先全读后写：读失败 = 整体不落库）。
+      const itemModels = await this.db.get<ItemModel>(ITEMS_TABLE).query().fetch();
+      const itemById = new Map(itemModels.map((model) => [model.id, model]));
+      const categoryModels = await this.db.get<CategoryModel>(CATEGORIES_TABLE).query().fetch();
+      const categoryIds = new Set(categoryModels.map((model) => model.id));
+      const tagModels = await this.db.get<TagModel>(TAGS_TABLE).query().fetch();
+      const tagByDedupKey = new Map<string, TagModel>();
+      for (const model of tagModels) {
+        const key = model.name.toLowerCase();
+        if (!tagByDedupKey.has(key)) {
+          tagByDedupKey.set(key, model);
+        }
+      }
+      const reminderModels = await this.db.get<ReminderModel>(REMINDERS_TABLE).query().fetch();
+      const reminderById = new Map(reminderModels.map((model) => [model.id, model]));
+      const presetModels = await this.db
+        .get<ChannelPresetModel>(CHANNEL_PRESETS_TABLE)
+        .query()
+        .fetch();
+      const presetById = new Map(presetModels.map((model) => [model.id, model]));
+      const joinModels = await this.db.get<ItemTagModel>(ITEM_TAGS_TABLE).query().fetch();
+
+      const operations: Model[] = [];
+
+      // —— items：按 id 命中覆盖 / 未命中创建（id 保真）/ 悬挂 categoryId 计 skipped。
+      // 快照内重复 id first-wins（同一本地行二次 prepareUpdate 会抛 pending 不变式，
+      // 同 id 二次 prepareCreate 会撞主键——统一首条生效、后续计 skipped）。
+      const seenItemIds = new Set<string>();
+      // 已解析条目集合（快照 item id == 恢复后本地行 id：命中行本就同 id，新建行
+      // _raw.id 写快照 id），供 reminders 的 item_id 与 itemTags 重建解析。
+      const resolvedItemIds = new Set<string>();
+      for (const entry of snapshot.items) {
+        if (!isDataSnapshotItemEntry(entry)) {
+          skipped += 1;
+          continue;
+        }
+        if (seenItemIds.has(entry.id)) {
+          skipped += 1;
+          continue;
+        }
+        seenItemIds.add(entry.id);
+        if (!categoryIds.has(entry.categoryId)) {
+          // categoryId 悬挂引用（快照指向不存在的分类）：跳过该条目（提案 §4.2）。
+          skipped += 1;
+          continue;
+        }
+        const existing = itemById.get(entry.id);
+        if (existing) {
+          // 命中覆盖：11 业务字段写穿；createdAt 不动、updatedAt 由 prepareUpdate
+          // 自动刷新（时间戳保真语义，提案 §4.2）。
+          operations.push(
+            existing.prepareUpdate((draft) => {
+              draft.type = entry.type;
+              draft.title = entry.title;
+              draft.content = entry.content;
+              draft.status = entry.status;
+              draft.startAt = entry.startAt;
+              draft.endAt = entry.endAt;
+              draft.allDay = entry.allDay;
+              draft.sourceType = entry.sourceType;
+              draft.sourceUid = entry.sourceUid;
+              draft.sourceReadOnly = entry.sourceReadOnly;
+              draft.categoryId = entry.categoryId;
+              draft.priority = entry.priority;
+            }),
+          );
+        } else {
+          // 未命中创建：id/created_at/updated_at 保真经 prepareCreateFromDirtyRaw
+          // （WatermelonDB sync apply 官方建行路径，sanitizedRaw 按列消毒；_status
+          // 'created' 与应用自建行一致）。快照条目已过谓词（有限数字/布尔/串），
+          // 消毒为透传。
+          operations.push(
+            this.db.get<ItemModel>(ITEMS_TABLE).prepareCreateFromDirtyRaw({
+              id: entry.id,
+              _status: 'created',
+              _changed: '',
+              type: entry.type,
+              title: entry.title,
+              content: entry.content,
+              status: entry.status,
+              start_at: entry.startAt,
+              end_at: entry.endAt,
+              all_day: entry.allDay,
+              source_type: entry.sourceType,
+              source_uid: entry.sourceUid,
+              source_read_only: entry.sourceReadOnly,
+              category_id: entry.categoryId,
+              priority: entry.priority,
+              created_at: entry.createdAt,
+              updated_at: entry.updatedAt,
+            }),
+          );
+        }
+        resolvedItemIds.add(entry.id);
+        applied += 1;
+      }
+
+      // —— tags：按 normalizeTagName 归一键命中覆盖 / 未命中创建（带快照 id）；
+      // name 为业务键命中行不写；快照内重复名 first-wins（提案 §4.2：与配置快照
+      // 「后者覆盖」刻意不同——数据快照的 tag id 是 itemTags join 锚点，首条即建
+      // 映射，后续重复名条目计 skipped 但其 id 仍映射首条解析行保 join 可解析）。
+      const tagResolution = new Map<string, string>(); // 快照 tag id → 本地行 id
+      const tagKeyResolution = new Map<string, string>(); // 归一键 → 本地行 id（first-wins）
+      const pendingTagOps: Array<{
+        model: TagModel | null;
+        id: string;
+        name: string;
+        color: string | null;
+        emoji: string | null;
+      }> = [];
+      for (const entry of snapshot.tags) {
+        if (!isDataSnapshotTagEntry(entry)) {
+          skipped += 1;
+          continue;
+        }
+        const { name, dedupKey } = normalizeTagName(entry.name);
+        const resolvedRowId = tagKeyResolution.get(dedupKey);
+        if (resolvedRowId !== undefined) {
+          tagResolution.set(entry.id, resolvedRowId);
+          skipped += 1;
+          continue;
+        }
+        const existing = tagByDedupKey.get(dedupKey) ?? null;
+        pendingTagOps.push({
+          model: existing,
+          id: entry.id,
+          name,
+          color: entry.color,
+          emoji: entry.emoji,
+        });
+        const localId = existing ? existing.id : entry.id;
+        tagKeyResolution.set(dedupKey, localId);
+        tagResolution.set(entry.id, localId);
+        applied += 1;
+      }
+      for (const pending of pendingTagOps) {
+        if (pending.model) {
+          operations.push(
+            pending.model.prepareUpdate((draft) => {
+              draft.color = pending.color;
+              draft.emoji = pending.emoji;
+            }),
+          );
+        } else {
+          operations.push(
+            this.db.get<TagModel>(TAGS_TABLE).prepareCreate((record) => {
+              record._raw.id = pending.id;
+              record.name = pending.name;
+              record.color = pending.color;
+              record.emoji = pending.emoji;
+            }),
+          );
+        }
+      }
+
+      // —— reminders：深层校验（防砖）→ 按 id 命中覆盖写穿 v10 语义列 / 未命中创建；
+      // item_id 不改（命中）、调度态两列（last_fired_occurrence_key/last_reconciled_at）
+      // 不写（防丢本地调度状态）、deprecated 两列新建行兜底 'system-notification'/null。
+      const seenReminderIds = new Set<string>();
+      const reminderUpdates: Array<{ model: ReminderModel; entry: DataSnapshotReminder }> = [];
+      const reminderCreates: Array<{ entry: DataSnapshotReminder; targetItemId: string }> = [];
+      for (const entry of snapshot.reminders) {
+        if (!isDataSnapshotReminderEntry(entry)) {
+          skipped += 1;
+          continue;
+        }
+        if (seenReminderIds.has(entry.id)) {
+          skipped += 1;
+          continue;
+        }
+        seenReminderIds.add(entry.id);
+        if (!isValidDataSnapshotReminderEntry(entry)) {
+          skipped += 1;
+          continue;
+        }
+        const existing = reminderById.get(entry.id);
+        if (existing) {
+          // 命中覆盖：item_id 不改（提案 §4.2）、调度态两列不写。
+          reminderUpdates.push({ model: existing, entry });
+        } else {
+          // 未命中创建：仅要求快照 itemId 指向本轮已解析 item（未在快照中的本地
+          // item 不承接新提醒，悬挂计 skipped，提案 §4.2）。
+          if (!resolvedItemIds.has(entry.itemId)) {
+            skipped += 1;
+            continue;
+          }
+          reminderCreates.push({ entry, targetItemId: entry.itemId });
+        }
+        applied += 1;
+      }
+      for (const { model, entry } of reminderUpdates) {
+        operations.push(
+          model.prepareUpdate((draft) => {
+            draft.frequency = entry.frequency;
+            draft.localTimeHour = entry.localTimeHour;
+            draft.localTimeMinute = entry.localTimeMinute;
+            draft.weekdaysJson = entry.weekdaysJson;
+            draft.dayOfMonth = entry.dayOfMonth;
+            draft.tzid = entry.tzid;
+            draft.startAt = entry.startAt;
+            draft.enabled = entry.enabled;
+            draft.onceCivilJson = entry.onceCivilJson;
+            draft.channelsJson = entry.channelsJson;
+            draft.channelConfigsJson = entry.channelConfigsJson;
+          }),
+        );
+      }
+      for (const { entry, targetItemId } of reminderCreates) {
+        operations.push(
+          this.db.get<ReminderModel>(REMINDERS_TABLE).prepareCreate((record) => {
+            record._raw.id = entry.id;
+            record.itemId = targetItemId;
+            record.frequency = entry.frequency;
+            record.localTimeHour = entry.localTimeHour;
+            record.localTimeMinute = entry.localTimeMinute;
+            record.weekdaysJson = entry.weekdaysJson;
+            record.dayOfMonth = entry.dayOfMonth;
+            record.tzid = entry.tzid;
+            record.startAt = entry.startAt;
+            record.enabled = entry.enabled;
+            record.onceCivilJson = entry.onceCivilJson;
+            // deprecated 两列兜底（v8 迁移回填语义）：channelsJson 恒非 null，读层
+            // legacy bridge 不会回退到这两列，写默认值仅为列完整性。
+            record.channel = DEFAULT_REMINDER_CHANNEL;
+            record.channelConfig = null;
+            record.channelsJson = entry.channelsJson;
+            record.channelConfigsJson = entry.channelConfigsJson;
+          }),
+        );
+      }
+
+      // —— channelPresets：按 id 命中覆盖 name/configJson/isDefault（type 创建后
+      // 不可变：与本地行 type 不匹配计 skipped，代码注释披露）/未命中创建（id 保真）；
+      // configJson 经渠道配置守卫校验（失败计 skipped）；同 type 单 default 规范化
+      // （slice-18 §3.3 不变量跨恢复事务成立：快照序最后一个声明 default 的行生效，
+      // 同 type 其余行——含本地独有——收敛为 false；快照未声明 default 的 type 不动本地）。
+      const seenPresetIds = new Set<string>();
+      const pendingPresetOps: Array<{ model: ChannelPresetModel | null; entry: DataSnapshotChannelPreset }> = [];
+      for (const entry of snapshot.channelPresets) {
+        if (!isDataSnapshotChannelPresetEntry(entry)) {
+          skipped += 1;
+          continue;
+        }
+        if (seenPresetIds.has(entry.id)) {
+          skipped += 1;
+          continue;
+        }
+        seenPresetIds.add(entry.id);
+        const existing = presetById.get(entry.id) ?? null;
+        if (existing && existing.type !== entry.type) {
+          skipped += 1;
+          continue;
+        }
+        try {
+          assertValidChannelPresetConfig(entry.type, entry.configJson, 'applyDataSnapshot');
+        } catch {
+          skipped += 1;
+          continue;
+        }
+        pendingPresetOps.push({ model: existing, entry });
+        applied += 1;
+      }
+      const pendingPresetModelIds = new Set<string>();
+      for (const op of pendingPresetOps) {
+        if (op.model !== null) {
+          pendingPresetModelIds.add(op.model.id);
+        }
+      }
+      const lastDefaultByType = new Map<ChannelPresetType, string>(); // type → 生效 default 行 id
+      for (const pending of pendingPresetOps) {
+        if (pending.entry.isDefault) {
+          lastDefaultByType.set(pending.entry.type, pending.model ? pending.model.id : pending.entry.id);
+        }
+      }
+      for (const pending of pendingPresetOps) {
+        const rowId = pending.model ? pending.model.id : pending.entry.id;
+        const isDefault = lastDefaultByType.get(pending.entry.type) === rowId;
+        if (pending.model) {
+          operations.push(
+            pending.model.prepareUpdate((draft) => {
+              draft.name = pending.entry.name;
+              draft.configJson = pending.entry.configJson;
+              draft.isDefault = isDefault;
+            }),
+          );
+        } else {
+          operations.push(
+            this.db.get<ChannelPresetModel>(CHANNEL_PRESETS_TABLE).prepareCreate((record) => {
+              record._raw.id = pending.entry.id;
+              record.name = pending.entry.name;
+              record.type = pending.entry.type;
+              record.configJson = pending.entry.configJson;
+              record.isDefault = isDefault;
+            }),
+          );
+        }
+      }
+      // 本地独有 default 收敛：快照声明了 default 的 type，其本地其余 default 行置
+      // false（已在 pendingPresetOps 的行上面按最终值写过，跳过防 pending 二次
+      // prepareUpdate 抛不变式）。
+      for (const [type, defaultId] of lastDefaultByType) {
+        for (const model of presetModels) {
+          if (
+            model.type === type &&
+            model.id !== defaultId &&
+            model.isDefault &&
+            !pendingPresetModelIds.has(model.id)
+          ) {
+            operations.push(
+              model.prepareUpdate((draft) => {
+                draft.isDefault = false;
+              }),
+            );
+          }
+        }
+      }
+
+      // —— itemTags：对每个已解析快照 item 删除现有全部 join + 按快照重建
+      // （join 表无其他消费方，重建幂等）；声明里 itemId/tagId 解析失败计 skipped，
+      // 重复 join 声明 first-wins（防同 join 双建）。删除不计 applied，新建 join 各计 1。
+      const joinsByItemId = new Map<string, ItemTagModel[]>();
+      for (const model of joinModels) {
+        const list = joinsByItemId.get(model.itemId) ?? [];
+        list.push(model);
+        joinsByItemId.set(model.itemId, list);
+      }
+      const declaredTagIdsByItemId = new Map<string, string[]>();
+      for (const entry of snapshot.itemTags) {
+        if (!isDataSnapshotItemTagEntry(entry)) {
+          skipped += 1;
+          continue;
+        }
+        if (!resolvedItemIds.has(entry.itemId)) {
+          skipped += 1;
+          continue;
+        }
+        const localTagId = tagResolution.get(entry.tagId);
+        if (localTagId === undefined) {
+          skipped += 1;
+          continue;
+        }
+        const list = declaredTagIdsByItemId.get(entry.itemId) ?? [];
+        if (list.includes(localTagId)) {
+          skipped += 1;
+          continue;
+        }
+        list.push(localTagId);
+        declaredTagIdsByItemId.set(entry.itemId, list);
+      }
+      for (const itemId of resolvedItemIds) {
+        for (const joinModel of joinsByItemId.get(itemId) ?? []) {
+          operations.push(joinModel.prepareDestroyPermanently());
+        }
+        for (const tagId of declaredTagIdsByItemId.get(itemId) ?? []) {
+          operations.push(
+            this.db.get<ItemTagModel>(ITEM_TAGS_TABLE).prepareCreate((record) => {
+              record.itemId = itemId;
+              record.tagId = tagId;
+            }),
+          );
+          applied += 1;
+        }
+      }
 
       await this.db.batch(...operations);
     });

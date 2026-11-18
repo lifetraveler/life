@@ -12,6 +12,10 @@ import type {
   ConfigSnapshot,
   ConfigSnapshotApplyResult,
 } from '../domain/configSnapshot';
+import type {
+  DataSnapshot,
+  DataSnapshotApplyResult,
+} from '../domain/dataSnapshot';
 import type { AppSettings } from '../domain/settings';
 import type {
   CreateReminderInput,
@@ -392,4 +396,43 @@ export interface ItemRepository {
    * M 项（形状不符）」）。整包守卫不过直接抛错，不进事务。
    */
   applyConfigSnapshot(snapshot: ConfigSnapshot): Promise<ConfigSnapshotApplyResult>;
+
+  // —— 切片 31 阶段 1：数据备份 WebDAV（repository.md v0.35 注记节；契约外显式扩展成对，
+  //    先例 createConfigSnapshot / filterExistingItemIds；AGENTS.md §7.43 D2——设置页
+  //    「数据备份」的组包（只读）/恢复（增量覆盖 writer 事务）落点）——
+  /**
+   * 只读组包当前数据快照（§7.43 D1 六块）：items 全库（listItemsWithTags ∪
+   * listArchivedItemsWithTags，含 archived/done）全字段 id 保真 + tags（含 id，
+   * 供 itemTags join 直连）+ reminders（仅 v10 语义列，不含调度态两列与 deprecated
+   * 两列）+ channelPresets（configJson 明文，用户定案）+ itemTags join 全量
+   * （item_tags 直查）。外层 {version:1, kind:'data', exportedAt}（formatExportedAt
+   * 同构）。
+   */
+  createDataSnapshot(): Promise<DataSnapshot>;
+  /**
+   * 增量覆盖恢复（§7.43 D3 冻结语义）：单 writer 事务原子完成（切片 28 两遍法——
+   * 事务内全量读 → operations 同步收集 → 单次 batch），中途失败整体回滚。
+   * items 按 id 命中覆盖全字段写穿（createdAt 不动、updatedAt 自动刷新）/未命中
+   * 创建（_raw.id + created_at/updated_at 经 _raw 保真）/本地独有保留；categoryId
+   * 悬挂计 skipped。tags 按 normalizeTagName 归一键命中覆盖 color/emoji（name 为
+   * 业务键不写）/未命中创建（带快照 id）/快照内重复名 first-wins（后续计 skipped，
+   * 其 id 仍映射首条解析行保 join 可解析）。reminders 按 id 命中覆盖写穿 v10 语义
+   * 列（item_id 不改、调度态两列不写）/未命中创建（item_id 解析失败计 skipped；
+   * channel 兜底 'system-notification' + channel_config=null）。channelPresets 按 id
+   * 命中覆盖 name/configJson/isDefault（type 与本地行不匹配计 skipped，type 创建后
+   * 不可变）/未命中创建（id 保真）/事务内同 type 单 default 规范化（快照序最后
+   * 一个 default 生效，其余行含本地独有收敛为 false）。itemTags 对每个已解析快照
+   * item 删除现有全部 join + 按快照重建（tagId 解析失败计 skipped；重复 join 声明
+   * first-wins）。快照内重复 id 统一 first-wins 计 skipped（防同模型二次
+   * prepareUpdate on pending）。
+   * 返回 applied（items/tags/reminders/channelPresets 每个实际写入条目计 1 +
+   * 每个新建 join 计 1，删除不计）/skipped（形状不符 + 深层校验失败（weekdaysJson/
+   * onceCivilJson 可解析、channelsJson 非空合法渠道数组且 expo≤1、channelConfigsJson
+   * null 或字符串字典、tzid 白名单、frequency 规则一致性、once 必携带
+   * onceCivilJson、configJson 经渠道配置守卫）+ 悬挂引用 + first-wins 丢弃 dup，
+   * UI 披露）。整包守卫不过直接抛错，不进事务。
+   * 恢复成功后的 reminderScheduler.reconcile() 由调用方（backup.tsx）显式执行一次
+   * （失败不阻断仅披露，useFlashChat 保存先例）——本方法不触碰 src/notifications/。
+   */
+  applyDataSnapshot(snapshot: DataSnapshot): Promise<DataSnapshotApplyResult>;
 }
