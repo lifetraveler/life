@@ -82,6 +82,18 @@ export function describeDraftChannelLine(
   return channels.map((channel) => REMINDER_CHANNEL_LABELS[channel]).join('、');
 }
 
+/**
+ * 绝对时刻提醒意图行（切片 32 / §7.44，ai.md v0.23）：draft.reminders 逐条
+ * 民用时刻（显式 tzid）。reminders 未表达（undefined/空数组）→ null（不渲染行）。
+ */
+export function describeDraftRemindersLine(
+  reminders: number[] | undefined,
+  tzid: string,
+): string | null {
+  if (reminders === undefined || reminders.length === 0) return null;
+  return reminders.map((epoch) => formatItemTime(epoch, tzid)).join('、');
+}
+
 export default function FlashPreviewCard({
   draft,
   categories,
@@ -93,6 +105,7 @@ export default function FlashPreviewCard({
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const category = categories.find((c) => c.id === draft.categoryId) ?? null;
   const channelLine = describeDraftChannelLine(draft.reminderChannels);
+  const remindersLine = describeDraftRemindersLine(draft.reminders, tzid);
   const timeText =
     draft.recurrence !== null
       ? `${describeRecurrenceRule(draft.recurrence)} ${String(
@@ -143,6 +156,9 @@ export default function FlashPreviewCard({
         <Text style={styles.rowText}>
           提醒：{draft.reminderDelayMinutes}分钟后
         </Text>
+      ) : null}
+      {remindersLine !== null ? (
+        <Text style={styles.rowText}>提醒：{remindersLine}（绝对时刻）</Text>
       ) : null}
       <Text style={styles.editHint}>
         {dismissed ? '草稿已放弃，重新输入可新建条目' : '点击卡片可修改字段'}

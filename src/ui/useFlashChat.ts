@@ -51,6 +51,7 @@ import {
 } from '../domain/ai/editIntent';
 import { buildFlashCardPayload } from '../domain/ai/cardPayload';
 import { runFlashTurn } from '../domain/ai/chat';
+import type { FlashTurnResult } from '../domain/ai/chat';
 import { diffDraftChanges } from '../domain/ai/editDiff';
 import type { DraftFieldChanges } from '../domain/ai/editDiff';
 import { formatAiUsageLine } from '../domain/ai/usage';
@@ -102,6 +103,19 @@ export interface FlashConfirmPayload {
   resolved: boolean;
 }
 
+/**
+ * 切片 32（AGENTS.md §7.44）：AI 调试查看器载荷——本轮远端解析的请求体原文
+ * （不含 HTTP headers）、响应原文（失败轮为错误响应文本）与解析草稿 JSON。
+ * 内存态消息字段，不持久化、不进 history、不进 ParsedItemDraft（传输边界
+ * v0.20 同款冻结）。request/response 来自 FlashTurnResult.debug 副通道。
+ */
+export interface FlashDebugPayload {
+  request: string | null;
+  response: string | null;
+  /** 本轮解析草稿 JSON（远端成功轮=远端草稿；失败降级轮=本地兜底草稿）。 */
+  draft: string;
+}
+
 export interface FlashChatMessage {
   id: number;
   role: 'user' | 'assistant';
@@ -113,6 +127,11 @@ export interface FlashChatMessage {
   kind: 'text' | 'card' | 'confirm';
   cardPayload?: FlashCardPayload;
   confirmPayload?: FlashConfirmPayload;
+  /**
+   * 切片 32（§7.44）：AI 调试入口消息携带（debugPayload 必有）；点击弹出
+   * 调试弹层，三节显隐由当下设置（showAiRequest/showAiResponse）决定。
+   */
+  debugPayload?: FlashDebugPayload;
 }
 
 export interface ConfirmSaveResult {
@@ -460,6 +479,8 @@ export function useFlashChat() {
     carefulMode: boolean;
     showAiUsage: boolean;
     aiRetryMax: number;
+    showAiRequest: boolean;
+    showAiResponse: boolean;
   }> => {
     try {
       const settings = await itemRepository.getSettings();
@@ -467,10 +488,19 @@ export function useFlashChat() {
         carefulMode: settings.carefulMode === true,
         showAiUsage: settings.showAiUsage === true,
         aiRetryMax: settings.aiRetryMax,
+        // 切片 32（§7.44）：调试查看器两开关（读层 boolean 守卫已回退默认）。
+        showAiRequest: settings.showAiRequest === true,
+        showAiResponse: settings.showAiResponse === true,
       };
     } catch (error) {
       console.warn('[slice-25/26/30] 本轮设置读取失败，回退默认', error);
-      return { carefulMode: false, showAiUsage: false, aiRetryMax: DEFAULT_AI_RETRY_MAX };
+      return {
+        carefulMode: false,
+        showAiUsage: false,
+        aiRetryMax: DEFAULT_AI_RETRY_MAX,
+        showAiRequest: false,
+        showAiResponse: false,
+      };
     }
   }, []);
 
@@ -487,6 +517,44 @@ export function useFlashChat() {
       push('assistant', formatAiUsageLine(usage));
     },
     [push],
+  );
+
+  /**
+   * 切片 32（AGENTS.md §7.44）：AI 调试入口消息——远端解析轮（成功或失败
+   * 降级）且任一调试开关开启时，在 AI 回复/用量行之后追加一条带 debugPayload
+   * 的入口消息（弹层点击入口；本地/无 Key 轮 debug 恒 null 不追加）。开关全关
+   * 不采集不展示（现状）。
+   */
+  const pushDebugEntry = useCallback(
+    (
+      debug: FlashTurnResult['debug'],
+      draft: ParsedItemDraft,
+      degraded: boolean,
+      turnSettings: { showAiRequest: boolean; showAiResponse: boolean },
+    ): void => {
+      if (debug === null) return;
+      if (!turnSettings.showAiRequest && !turnSettings.showAiResponse) return;
+      const text = degraded
+        ? '🔍 AI 调试：远端解析失败已降级，点击查看请求/响应'
+        : '🔍 AI 调试：点击查看本轮 AI 输入/输出';
+      const id = nextIdRef.current;
+      nextIdRef.current += 1;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id,
+          role: 'assistant',
+          text,
+          kind: 'text',
+          debugPayload: {
+            request: debug.request,
+            response: debug.response,
+            draft: JSON.stringify(draft),
+          },
+        },
+      ]);
+    },
+    [],
   );
 
   /**
@@ -703,14 +771,18 @@ export function useFlashChat() {
             push('assistant', result.assistantNote);
           }
           // 切片 26（§7.38）：远端澄清轮同样在回复尾追加用量行（降级轮 usage
-          // 恒 null，不展示）。
+          // 恒 null，不展示）。切片 32（§7.44）：调试入口消息随后（远端澄清
+          // 轮同样可查看请求/响应）。
           pushUsageLine(result.usage, turnSettings.showAiUsage);
+          pushDebugEntry(result.debug, result.draft, result.degraded, turnSettings);
           return;
         }
         setDraft(result.draft);
         push('assistant', result.assistantNote);
         // 切片 26（§7.38）：远端解析轮在 AI 回复消息尾追加一行用量摘要。
+        // 切片 32（§7.44）：调试入口消息随后（降级轮 degraded 文案区分）。
         pushUsageLine(result.usage, turnSettings.showAiUsage);
+        pushDebugEntry(result.debug, result.draft, result.degraded, turnSettings);
       } catch (error) {
         console.warn('[slice-15] 解析失败', error);
         push(
@@ -724,7 +796,7 @@ export function useFlashChat() {
         setRetryNotice(null);
       }
     },
-    [busy, push, applyEditToCard, applyEditToDraft, cancelPendingConfirm, readTurnSettings, pushUsageLine, pushConfirm],
+    [busy, push, applyEditToCard, applyEditToDraft, cancelPendingConfirm, readTurnSettings, pushUsageLine, pushDebugEntry, pushConfirm],
   );
 
   /**
