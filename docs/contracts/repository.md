@@ -367,3 +367,63 @@ SystemImportResult：
 > （docs/proposals/slice-28-config-backup-webdav.md §6）原文标注「v0.22」，
 > 与本文件既有节按 AGENTS.md 版本标注的惯例不一致；本节按惯例标 v0.34
 > （切片 28），语义以本节为准。
+
+## 数据备份快照接口（v0.35，切片 31 阶段 1 落地）
+
+> 依据：AGENTS.md §7.43（数据备份 WebDAV）；先例为 createConfigSnapshot /
+> applyConfigSnapshot（切片 28，本文件 v0.34 注记节）的契约外显式扩展成对模式。
+> 既有全部冻结签名零 diff，本节为追加性注记。
+
+### ItemRepository 成对扩展（createDataSnapshot / applyDataSnapshot）
+- `createDataSnapshot(): Promise<DataSnapshot>`：只读组包（listItemsWithTags ∪
+  listArchivedItemsWithTags 全库含 archived/done + listAllReminders + listTags +
+  listChannelPresets + item_tags 直查），返回
+  `{version: 1, kind: 'data', exportedAt, items, tags, reminders, channelPresets, itemTags}`；
+  items 全字段 id 保真；tags 含 id（供 itemTags join 直连）；reminders 仅 v10 语义列
+  （不含调度态 last_fired_occurrence_key/last_reconciled_at 与 deprecated
+  channel/channel_config）；channelPresets 含 configJson 明文（用户定案）；
+  exportedAt 本地时区 ISO 8601 含 ±HH:MM 偏移。
+- `applyDataSnapshot(snapshot: DataSnapshot): Promise<DataSnapshotApplyResult>`：
+  增量覆盖恢复，返回 `{applied, skipped}` 计数。非 DataSnapshot 结构
+  （isDataSnapshotWire 不过）抛错，库零变化。语义冻结：
+  - **items**：按 id 命中覆盖全字段写穿（createdAt 不动、updatedAt 自动刷新）/
+    未命中创建（`prepareCreateFromDirtyRaw` 保真 id 与 created_at/updated_at）/
+    本地独有保留；categoryId 悬挂引用跳过计 skipped。
+  - **tags**：按 normalizeTagName 归一键命中覆盖 color/emoji（name 业务键不写）/
+    未命中创建（id 取快照值、created_at 恢复时刻）；快照内重复名 **first-wins**
+    （与 v0.34 配置快照「后者覆盖」刻意不同——数据快照 tag id 是 itemTags join
+    锚点；重复名条目计 skipped 但其 id 仍映射首条解析行保 join 可解析）。
+  - **reminders**：按 id 命中覆盖写穿 v10 语义列（item_id 不改；调度态两列不写，
+    防丢本地调度状态）/ 未命中创建（item_id 须解析到本轮已解析 item，失败计
+    skipped；deprecated 两列兜底 channel='system-notification' + channel_config=null；
+    created_at/updated_at 恢复时刻）。恢复前逐条深层校验（防读路径抛错）：
+    weekdaysJson/onceCivilJson 可解析、frequency 规则一致性
+    （normalizeReminderRuleFields）、once 必携带 onceCivilJson、channelsJson 非空
+    合法渠道数组且 expo ≤1、channelConfigsJson null 或字符串字典、tzid 白名单；
+    失败计 skipped。
+  - **channelPresets**：按 id 命中覆盖 name/configJson/isDefault（type 与本地行
+    不匹配计 skipped——type 创建后不可变）/ 未命中创建（id 取快照值）；
+    configJson 经既有渠道配置守卫（assertValidChannelPresetConfig）校验失败计
+    skipped；事务内同 type 单 default 规范化（快照序最后一个声明 default 的行生效，
+    同 type 其余行含本地独有收敛为 false；快照未声明 default 的 type 不动本地）。
+  - **itemTags**：对每个已解析快照 item 删除现有全部 join + 按快照重建（删除不计
+    applied、新建 join 各计 1）；itemId/tagId 解析失败计 skipped；重复 join 声明
+    first-wins。
+  - **快照内重复 id 统一 first-wins**（items/reminders/channelPresets 同纪律：
+    后续重复条目计 skipped——防同模型二次 prepareUpdate on pending 与同 id 双建）。
+  - **计数口径**：applied = items/tags/reminders/channelPresets 每个实际写入
+    （覆盖或创建）条目计 1 + 每个新建 itemTags join 计 1；skipped = 形状不符 +
+    深层校验失败 + 悬挂引用（categoryId/item_id/tagId）+ first-wins 丢弃 dup。
+    UI 披露「已应用 N 项，跳过 M 项」。恢复成功后的
+    reminderScheduler.reconcile() 由调用方显式执行一次（失败不阻断仅披露），
+    本方法不触碰 src/notifications/。
+  - **事务原子**：单 db.write 事务，事务内全量读六表 → operations 同步收集 →
+    单次 `db.batch(...)`（切片 28 两遍法照抄）；任一失败整体不落库。
+- 配套域层：src/domain/dataSnapshot.ts（isDataSnapshotWire 整包守卫 + 五个条目级
+  宽容谓词 + parseDataSnapshot/DataSnapshotParseError + 文件名正则
+  `^life-data-\d{8}-\d{6}\.json$` + dataSnapshotFileName）。序列化无缩进
+  （提案 §7 体积优先，与配置快照 2 空格缩进刻意不同）。
+- WebDAV 客户端配套（src/data/webdav/WebdavClient.ts）：SnapshotFileNameFilter
+  谓词类型，listSnapshots/uploadSnapshot/downloadSnapshot/deleteSnapshot 方法级
+  可选参数缺省 isConfigSnapshotFileName（切片 28 调用面零改动）；数据快照经
+  isDataSnapshotFileName 传入，独立列表/裁剪/下载/删除，与配置快照互不挤占。

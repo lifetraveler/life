@@ -8,6 +8,10 @@
  * 兼容性口径（提案 §4.2/§7）：PROPFIND 解析以 href 为主、displayname 兜底、
  * 命名空间前缀宽容（D:/d:/无）；MKCOL 405 = 目录已存在容忍；DELETE 失败仅
  * 计入披露清单不重试不阻塞（滚动保留最近 10 份）。
+ *
+ * v0.35（切片 31，§7.43 D6）：快照文件名过滤方法级参数化（SnapshotFileNameFilter，
+ * 缺省 isConfigSnapshotFileName 向后兼容）——数据快照 life-data-*.json 独立列表/
+ * 上传/下载/删除，滚动保留 10 份与配置快照互不挤占。
  */
 
 import { isConfigSnapshotFileName } from '../../domain/configSnapshot';
@@ -18,8 +22,14 @@ import { buildWebdavUrl } from '../../domain/webdav/url';
 
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
+/**
+ * 快照文件名过滤器（切片 31 v0.35 参数化，§7.43 D6）：CONFIG / DATA 快照各自
+ * 传入自己的谓词；缺省 isConfigSnapshotFileName 向后兼容切片 28 调用面。
+ */
+export type SnapshotFileNameFilter = (fileName: string) => boolean;
+
 export interface WebdavSnapshotFileInfo {
-  /** 文件名（href basename 解码后），恒匹配 CONFIG_SNAPSHOT_FILE_PATTERN。 */
+  /** 文件名（href basename 解码后），恒匹配传入的 fileNameFilter 谓词。 */
   name: string;
   /** getlastmodified 解析值；缺失/不可解析为 null。 */
   lastModified: Date | null;
@@ -131,11 +141,14 @@ export class WebdavClient {
   }
 
   /**
-   * 快照列表（§7.42 D5）：PROPFIND 解析 href 为主，仅保留匹配
-   * CONFIG_SNAPSHOT_FILE_PATTERN 的条目，按名倒序 = 时间倒序（文件名内嵌
+   * 快照列表（§7.42 D5；v0.35 文件名过滤参数化）：PROPFIND 解析 href 为主，仅保留
+   * 匹配 fileNameFilter（缺省 CONFIG pattern）的条目，按名倒序 = 时间倒序（文件名内嵌
    * 定宽时间戳，字典序即时间序）。空 body / 无 <response> 块 → invalid-response。
    */
-  async listSnapshots(config: WebdavConfig): Promise<WebdavSnapshotFileInfo[]> {
+  async listSnapshots(
+    config: WebdavConfig,
+    fileNameFilter: SnapshotFileNameFilter = isConfigSnapshotFileName,
+  ): Promise<WebdavSnapshotFileInfo[]> {
     const response = await this.request(config, {
       method: 'PROPFIND',
       url: buildWebdavUrl(config),
@@ -153,7 +166,7 @@ export class WebdavClient {
     const files: WebdavSnapshotFileInfo[] = [];
     for (const entry of entries) {
       const name = decodeHrefBasename(entry.name);
-      if (name === null || !isConfigSnapshotFileName(name)) continue;
+      if (name === null || !fileNameFilter(name)) continue;
       const lastModified =
         entry.lastModified !== null && !Number.isNaN(entry.lastModified.getTime())
           ? entry.lastModified
@@ -165,16 +178,18 @@ export class WebdavClient {
   }
 
   /**
-   * 上传快照（§7.42 D5）：MKCOL 建目录（405 容忍 = 已存在）→ PUT
-   * application/json → PROPFIND 倒序保留最近 KEEP_SNAPSHOT_COUNT 份，其余逐个
+   * 上传快照（§7.42 D5；v0.35 文件名过滤参数化）：MKCOL 建目录（405 容忍 = 已存在）→ PUT
+   * application/json → PROPFIND 倒序保留最近 KEEP_SNAPSHOT_COUNT 份（仅按同一
+   * fileNameFilter 圈定裁剪对象——CONFIG/DATA 独立计数互不挤占），其余逐个
    * DELETE（2xx/404 计成功；其余失败推 pruneFailedNames 仅披露，不重试不阻塞）。
    */
   async uploadSnapshot(
     config: WebdavConfig,
     fileName: string,
     content: string,
+    fileNameFilter: SnapshotFileNameFilter = isConfigSnapshotFileName,
   ): Promise<UploadSnapshotResult> {
-    if (!isConfigSnapshotFileName(fileName)) {
+    if (!fileNameFilter(fileName)) {
       throw new WebdavError('invalid-response', `非法快照文件名：${fileName}`);
     }
     const mkcol = await this.request(config, { method: 'MKCOL', url: buildWebdavUrl(config) });
@@ -189,13 +204,13 @@ export class WebdavClient {
     });
     this.requireSuccess(put, '上传快照');
 
-    const files = await this.listSnapshots(config);
+    const files = await this.listSnapshots(config, fileNameFilter);
     const stale = files.slice(KEEP_SNAPSHOT_COUNT);
     let prunedCount = 0;
     const pruneFailedNames: string[] = [];
     for (const file of stale) {
       try {
-        const deleted = await this.deleteSnapshot(config, file.name);
+        const deleted = await this.deleteSnapshot(config, file.name, fileNameFilter);
         if (deleted) prunedCount += 1;
       } catch {
         pruneFailedNames.push(file.name);
@@ -204,9 +219,13 @@ export class WebdavClient {
     return { fileName, prunedCount, pruneFailedNames };
   }
 
-  /** 下载快照文本（GET）。文件名先过正则（防构造任意路径）。 */
-  async downloadSnapshot(config: WebdavConfig, fileName: string): Promise<string> {
-    if (!isConfigSnapshotFileName(fileName)) {
+  /** 下载快照文本（GET）。文件名先过 fileNameFilter（缺省 CONFIG，防构造任意路径）。 */
+  async downloadSnapshot(
+    config: WebdavConfig,
+    fileName: string,
+    fileNameFilter: SnapshotFileNameFilter = isConfigSnapshotFileName,
+  ): Promise<string> {
+    if (!fileNameFilter(fileName)) {
       throw new WebdavError('invalid-response', `非法快照文件名：${fileName}`);
     }
     const response = await this.request(config, {
@@ -218,8 +237,12 @@ export class WebdavClient {
   }
 
   /** 删除单份快照（DELETE）。404 = 已不存在返回 false；2xx 返回 true；其余抛错。 */
-  async deleteSnapshot(config: WebdavConfig, fileName: string): Promise<boolean> {
-    if (!isConfigSnapshotFileName(fileName)) {
+  async deleteSnapshot(
+    config: WebdavConfig,
+    fileName: string,
+    fileNameFilter: SnapshotFileNameFilter = isConfigSnapshotFileName,
+  ): Promise<boolean> {
+    if (!fileNameFilter(fileName)) {
       throw new WebdavError('invalid-response', `非法快照文件名：${fileName}`);
     }
     const response = await this.request(config, {

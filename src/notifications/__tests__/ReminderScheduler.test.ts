@@ -12,6 +12,10 @@ import type {
   ConfigSnapshot,
   ConfigSnapshotApplyResult,
 } from '../../domain/configSnapshot';
+import type {
+  DataSnapshot,
+  DataSnapshotApplyResult,
+} from '../../domain/dataSnapshot';
 import type { CreateReminderInput, Reminder, UpdateReminderInput } from '../../domain/reminder';
 import type { ItemWithTags, Tag } from '../../domain/tag';
 import type { ItemWithRelations } from '../../domain/relations/itemWithRelations';
@@ -214,6 +218,15 @@ class FakeRepository implements ItemRepository {
 
   async applyConfigSnapshot(_snapshot: ConfigSnapshot): Promise<ConfigSnapshotApplyResult> {
     throw new Error('FakeRepository.applyConfigSnapshot: 调度器测试不触达配置备份');
+  }
+
+  // 切片 31 阶段 1（§7.43 D2）：调度器不触达，stub 仅满足接口编译（§7.13 夹具）。
+  async createDataSnapshot(): Promise<DataSnapshot> {
+    throw new Error('FakeRepository.createDataSnapshot: 调度器测试不触达数据备份');
+  }
+
+  async applyDataSnapshot(_snapshot: DataSnapshot): Promise<DataSnapshotApplyResult> {
+    throw new Error('FakeRepository.applyDataSnapshot: 调度器测试不触达数据备份');
   }
 
   async listEnabledReminders(): Promise<Reminder[]> {

@@ -5,9 +5,11 @@
  * deleteSnapshot、错误五分类、Basic Auth、15s 超时（20ms 注入）。
  */
 
-import { WebdavClient, type FetchLike } from '../WebdavClient';
+import { WebdavClient, type FetchLike, type SnapshotFileNameFilter } from '../WebdavClient';
 import { WebdavError } from '../../../domain/webdav/WebdavError';
 import type { WebdavConfig } from '../../../domain/webdav/config';
+import { isDataSnapshotFileName } from '../../../domain/dataSnapshot';
+import { isConfigSnapshotFileName } from '../../../domain/configSnapshot';
 
 const CONFIG: WebdavConfig = {
   baseUrl: 'https://dav.example.com',
@@ -359,5 +361,118 @@ describe('错误实例冒泡纪律', () => {
     expect(webdavError.name).toBe('WebdavError');
     expect(typeof webdavError.message).toBe('string');
     expect(webdavError.message.length).toBeGreaterThan(0);
+  });
+});
+
+describe('SnapshotFileNameFilter 参数化（切片 31 v0.35，§7.43 D6）', () => {
+  function sixDataNames(): string[] {
+    return [3, 2, 1].map(
+      (i) => `life-data-20260101-1200${String(i).padStart(2, '0')}.json`,
+    );
+  }
+
+  const dataFilter: SnapshotFileNameFilter = isDataSnapshotFileName;
+
+  it('listSnapshots：data 谓词只返回 life-data-*.json（CONFIG 名与垃圾名被滤掉），倒序', async () => {
+    const names = [...sixDataNames(), 'life-config-20260101-120001.json', 'README.md'];
+    const { client } = makeClient(() =>
+      new Response(multistatus(snapshotEntries(names)), { status: 207 }),
+    );
+    const files = await client.listSnapshots(CONFIG, dataFilter);
+    expect(files.map((file) => file.name)).toEqual([
+      'life-data-20260101-120003.json',
+      'life-data-20260101-120002.json',
+      'life-data-20260101-120001.json',
+    ]);
+  });
+
+  it('listSnapshots：缺省谓词 = CONFIG（向后兼容切片 28 调用面，data 名被滤掉）', async () => {
+    const names = [...sixDataNames(), 'life-config-20260101-120001.json'];
+    const { client } = makeClient(() =>
+      new Response(multistatus(snapshotEntries(names)), { status: 207 }),
+    );
+    const files = await client.listSnapshots(CONFIG);
+    expect(files.map((file) => file.name)).toEqual(['life-config-20260101-120001.json']);
+  });
+
+  it('uploadSnapshot：data 谓词裁剪只圈 data 文件（CONFIG 名不挤占也不被删）', async () => {
+    // 11 份 data + 2 份 config：data 倒序 slice(10) 应删最旧 1 份 data；config 全保留。
+    const dataNames = [
+      'life-data-20260101-120000.json',
+      ...sixDataNames(),
+      'life-data-20260101-120004.json',
+      'life-data-20260101-120005.json',
+      'life-data-20260101-120006.json',
+      'life-data-20260101-120007.json',
+      'life-data-20260101-120008.json',
+      'life-data-20260101-120009.json',
+      'life-data-20260101-120010.json',
+    ];
+    const configNames = ['life-config-20260101-120001.json', 'life-config-20260101-120002.json'];
+    const { client, calls } = makeClient((call) => {
+      const method = methodOf(call);
+      if (method === 'MKCOL') return new Response(null, { status: 201 });
+      if (method === 'PUT') return new Response(null, { status: 201 });
+      if (method === 'PROPFIND') {
+        return new Response(multistatus(snapshotEntries([...dataNames, ...configNames])), {
+          status: 207,
+        });
+      }
+      if (method === 'DELETE') return new Response(null, { status: 204 });
+      throw new Error(`unexpected method ${method}`);
+    });
+    const result = await client.uploadSnapshot(
+      CONFIG,
+      'life-data-20261118-090503.json',
+      '{"kind":"data"}',
+      dataFilter,
+    );
+    expect(result).toEqual({
+      fileName: 'life-data-20261118-090503.json',
+      prunedCount: 1,
+      pruneFailedNames: [],
+    });
+    const deleteUrls = calls.filter((call) => methodOf(call) === 'DELETE').map((call) => call.url);
+    expect(deleteUrls).toEqual([`${DIR_URL}life-data-20260101-120000.json`]); // 只删 data 最旧 1 份。
+  });
+
+  it('uploadSnapshot：data 谓词拒绝 CONFIG 文件名（invalid-response，零网络调用）', async () => {
+    const { client, calls } = makeClient(() => new Response(null, { status: 201 }));
+    await expect(
+      client.uploadSnapshot(CONFIG, 'life-config-20260101-120001.json', '{}', dataFilter),
+    ).rejects.toThrow(WebdavError);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('downloadSnapshot / deleteSnapshot：data 谓词收放（data 名放行、CONFIG 名拒绝）', async () => {
+    const { client, calls } = makeClient((call) => {
+      const method = methodOf(call);
+      if (method === 'GET') return new Response('{"kind":"data"}', { status: 200 });
+      if (method === 'DELETE') return new Response(null, { status: 204 });
+      throw new Error(`unexpected method ${method}`);
+    });
+    await expect(client.downloadSnapshot(CONFIG, 'life-data-20260101-120001.json', dataFilter)).resolves.toBe(
+      '{"kind":"data"}',
+    );
+    await expect(client.deleteSnapshot(CONFIG, 'life-data-20260101-120001.json', dataFilter)).resolves.toBe(
+      true,
+    );
+    await expect(
+      client.downloadSnapshot(CONFIG, 'life-config-20260101-120001.json', dataFilter),
+    ).rejects.toThrow(WebdavError);
+    await expect(client.deleteSnapshot(CONFIG, 'life-config-20260101-120001.json', dataFilter)).rejects.toThrow(
+      WebdavError,
+    );
+    // 成功 GET+DELETE 各 1 次；两个非法名在客户端即拒（各 0 网络调用）。
+    expect(calls.map(methodOf)).toEqual(['GET', 'DELETE']);
+  });
+
+  it('isConfigSnapshotFileName / isDataSnapshotFileName 互斥（同目录双正则不互相命中）', () => {
+    const configName = 'life-config-20260101-120001.json';
+    const dataName = 'life-data-20260101-120001.json';
+    expect(isConfigSnapshotFileName(configName)).toBe(true);
+    expect(isConfigSnapshotFileName(dataName)).toBe(false);
+    expect(isDataSnapshotFileName(dataName)).toBe(true);
+    expect(isDataSnapshotFileName(configName)).toBe(false);
   });
 });
