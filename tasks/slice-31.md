@@ -4,6 +4,7 @@
 - 基点：main @ 5edeeec（切片 28 合并 + docs 回填 + backlog 立项登记后）
 - 分支：task/slice-31（从 main @ 5edeeec 切出）；提案/任务卡与 AGENTS.md v0.35 随阶段 1 提交
 - 验收基线：tsc 0 错；jest **95 套件/1314 用例**（slice-28-closeout）只增不减；expo-doctor 2 项预存失败无新增；schema 停留 v15 零迁移
+- **状态（2026-11-18 收尾）**：✅ 完成——阶段 1 `659a9bb` / 阶段 2 `0ac3e10`；验收终态 tsc 0 错 / jest 98 套件·1365 用例 / expo-doctor 2 项预存 / 真机矩阵 9 项过 + 损坏负例；**4 项真机 pending**（#4 全量还原、#10 断网/401 文案、#11 导出回归、chips 改回 [10,60]）经用户批准移入 backlog「切片 31 真机验收补做」（猴王 adb 死锁事故，见 `tasks/slice-31-closeout.md` §四）。
 
 ## §0 明确不做（禁改清单）
 
