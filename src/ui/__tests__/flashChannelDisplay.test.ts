@@ -15,7 +15,7 @@ jest.mock('expo-localization', () => ({
 }));
 
 import { describeDraftChannelLine } from '../FlashPreviewCard';
-import { describeCardReminderLine } from '../FlashResultCard';
+import { describeCardReminderLines } from '../FlashResultCard';
 import { formatReminderRuleSummary } from '../timeFormat';
 import type { FlashCardReminderSnapshot } from '../../domain/ai/types';
 
@@ -58,40 +58,57 @@ describe('describeDraftChannelLine（预览卡渠道行）', () => {
   });
 });
 
-describe('describeCardReminderLine（结果卡提醒行）', () => {
-  it('reminder null → null（整行不渲染）', () => {
-    expect(describeCardReminderLine(null)).toBeNull();
+describe('describeCardReminderLines（结果卡提醒行，切片 32 多计划）', () => {
+  it('空数组 → []（整块不渲染）', () => {
+    expect(describeCardReminderLines([])).toEqual([]);
   });
 
   it('alarm → ⏰ + 「闹钟 · 规则摘要」', () => {
     const target = snapshot({ channels: ['alarm'] });
-    expect(describeCardReminderLine(target)).toEqual({
-      icon: '⏰',
-      text: `闹钟 · ${formatReminderRuleSummary(target)}`,
-    });
+    expect(describeCardReminderLines([target])).toEqual([
+      {
+        icon: '⏰',
+        text: `闹钟 · ${formatReminderRuleSummary(target)}`,
+      },
+    ]);
   });
 
   it('system-notification → 🔔 + 「通知 · 规则摘要」', () => {
     const target = snapshot({ channels: ['system-notification'] });
-    expect(describeCardReminderLine(target)).toEqual({
-      icon: '🔔',
-      text: `通知 · ${formatReminderRuleSummary(target)}`,
-    });
+    expect(describeCardReminderLines([target])).toEqual([
+      {
+        icon: '🔔',
+        text: `通知 · ${formatReminderRuleSummary(target)}`,
+      },
+    ]);
   });
 
   it('网络渠道 → 🔔 + 渠道标签 · 规则摘要', () => {
     const target = snapshot({ channels: ['webhook', 'apprise'] });
-    expect(describeCardReminderLine(target)).toEqual({
-      icon: '🔔',
-      text: `Webhook、Apprise · ${formatReminderRuleSummary(target)}`,
-    });
+    expect(describeCardReminderLines([target])).toEqual([
+      {
+        icon: '🔔',
+        text: `Webhook、Apprise · ${formatReminderRuleSummary(target)}`,
+      },
+    ]);
   });
 
   it('channels 空 → 「通知」兜底（快照恒携带渠道，空数组仅防御路径）', () => {
     const target = snapshot({ channels: [] });
-    expect(describeCardReminderLine(target)).toEqual({
-      icon: '🔔',
-      text: `通知 · ${formatReminderRuleSummary(target)}`,
-    });
+    expect(describeCardReminderLines([target])).toEqual([
+      {
+        icon: '🔔',
+        text: `通知 · ${formatReminderRuleSummary(target)}`,
+      },
+    ]);
+  });
+
+  it('多条提醒逐条产出行、顺序保留（切片 32 多计划卡片）', () => {
+    const alarm = snapshot({ id: 'rem-1', channels: ['alarm'] });
+    const notify = snapshot({ id: 'rem-2', channels: ['system-notification'] });
+    const lines = describeCardReminderLines([alarm, notify]);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]?.icon).toBe('⏰');
+    expect(lines[1]?.icon).toBe('🔔');
   });
 });

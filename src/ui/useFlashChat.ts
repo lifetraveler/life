@@ -145,19 +145,20 @@ const CONFIRM_MESSAGE_TEXT = '标题/内容修改需要你确认。';
 const CONFIRM_DISMISS_NOTE = '已放弃本次修改，卡片保持原样。';
 
 /**
- * 编辑/推迟后刷新卡片提醒快照：被顺延的 once 提醒若正是卡片快照里那条，
- * 用新 onceAt 替换（卡片提醒行 once 显示绝对触发时刻，随之可见变化）；
- * 未被顺延（重复提醒/无提醒/快照与库中不一致）保持原快照。
+ * 编辑/推迟后刷新卡片提醒快照（切片 32 / §7.44 多计划）：对载荷里**每一条**
+ * once 提醒快照，若其 id 命中被顺延集合则用新 onceAt 替换（chips 快捷推迟对
+ * 全部 once 提醒生效，卡片段落随之可见变化）；未命中（重复提醒/无提醒/快照
+ * 与库中不一致）保持原快照。
  */
 function patchReminderSnapshot(
   target: FlashCardPayload,
   updatedOnceAt: Map<string, OnceCivilTime>,
-): FlashCardPayload['reminder'] {
-  if (target.reminder === null) return null;
-  const nextOnceAt = updatedOnceAt.get(target.reminder.id);
-  return nextOnceAt === undefined
-    ? target.reminder
-    : { ...target.reminder, onceAt: nextOnceAt };
+): FlashCardPayload['reminders'] {
+  if (target.reminders.length === 0) return [];
+  return target.reminders.map((snapshot) => {
+    const nextOnceAt = updatedOnceAt.get(snapshot.id);
+    return nextOnceAt === undefined ? snapshot : { ...snapshot, onceAt: nextOnceAt };
+  });
 }
 
 /**
@@ -424,7 +425,7 @@ export function useFlashChat() {
         updateCard(target.itemId, {
           startAt: newStart,
           endAt: newEnd,
-          reminder: patchReminderSnapshot(target, updatedOnceAt),
+          reminders: patchReminderSnapshot(target, updatedOnceAt),
         });
         const note = `已改为 ${formatItemTime(newStart, tzid)}`;
         appendEditHistory(input, note);
@@ -822,12 +823,23 @@ export function useFlashChat() {
       for (const name of plan.tagNames) {
         await itemRepository.addTagToItem(created.id, name);
       }
-      let createdReminder: Reminder | null = null;
-      if (plan.reminderPlan !== null) {
-        createdReminder = await itemRepository.createReminder({
-          ...plan.reminderPlan,
-          itemId: created.id,
-        });
+      // 切片 32（§7.44）多计划执行链：逐条顺序 await，单条失败 warn + 披露、
+      // 不中断不回滚（条目已落库；部分提醒未创建属可披露的部分成功，与
+      // createItem 失败=整链失败的语义分开）。披露追加在 plan.reminderNotices
+      //（域层披露，含「提醒时刻已过去」等）之后一并出消息。
+      const createdReminders: Reminder[] = [];
+      const reminderFailureNotices: string[] = [];
+      for (const reminderPlan of plan.reminderPlans) {
+        try {
+          createdReminders.push(
+            await itemRepository.createReminder({ ...reminderPlan, itemId: created.id }),
+          );
+        } catch (error) {
+          console.warn('[slice-32] 提醒创建失败（不中断保存链）', error);
+          reminderFailureNotices.push(
+            `一条提醒创建失败：${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
       }
       try {
         await reminderScheduler.reconcile();
@@ -860,12 +872,16 @@ export function useFlashChat() {
       }
       pushCard(
         message,
-        buildFlashCardPayload(created, plan.timePatch, createdReminder, cardCategories),
+        buildFlashCardPayload(created, plan.timePatch, createdReminders, cardCategories),
       );
-      if (plan.reminderNotice !== null) {
-        push('assistant', plan.reminderNotice);
+      // 切片 32（§7.44）：提醒披露从单条改多条——域层 reminderNotices（每条
+      // 一消息，顺序保留）+ 执行链创建失败披露；ConfirmSaveResult.notice 聚合
+      // 供调用方 Alert（换行衔接，与消息流逐条展示并存）。
+      const notices = [...plan.reminderNotices, ...reminderFailureNotices];
+      for (const notice of notices) {
+        push('assistant', notice);
       }
-      return { ok: true, notice: plan.reminderNotice, message };
+      return { ok: true, notice: notices.length > 0 ? notices.join('\n') : null, message };
     } catch (error) {
       // 保存链失败维持纯文本失败提示，不出卡片（切片 22 方案确认）。
       console.warn('[slice-15] 保存失败', error);
@@ -912,7 +928,7 @@ export function useFlashChat() {
         updateCard(itemId, {
           startAt: newStart,
           endAt: newEnd,
-          reminder: patchReminderSnapshot(target, updatedOnceAt),
+          reminders: patchReminderSnapshot(target, updatedOnceAt),
         });
       } catch (error) {
         console.warn('[slice-22] 快捷推迟失败', error);

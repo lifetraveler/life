@@ -353,7 +353,7 @@ describe('useFlashChat：主动澄清流转（切片 23 阶段 3，§7.35）', (
     const cards = hook().messages.filter((message) => message.kind === 'card');
     expect(cards).toHaveLength(1);
     expect(cards[0]?.cardPayload?.title).toBe(title);
-    expect(cards[0]?.cardPayload?.reminder?.channels).toEqual(['alarm']);
+    expect(cards[0]?.cardPayload?.reminders[0]?.channels).toEqual(['alarm']);
     // 保存后草稿清空（切片 15 既有行为，澄清/出卡状态一并复位）。
     expect(hook().draft).toBeNull();
   });

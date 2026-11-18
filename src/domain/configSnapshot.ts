@@ -255,5 +255,19 @@ export function normalizeSnapshotAppSettings(raw: unknown, local: AppSettings): 
         : isFlashDeletedCardDisplay(raw.flashDeletedCardDisplay)
           ? raw.flashDeletedCardDisplay
           : DEFAULT_APP_SETTINGS.flashDeletedCardDisplay,
+    // 切片 32（§7.44）：调试查看器两开关同 showAiUsage 增量覆盖语义——
+    // 缺列保留本地，出现则 boolean 写穿（非 boolean 回退默认 false）。
+    showAiRequest:
+      raw.showAiRequest === undefined
+        ? local.showAiRequest
+        : typeof raw.showAiRequest === 'boolean'
+          ? raw.showAiRequest
+          : DEFAULT_APP_SETTINGS.showAiRequest,
+    showAiResponse:
+      raw.showAiResponse === undefined
+        ? local.showAiResponse
+        : typeof raw.showAiResponse === 'boolean'
+          ? raw.showAiResponse
+          : DEFAULT_APP_SETTINGS.showAiResponse,
   };
 }

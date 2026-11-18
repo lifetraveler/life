@@ -1,4 +1,4 @@
-# AI 解析层契约（v0.22）
+# AI 解析层契约（v0.23）
 
 ## 接口定义
 ```typescript
@@ -21,6 +21,7 @@ export interface ParsedItemDraft {
   recurrence: RecurrenceRule | null; // 严格遵循 src/domain/recurrence/types.ts
   reminderOffsetMinutes: number | null; 
   reminderDelayMinutes: number | null; // v0.17（切片 19）：相对当前时刻“X分钟后提醒”
+  reminders?: number[]; // v0.23（切片 32）：绝对时刻提醒（epoch 毫秒，升序去重）；undefined=未表达
 }
 
 export interface AiParser {
@@ -53,6 +54,7 @@ interface RemoteDraftWire {
   recurrence: RecurrenceRule | null; // 形状同 src/domain/recurrence/types.ts
   reminderOffsetMinutes: number | null;
   reminderDelayMinutes: number | null; // v0.17（切片 19）
+  reminders?: RemoteDateTimeField[] | null; // v0.23（切片 32）；键可缺省，值出现即从严
 }
 ```
 
@@ -63,7 +65,59 @@ interface RemoteDraftWire {
 - `allDay` 归一：start 缺失 → false；start.time 为 null 或模型声明 allDay → true。
 - `recurrence` 非空时，`startAt` 一律由 `nextOccurrenceInstant(rule, now, tzid)`
   本地确定性重算（模型给的首日不采用）。
+- `reminders`（v0.23）非空数组时逐条 `resolveCivilTimeToInstant` 换算：DST gap
+  条目丢弃（不整体拒绝——单条时刻不存在只丢该条）；结果升序去重后写入
+  `ParsedItemDraft.reminders`。
 - 任何形状偏差（非法日期/时刻/枚举/缺键）整体拒绝（schema-mismatch），不做补救。
+
+### reminders wire 键纪律（v0.23，切片 32）
+
+- `reminders` 键**可缺省**（v0.19 三字段同款偏离）：缺省/null = 旧版模型响应，
+  照常通过；值出现即从严——必须是数组且每个元素为合法 `RemoteDateTimeField`
+  且 `time` 必非 null（提醒必带时刻），数组长度不得超过 8（`WIRE_REMINDERS_MAX`，
+  超出整体拒绝），形状偏差整体拒绝（schema-mismatch）。
+- 语义：绝对民用时刻提醒（“明天8点、10点提醒我吃药”），与 `start` 语义独立、
+  可同句出现；prompt“绝对时刻提醒判定规则”一节明确禁止模型把绝对时刻换算成
+  `reminderOffsetMinutes`/`reminderDelayMinutes`（F1 真机缺陷根因封堵）。
+
+## reminders 落库语义（v0.23，切片 32 阶段 1）
+
+`buildFlashSavePlan` 的提醒产出从单计划扩展为多计划（FlashSavePlan
+`reminderPlan: ReminderPlan | null` → `reminderPlans: ReminderPlan[]`、
+`reminderNotice: string | null` → `reminderNotices: string[]`）：
+
+- `reminders` 逐条创建 once 提醒（toOncePlan；触发时刻 ≤ now 的条目不落库，
+  披露「提醒时刻已过去（民用），未创建一次性提醒」——含民用时刻文本）；
+- `reminderOffsetMinutes`（条目时间锚定的提前提醒）与 `reminderDelayMinutes`
+  各自独立落库（原「一次只产一条计划」限制解除，切片 25 候选②/backlog L5 关闭）；
+- 强提醒锚点（reminderChannels 无偏移/延迟语义）行为不变；
+- 跨来源（重复计划 + reminders + offset + delay + 强提醒锚点）按 `startAt`
+  去重，保留先产出者；
+- `recurrence` 非空时重复计划照常落库，reminders/offset/delay 不另建一次性
+  提醒，逐项披露保留意图；
+- 渠道覆盖（draft.reminderChannels > defaultChannels）与网络渠道预设回填对
+  最终计划数组循环应用，缺预设渠道合并为一句披露。
+
+执行链（useFlashChat.confirmSave，阶段 2 接线）：`createReminder` 逐条顺序
+await，单条失败 warn + 披露不中断不回滚；全部完成后 `reminderScheduler.reconcile()`
+显式一次；`FlashCardPayload.reminder` 改为 `reminders: FlashCardReminderSnapshot[]`
+（空数组 = 未创建提醒，卡片不渲染提醒行）。
+
+## AI 调试查看器副通道（v0.23，切片 32 阶段 1，AGENTS.md §7.44，非破坏性条目）
+
+- OpenAICompatibleProvider 新增只读 getter `lastDebug: AiTurnDebugSnapshot`
+  （`{ request: string | null; response: string | null }`）：request = 发送给
+  chat-completions 的请求体 JSON 文本（与实际发送同一文本；不含 HTTP headers
+  ——Authorization 等凭据不采集不展示）；response = 响应体原文（成功轮 =
+  chat-completions 信封，失败轮 = 错误响应文本）。parse 进入即清空，每轮尝试
+  覆盖（重试取最后一次），成功失败均保留。
+- FlashTurnResult 新增域内字段 `debug: AiTurnDebugSnapshot | null`（远端轮恒
+  携带，含失败降级轮——失败轮正是缺陷排查主场景，与 usage「只报成功轮」刻意
+  不同；无 Key 本地轮 null）。
+- **传输边界（v0.20 冻结条款同款）**：debug 不进入 ParsedItemDraft、不进入
+  history JSON、不触碰 RemoteDraftWire/isRemoteDraftWire；AiParser.parse 冻结
+  签名与返回类型不变。UI 消费（开关存储 app_settings.show_ai_request /
+  show_ai_response，schema v16，弹层三节）在阶段 2。
 
 ## reminderOffsetMinutes 的落库降级（v0.16 记录，切片 15 阶段 3 起）
 `ParsedItemDraft.reminderOffsetMinutes`（相对提醒，如“提前10分钟”）在冻结的
@@ -325,3 +379,24 @@ Reminder 模型中没有落库位置：data-model.md §4.1 冻结
   保存激活/徽标）；相关测试（configStore.test.ts / SecureAiConfigStore.test.ts）。
   消费面（chat.ts / openAiCompatible.ts / usage.ts）零改动。
 - 迁移方案：无独立迁移（读取时归一化）；SecureStore JSON v1→v2 自动升级。
+
+## 变更记录（v0.23，切片 32 阶段 1，方案与设计默认值经用户确认）
+
+- ParsedItemDraft 与 RemoteDraftWire 新增绝对时刻提醒表达：draft 侧
+  `reminders?: number[]`（epoch 毫秒升序去重，undefined=未表达）；wire 侧
+  `reminders?: RemoteDateTimeField[] | null`（键可缺省、值从严整体拒绝、
+  time 必非 null、≤8 条、DST gap 条目丢弃）。见上文「reminders wire 键纪律」
+  与「reminders 落库语义」两节。
+- 原因：F1 真机缺陷——「明天8点、10点提醒」被模型硬塞进 reminderOffsetMinutes，
+  落库层 fireInstant = startAt−offset ≤ now 触发「提醒时刻已过去」误报，两条
+  提醒均丢失。根因是 wire 无绝对时刻表达 + 落库层「一次只产一条计划」
+  （backlog L5），本版两处同修。
+- 影响范围：src/domain/ai/{types,guard,merge,openAiCompatible,savePlan,cardPayload,
+  chat,prompt}.ts；src/domain/settings.ts、src/domain/configSnapshot.ts、
+  src/db/{schema.ts,migrations.ts,models/AppSettingsModel.ts}、
+  WatermelonItemRepository.ts（v16 两列接线）；相关测试。AiParser.parse 冻结
+  签名与返回类型不变；不触碰 src/notifications/。
+- 迁移方案：schema v15→v16 addColumns（app_settings.show_ai_request /
+  show_ai_response，boolean 非可选默认 false，旧数据回退 false，v12/v13 先例，
+  零 unsafeExecuteSql）；draft.reminders 为可选字段，旧 history JSON 缺键照常
+  通过摘要解析与 merge。

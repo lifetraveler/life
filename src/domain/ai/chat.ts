@@ -22,6 +22,7 @@ import { matchesEditIntent } from './editIntent';
 import { LocalFallbackProvider } from './localFallback';
 import { mergeDraftCorrection } from './merge';
 import { OpenAICompatibleProvider } from './openAiCompatible';
+import type { AiTurnDebugSnapshot } from './openAiCompatible';
 import type { AiConfig } from './configStore';
 import type { AiUsageSnapshot } from './usage';
 import type { AiParseContext, ChatMessage, ParsedItemDraft } from './types';
@@ -62,6 +63,14 @@ export interface FlashTurnResult {
    * ParsedItemDraft、不进入 history JSON（ai.md v0.20 传输边界，冻结）。
    */
   usage: AiUsageSnapshot | null;
+  /**
+   * 本轮调试快照（切片 32 / §7.44 / ai.md v0.23）：远端轮取自 provider.lastDebug
+   * 副通道（请求体/响应体文本；重试取最后一次、成功失败均保留——失败轮正是
+   * F1 类缺陷排查主场景，与 usage「只报成功轮」刻意不同）；无 Key 轮 null。
+   * 域内字段——不进入 ParsedItemDraft、不进入 history JSON、不触碰
+   * RemoteDraftWire/isRemoteDraftWire（ai.md v0.23 传输边界注记）。
+   */
+  debug: AiTurnDebugSnapshot | null;
 }
 
 const KIND_LABELS: Record<AiParseError['kind'], string> = {
@@ -79,6 +88,7 @@ function fallbackTurn(
   trimmed: string,
   note: string,
   deps: FlashTurnDeps,
+  debug: AiTurnDebugSnapshot | null = null,
 ): FlashTurnResult {
   const context: AiParseContext = {
     now: deps.now,
@@ -141,6 +151,9 @@ function fallbackTurn(
     degraded: true,
     // 切片 26（§7.38）：本地降级轮无 usage，恒 null。
     usage: null,
+    // 切片 32（§7.44）：远端失败降级轮携带 provider.lastDebug（排查主场景）；
+    // 无 Key 本地轮由调用方传 null（缺省参数）。
+    debug,
     historyAppend: [
       { role: 'user', text: trimmed },
       { role: 'assistant', text: JSON.stringify(draft) },
@@ -159,21 +172,23 @@ export async function runFlashTurn(
 
   const remoteConfig = deps.config?.active ?? null;
   if (remoteConfig !== null) {
+    // 切片 32（§7.44）：provider 声明提出 try 外——失败降级轮也要读取
+    // provider.lastDebug（请求/响应排查主场景；构造抛错与 v0.22 同为向上抛）。
+    // 切片 30（§7.41）：重试在 provider 传输层内部完成（fetch 包装），
+    // AiParser.parse 冻结签名与返回类型不变、对上层透明；aiRetryMax 缺省
+    // 不覆盖（provider 侧默认 3），onRetry 直通 UI 即时提示。
+    const provider = new OpenAICompatibleProvider(
+      {
+        ...remoteConfig,
+        retryMax: deps.aiRetryMax,
+        onRetry:
+          deps.onRetry !== undefined
+            ? (attempt, maxRetries) => deps.onRetry?.(attempt, maxRetries)
+            : undefined,
+      },
+      deps.fetchImpl,
+    );
     try {
-      // 切片 30（§7.41）：重试在 provider 传输层内部完成（fetch 包装），
-      // AiParser.parse 冻结签名与返回类型不变、对上层透明；aiRetryMax 缺省
-      // 不覆盖（provider 侧默认 3），onRetry 直通 UI 即时提示。
-      const provider = new OpenAICompatibleProvider(
-        {
-          ...remoteConfig,
-          retryMax: deps.aiRetryMax,
-          onRetry:
-            deps.onRetry !== undefined
-              ? (attempt, maxRetries) => deps.onRetry?.(attempt, maxRetries)
-              : undefined,
-        },
-        deps.fetchImpl,
-      );
       const draft = await provider.parse(trimmed, {
         now: deps.now,
         tzid: deps.tzid,
@@ -186,6 +201,8 @@ export async function runFlashTurn(
         // 切片 26（§7.38）：远端轮携带 provider.lastUsage 副通道快照
         //（抛错降级路径不会到达这里，无残留上一轮的风险）。
         usage: provider.lastUsage,
+        // 切片 32（§7.44）：远端轮恒携带调试快照（成功轮也带，开关在 UI 侧过滤）。
+        debug: provider.lastDebug,
         historyAppend: [
           { role: 'user', text: trimmed },
           { role: 'assistant', text: JSON.stringify(draft) },
@@ -201,6 +218,7 @@ export async function runFlashTurn(
         trimmed,
         `AI 服务暂不可用（${KIND_LABELS[e.kind]}），已用本地解析${retryDisclosure}`,
         deps,
+        provider.lastDebug,
       );
     }
   }

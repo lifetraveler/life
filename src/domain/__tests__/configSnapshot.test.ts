@@ -166,7 +166,7 @@ describe('文件名与 exportedAt（§7.42 D5 / 提案 §4.1）', () => {
 });
 
 describe('normalizeSnapshotAppSettings（增量覆盖冻结语义逐字段，提案 §4.1）', () => {
-  it('字段存在且合法 → 快照值写穿（全 12 字段）', () => {
+  it('字段存在且合法 → 快照值写穿（全 14 字段，切片 32 扩两开关）', () => {
     const local = makeLocalSettings();
     const normalized = normalizeSnapshotAppSettings(
       {
@@ -182,6 +182,8 @@ describe('normalizeSnapshotAppSettings（增量覆盖冻结语义逐字段，提
         displayCalendarIds: ['cal-1', 'cal-2'],
         aiRetryMax: 1,
         flashDeletedCardDisplay: 'remove',
+        showAiRequest: true,
+        showAiResponse: false,
       },
       local,
     );
@@ -198,6 +200,8 @@ describe('normalizeSnapshotAppSettings（增量覆盖冻结语义逐字段，提
       displayCalendarIds: ['cal-1', 'cal-2'],
       aiRetryMax: 1,
       flashDeletedCardDisplay: 'remove',
+      showAiRequest: true,
+      showAiResponse: false,
     });
   });
 

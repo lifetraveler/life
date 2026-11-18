@@ -168,6 +168,14 @@ export interface RemoteDraftWire {
    */
   reminderDelayMinutes: number | null;
   /**
+   * 绝对时刻提醒（切片 32 / §7.44 / ai.md v0.23）：用户指定「在某绝对民用时刻
+   * 提醒我」（如「明天8点、10点提醒我吃药」）时逐条列出触发时刻；time 必须非
+   * null（提醒必带具体时刻，与 start/end 的全天语义不同）。null/缺省/空数组=
+   * 未表达（键缺省宽容，旧响应兼容）。与 start 语义独立、可同现；epoch 换算
+   * 在 provider 本地完成（v0.16 纪律）。
+   */
+  reminders?: RemoteDateTimeField[] | null;
+  /**
    * 渠道推荐（切片 23 / ai.md v0.19）：强提醒场景 → ['alarm']；普通提醒/未表达 →
    * null 或缺省（落库渠道走用户 defaultChannels，禁止自填 system-notification）。
    * expo 家族互斥（system-notification 与 alarm 不同现）。
@@ -181,6 +189,8 @@ export interface RemoteDraftWire {
 
 const WIRE_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const WIRE_TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+/** 切片 32（§7.44 / ai.md v0.23）：reminders 数组条数上限（prompt 同步约束）。 */
+const WIRE_REMINDERS_MAX = 8;
 
 function isRemoteDateTimeField(value: unknown): value is RemoteDateTimeField {
   if (typeof value !== 'object' || value === null) return false;
@@ -276,6 +286,24 @@ export function isRemoteDraftWire(value: unknown): RemoteDraftWire | null {
     if (!isReminderChannelArray(reminderChannelsRaw)) return null;
     reminderChannels = [...reminderChannelsRaw];
   }
+  // 切片 32（§7.44 / ai.md v0.23）：绝对时刻提醒数组——键可缺省/null/空数组
+  //（旧版响应向前兼容、空数组语义等价未表达，宽容不炸整体），值出现即从严：
+  // 每条 date 合法且 time 必须非 null（提醒必带具体时刻），元素形状偏差或
+  // 超过 WIRE_REMINDERS_MAX 条整体拒绝（落库面纪律：静默丢弃比报错危险）。
+  let reminders: RemoteDateTimeField[] | undefined;
+  const remindersRaw = v.reminders;
+  if (remindersRaw !== undefined && remindersRaw !== null) {
+    if (Array.isArray(remindersRaw) === false || remindersRaw.length > WIRE_REMINDERS_MAX) {
+      return null;
+    }
+    const entriesInvalid = remindersRaw.some(
+      (entry) =>
+        isRemoteDateTimeField(entry) === false ||
+        (entry as RemoteDateTimeField).time === null,
+    );
+    if (entriesInvalid) return null;
+    reminders = remindersRaw as RemoteDateTimeField[];
+  }
   return {
     title: v.title,
     content: v.content,
@@ -289,6 +317,7 @@ export function isRemoteDraftWire(value: unknown): RemoteDraftWire | null {
     recurrence: recurrence,
     reminderOffsetMinutes: v.reminderOffsetMinutes as RemoteDraftWire['reminderOffsetMinutes'],
     reminderDelayMinutes: v.reminderDelayMinutes as RemoteDraftWire['reminderDelayMinutes'],
+    reminders,
     needsClarification: needsClarification === null ? undefined : needsClarification,
     clarificationPrompt: clarificationPrompt === null ? undefined : clarificationPrompt,
     reminderChannels,
@@ -322,6 +351,23 @@ export function wireToParsedItemDraft(
   const endAt =
     wire.start === null || wire.end === null ? null : resolveDateTimeField(wire.end, context.tzid);
   const allDay = wire.start !== null && (wire.start.time === null || wire.allDay);
+  // 切片 32（§7.44 / ai.md v0.23）：绝对时刻提醒——每条民用条目本地换算 epoch
+  //（v0.16 纪律，禁止交给模型）；DST gap（resolve 返回 null）该时刻不存在 →
+  // 丢弃该条、不炸整体；升序排序 + 同 epoch 去重；空结果归一为 undefined
+  //（未表达，落库面跳过）。
+  let reminders: number[] | undefined;
+  if (wire.reminders !== undefined && wire.reminders !== null && wire.reminders.length > 0) {
+    const epochs: number[] = [];
+    for (const entry of wire.reminders) {
+      const instant = resolveDateTimeField(entry, context.tzid);
+      if (instant !== null) {
+        epochs.push(instant);
+      }
+    }
+    if (epochs.length > 0) {
+      reminders = [...new Set(epochs)].sort((a, b) => a - b);
+    }
+  }
   const recurrence = wire.recurrence;
   let recurrenceCopy: RecurrenceRule | null = null;
   if (recurrence !== null) {
@@ -347,6 +393,7 @@ export function wireToParsedItemDraft(
     recurrence: recurrenceCopy,
     reminderOffsetMinutes: wire.reminderOffsetMinutes,
     reminderDelayMinutes: wire.reminderDelayMinutes,
+    reminders,
     // 切片 23（ai.md v0.19）：澄清/渠道字段映射——needsClarification 仅 true 落值
     //（false 与 undefined 等价，统一归一为 undefined，信号不粘滞）；空反问文本视同
     // 未澄清；渠道数组防御拷贝，缺省/null 归一为 undefined（普通提醒落库走默认渠道）。
@@ -364,6 +411,20 @@ export function wireToParsedItemDraft(
   };
 }
 
+/**
+ * 切片 32（§7.44 / ai.md v0.23）：调试副通道载荷——请求体/响应体文本快照。
+ * 与 lastUsage 同款传输纪律：provider 实例副通道暴露、经 FlashTurnResult 域内
+ * 字段携带到 hook，不进入 ParsedItemDraft、不进入 history JSON、不触碰
+ * RemoteDraftWire/isRemoteDraftWire。request=发往 chat/completions 的请求体
+ * JSON 文本（不含请求头——Authorization 不进任何调试载荷）；response=HTTP
+ * 响应体原文（HTTP 非 ok 也记录；网络层抛错/超时为 null）。每轮尝试覆盖
+ *（重试取最后一次），成功失败均可查看。
+ */
+export interface AiTurnDebugSnapshot {
+  request: string | null;
+  response: string | null;
+}
+
 export class OpenAICompatibleProvider implements AiParser {
   private readonly config: OpenAiCompatibleConfig;
   private readonly fetchImpl: FetchLike;
@@ -376,6 +437,13 @@ export class OpenAICompatibleProvider implements AiParser {
    * 成功路径返回前才赋值，任何抛错点保持 null（不残留上一轮数值）。
    */
   private lastUsageSnapshot: AiUsageSnapshot | null = null;
+  /**
+   * 切片 32（§7.44）：调试副通道存值——初始 null；parse() 进入即清空（与
+   * lastUsage 同款），requestParse 每轮尝试写入（重试覆盖、成功失败均保留）。
+   * 失败轮正是 F1 类缺陷排查主场景，因此与 usage「只报成功轮」刻意不同。
+   */
+  private lastRequestBody: string | null = null;
+  private lastResponseBody: string | null = null;
 
   constructor(
     config: OpenAiCompatibleConfig,
@@ -399,6 +467,11 @@ export class OpenAICompatibleProvider implements AiParser {
   /** 切片 26（§7.38）：usage 副通道只读暴露；chat.ts 经 FlashTurnResult 携带到 hook。 */
   get lastUsage(): AiUsageSnapshot | null {
     return this.lastUsageSnapshot;
+  }
+
+  /** 切片 32（§7.44）：调试副通道只读暴露；chat.ts 经 FlashTurnResult.debug 携带到 hook。 */
+  get lastDebug(): AiTurnDebugSnapshot {
+    return { request: this.lastRequestBody, response: this.lastResponseBody };
   }
 
   /**
@@ -455,6 +528,10 @@ export class OpenAICompatibleProvider implements AiParser {
     // 任何抛错点（AiParseError 等）lastUsage 保持 null。重试期间亦保持
     // null——usage 只报成功轮（§7.41）。
     this.lastUsageSnapshot = null;
+    // 切片 32（§7.44）：调试副通道同步清空——但与 usage 不同，requestParse
+    // 内写入后即使本轮失败也保留（失败轮正是排查主场景），仅跨轮清空。
+    this.lastRequestBody = null;
+    this.lastResponseBody = null;
     if (input.trim().length === 0) {
       throw new AiParseError('empty-input', 'AI 解析输入为空');
     }
@@ -509,6 +586,15 @@ export class OpenAICompatibleProvider implements AiParser {
     const url = `${this.config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    // 切片 32（§7.44）：请求体只构建一次，记录与发送共用同一文本（调试展示
+    // 与实际发往服务的字节一致）；请求头不采集（Authorization 不进调试载荷）。
+    const requestBodyText = JSON.stringify({
+      model: this.config.model,
+      messages,
+      temperature: 0,
+      stream: false,
+    });
+    this.lastRequestBody = requestBodyText;
 
     try {
       let response: Response;
@@ -519,12 +605,7 @@ export class OpenAICompatibleProvider implements AiParser {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${this.config.apiKey}`,
           },
-          body: JSON.stringify({
-            model: this.config.model,
-            messages,
-            temperature: 0,
-            stream: false,
-          }),
+          body: requestBodyText,
           signal: controller.signal,
         });
       } catch (e) {
@@ -538,10 +619,15 @@ export class OpenAICompatibleProvider implements AiParser {
       }
 
       if (!response.ok) {
+        // 切片 32（§7.44）：HTTP 非 ok 也记录响应体原文（错误排查主场景），
+        // 错误消息保持只含状态码不变。
+        const errorBodyText = await response.text();
+        this.lastResponseBody = errorBodyText;
         throw new AiParseError('http-status', `AI 服务返回 HTTP ${response.status}`, response.status);
       }
 
       const bodyText = await response.text();
+      this.lastResponseBody = bodyText;
       let envelope: unknown;
       try {
         envelope = JSON.parse(bodyText);

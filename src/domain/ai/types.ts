@@ -65,8 +65,13 @@ export interface FlashCardPayload {
   allDay: boolean;
   /** categoryId 未命中分类列表时为 null → 色条回退灰、不渲染分类行。 */
   category: FlashCardCategorySnapshot | null;
-  /** 保存链未创建提醒（reminderPlan null）时为 null → 卡片不渲染提醒行。 */
-  reminder: FlashCardReminderSnapshot | null;
+  /**
+   * 保存链落库的全部提醒快照（切片 32 / ai.md v0.23）：多计划（reminders 数组 /
+   * offset / delay 各自落库）逐条携带，空数组 = 未创建提醒 → 卡片不渲染提醒行。
+   * （v0.22 及以前为单数 reminder: FlashCardReminderSnapshot | null；卡片消息为
+   * 内存态，形状变更无持久化迁移负担。）
+   */
+  reminders: FlashCardReminderSnapshot[];
 }
 
 /**
@@ -125,6 +130,14 @@ export interface ParsedItemDraft {
    * 以 now + reminderDelayMinutes*60000 为触发时刻创建 once 提醒（无需 startAt）。
    */
   reminderDelayMinutes: number | null;
+  /**
+   * 绝对时刻提醒（切片 32 / ai.md v0.23）：用户指定「在某绝对民用时刻提醒我」
+   * （如「明天8点、10点提醒我吃药」）时的逐条触发时刻（epoch 毫秒，升序去重）。
+   * undefined=未表达（wire 键缺省宽容，旧响应兼容）。与 startAt 语义独立、可同现；
+   * 落库为逐条 once 提醒（无需 startAt）。epoch 换算在 provider 本地完成（v0.16
+   * 纪律），DST gap 条目丢弃、不炸整体。
+   */
+  reminders?: number[];
   /**
    * 强提醒场景的渠道推荐（切片 23 / AGENTS.md §7.35 / ai.md v0.19）：
    * 解析器识别出“起床/叫我/吃药/响铃”等强提醒场景且用户未指定提前量时，推荐

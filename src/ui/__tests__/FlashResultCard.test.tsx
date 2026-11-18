@@ -24,7 +24,7 @@ function makePayload(overrides: Partial<FlashCardPayload> = {}): FlashCardPayloa
     endAt: START + 3_600_000,
     allDay: false,
     category: { id: 'health', name: '健康', color: '#4C7A5C', emoji: '💊' },
-    reminder: null,
+    reminders: [],
     ...overrides,
   };
 }

@@ -175,3 +175,62 @@ describe('mergeDraftCorrection inheritTags（切片 24 §7.36 / slice-23 遗留 
     expect(explicit.tags).toEqual(['心情']);
   });
 });
+
+describe('mergeDraftCorrection reminders 掩码合并（切片 32 §7.44）', () => {
+  const previous: ParsedItemDraft = {
+    title: '开周会',
+    content: '',
+    type: 'event',
+    startAt: 1000,
+    endAt: 2000,
+    allDay: false,
+    categoryId: 'work',
+    tags: ['工作'],
+    priority: 3,
+    recurrence: null,
+    reminderOffsetMinutes: 10,
+    reminderDelayMinutes: null,
+    reminders: [1000, 2000],
+  };
+
+  const next: ParsedItemDraft = {
+    title: '改成后天',
+    content: '',
+    type: 'note',
+    startAt: 5000,
+    endAt: null,
+    allDay: true,
+    categoryId: null,
+    tags: [],
+    priority: null,
+    recurrence: null,
+    reminderOffsetMinutes: null,
+    reminderDelayMinutes: null,
+  };
+
+  it('新一轮表达 reminders → 采用本轮数组（拷贝不共享引用）', () => {
+    const expressedNext: ParsedItemDraft = { ...next, reminders: [5000, 6000] };
+    const merged = mergeDraftCorrection(previous, expressedNext, new Set(['reminders']));
+    expect(merged.reminders).toEqual([5000, 6000]);
+    merged.reminders?.push(9999);
+    expect(expressedNext.reminders).toEqual([5000, 6000]);
+    expect(previous.reminders).toEqual([1000, 2000]);
+  });
+
+  it('新一轮未表达 → 保留上一轮绝对时刻提醒（拷贝）', () => {
+    const merged = mergeDraftCorrection(previous, next, new Set(['title']));
+    expect(merged.reminders).toEqual([1000, 2000]);
+    expect(merged.reminders).not.toBe(previous.reminders);
+  });
+
+  it('新一轮显式清空（reminders undefined 且 expressed）→ 合并结果 undefined（清除语义）', () => {
+    const merged = mergeDraftCorrection(previous, next, new Set(['reminders']));
+    expect(merged.reminders).toBeUndefined();
+  });
+
+  it('两轮都未表达 → undefined', () => {
+    const barePrev: ParsedItemDraft = { ...previous, reminders: undefined };
+    const merged = mergeDraftCorrection(barePrev, next, new Set(['title']));
+    expect(merged.reminders).toBeUndefined();
+  });
+});

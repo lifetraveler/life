@@ -27,6 +27,7 @@ export type DraftField =
   | 'recurrence'
   | 'reminderOffsetMinutes'
   | 'reminderDelayMinutes'
+  | 'reminders'
   | 'reminderChannels';
 
 /** mergeDraftCorrection 的可选行为开关。 */
@@ -68,6 +69,16 @@ export function mergeDraftCorrection(
     reminderDelayMinutes: expressed.has('reminderDelayMinutes')
       ? next.reminderDelayMinutes
       : previous.reminderDelayMinutes,
+    // 绝对时刻提醒数组按掩码合并（切片 32）：本轮表达 → 采用（防御拷贝）；
+    // 未表达 → 沿用上一轮，跨轮保留多提醒意图（「再加一条12点的提醒」不丢
+    // 已有两条）。undefined 语义与 reminderChannels 同款。
+    reminders: expressed.has('reminders')
+      ? next.reminders === undefined
+        ? undefined
+        : [...next.reminders]
+      : previous.reminders === undefined
+        ? undefined
+        : [...previous.reminders],
     // 渠道推荐按掩码合并（切片 23）：本轮表达（如“叫我起床”判出 alarm）→ 采用；
     // 未表达 → 沿用上一轮，跨轮保留 alarm 推荐（澄清续答“明早7点”不丢渠道）。
     reminderChannels: expressed.has('reminderChannels')

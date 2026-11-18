@@ -249,3 +249,35 @@ describe('isParsedItemDraft：澄清与渠道字段（切片 23 §7.35）', () =
     expect(value.reminderChannels).toEqual(['webhook', 'apprise']);
   });
 });
+
+describe('isParsedItemDraft：reminders 绝对时刻提醒（切片 32 §7.44）', () => {
+  it('键缺省（旧版响应）→ 通过且 reminders undefined（宽容纪律与澄清三字段同款）', () => {
+    const value = isParsedItemDraft(validDraft({}));
+    expect(value).not.toBeNull();
+    if (value === null) return;
+    expect(value.reminders).toBeUndefined();
+  });
+
+  it('合法正整数数组 → 通过并返回拷贝', () => {
+    const reminders = [1000, 2000, 3000];
+    const value = isParsedItemDraft(validDraft({ reminders }));
+    expect(value).not.toBeNull();
+    if (value === null) return;
+    expect(value.reminders).toEqual([1000, 2000, 3000]);
+    // 数组浅拷贝：外部改原数组不影响草稿。
+    reminders.push(9999);
+    expect(value.reminders).toEqual([1000, 2000, 3000]);
+  });
+
+  it('值从严整体拒绝：非数组 / 空数组 / 非正整数元素（0、负数、小数、非数字）', () => {
+    expect(isParsedItemDraft({ ...validDraft({}), reminders: 'not-array' })).toBeNull();
+    expect(isParsedItemDraft({ ...validDraft({}), reminders: [] })).toBeNull();
+    expect(isParsedItemDraft({ ...validDraft({}), reminders: [0] })).toBeNull();
+    expect(isParsedItemDraft({ ...validDraft({}), reminders: [-1000] })).toBeNull();
+    expect(isParsedItemDraft({ ...validDraft({}), reminders: [1.5] })).toBeNull();
+    expect(isParsedItemDraft({ ...validDraft({}), reminders: ['1000'] })).toBeNull();
+    expect(isParsedItemDraft({ ...validDraft({}), reminders: [1000, null] })).toBeNull();
+    expect(isParsedItemDraft({ ...validDraft({}), reminders: [Number.NaN] })).toBeNull();
+    expect(isParsedItemDraft({ ...validDraft({}), reminders: [Number.POSITIVE_INFINITY] })).toBeNull();
+  });
+});

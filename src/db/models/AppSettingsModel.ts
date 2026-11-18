@@ -62,4 +62,15 @@ export default class AppSettingsModel extends Model {
    * （枚举外抛错）。
    */
   @text('flash_deleted_card_display') flashDeletedCardDisplay!: FlashDeletedCardDisplay | null;
+  /**
+   * 切片 32（schema v16，AGENTS.md §7.44）：AI 调试查看器——请求体展示开关
+   *（默认 false）。非可选 boolean 同 careful_mode/show_ai_usage 先例（既有行
+   * 迁移回填 false，无需 UPDATE）。
+   */
+  @field('show_ai_request') showAiRequest!: boolean;
+  /**
+   * 切片 32（schema v16，AGENTS.md §7.44）：AI 调试查看器——响应体展示开关
+   *（默认 false）。非可选 boolean 同上。
+   */
+  @field('show_ai_response') showAiResponse!: boolean;
 }
