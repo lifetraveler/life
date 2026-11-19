@@ -162,6 +162,12 @@ export default function SettingsPage() {
   // showAiUsage 默认 false = 不显示）。与认真模式开关共用互斥键 settingsSavingKey。
   const [showAiUsage, setShowAiUsage] = useState<boolean | null>(null);
   const [showAiUsageError, setShowAiUsageError] = useState<string | null>(null);
+  // 切片 32（AGENTS.md §7.44）：AI 调试查看器两开关（app_settings schema v16，
+  // show_ai_request/show_ai_response 默认 false = 不采集不展示）。
+  const [showAiRequest, setShowAiRequest] = useState<boolean | null>(null);
+  const [showAiRequestError, setShowAiRequestError] = useState<string | null>(null);
+  const [showAiResponse, setShowAiResponse] = useState<boolean | null>(null);
+  const [showAiResponseError, setShowAiResponseError] = useState<string | null>(null);
   // 切片 30 阶段 1（AGENTS.md §7.41）：AI 重试档位与已删除卡显示配置
   // （app_settings schema v15）。与上述开关共用互斥键 settingsSavingKey。
   const [aiRetryMax, setAiRetryMax] = useState<number | null>(null);
@@ -192,6 +198,10 @@ export default function SettingsPage() {
             // 切片 26 阶段 2（§7.38）：用量展示开关随同一次 getSettings 读取
             //（读层已防御归一，旧数据回退 false）。
             setShowAiUsage(settings.showAiUsage === true);
+            // 切片 32（§7.44）：AI 调试查看器两开关随同一次 getSettings 读取
+            //（读层已防御归一，旧数据回退 false）。
+            setShowAiRequest(settings.showAiRequest === true);
+            setShowAiResponse(settings.showAiResponse === true);
             // 切片 30 阶段 1（§7.41）：重试档位/已删除卡显示随同一次 getSettings 读取
             //（读层已防御归一，旧数据回退 3 / 'mark'）。
             setAiRetryMax(settings.aiRetryMax);
@@ -314,6 +324,40 @@ export default function SettingsPage() {
       }
     },
     [showAiUsage, settingsSavingKey],
+  );
+
+  /**
+   * 切片 32（AGENTS.md §7.44）：AI 调试查看器开关切换（请求体/响应体两开关
+   * 同构）。与用量展示同模式：乐观更新 → updateSettings → 失败回滚；即时生效
+   * （闪电录入每轮解析后经 getSettings 重读，弹层按当下开关值显隐节）。
+   */
+  const handleShowAiDebugChange = useCallback(
+    async (
+      key: 'showAiRequest' | 'showAiResponse',
+      value: boolean,
+    ): Promise<void> => {
+      const current = key === 'showAiRequest' ? showAiRequest : showAiResponse;
+      if (current === null || settingsSavingKey !== null || current === value) {
+        return;
+      }
+      const previous = current;
+      const setError =
+        key === 'showAiRequest' ? setShowAiRequestError : setShowAiResponseError;
+      const setValue = key === 'showAiRequest' ? setShowAiRequest : setShowAiResponse;
+      setValue(value);
+      setSettingsSavingKey(key);
+      try {
+        await itemRepository.updateSettings({ [key]: value });
+        setError(null);
+      } catch (error) {
+        console.warn('[slice-32] 调试查看器开关保存失败', error);
+        setValue(previous);
+        setError('保存失败，请重试');
+      } finally {
+        setSettingsSavingKey(null);
+      }
+    },
+    [showAiRequest, showAiResponse, settingsSavingKey],
   );
 
   /**
@@ -571,6 +615,45 @@ export default function SettingsPage() {
         </View>
         {showAiUsageError !== null ? (
           <Text style={styles.errorHint}>{showAiUsageError}</Text>
+        ) : null}
+        {/* 切片 32（AGENTS.md §7.44）：AI 调试查看器两开关。开启后闪电录入的
+            远端解析轮（含失败降级轮）追加「🔍 AI 调试」入口消息，点击弹层查看；
+            请求体不含 HTTP headers（Authorization 不采集）。 */}
+        <View style={styles.widgetToggleRow}>
+          <View style={styles.widgetToggleText}>
+            <Text style={styles.radioLabel}>AI 调试·查看输入</Text>
+            <Text style={styles.widgetToggleHint}>
+              弹层展示发送给 AI 的请求体（不含请求头，API Key 不在其中）。
+            </Text>
+          </View>
+          <Switch
+            value={showAiRequest === true}
+            onValueChange={(value) => {
+              void handleShowAiDebugChange('showAiRequest', value);
+            }}
+            disabled={showAiRequest === null || settingsSavingKey !== null}
+          />
+        </View>
+        {showAiRequestError !== null ? (
+          <Text style={styles.errorHint}>{showAiRequestError}</Text>
+        ) : null}
+        <View style={styles.widgetToggleRow}>
+          <View style={styles.widgetToggleText}>
+            <Text style={styles.radioLabel}>AI 调试·查看输出</Text>
+            <Text style={styles.widgetToggleHint}>
+              弹层展示 AI 原始响应与本轮解析出的卡片数据。
+            </Text>
+          </View>
+          <Switch
+            value={showAiResponse === true}
+            onValueChange={(value) => {
+              void handleShowAiDebugChange('showAiResponse', value);
+            }}
+            disabled={showAiResponse === null || settingsSavingKey !== null}
+          />
+        </View>
+        {showAiResponseError !== null ? (
+          <Text style={styles.errorHint}>{showAiResponseError}</Text>
         ) : null}
         {/* 切片 30 阶段 1（AGENTS.md §7.41）：AI 服务重试档位（aiRetryMax，
             0–5 整数，UI 档 0/1/3/5，0=关闭即现状）。读取失败保持 null（行仍渲染、

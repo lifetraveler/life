@@ -277,6 +277,15 @@ function toDomainSettings(model: AppSettingsModel): AppSettings {
     flashDeletedCardDisplay: isFlashDeletedCardDisplay(model.flashDeletedCardDisplay)
       ? model.flashDeletedCardDisplay
       : DEFAULT_APP_SETTINGS.flashDeletedCardDisplay,
+    // 切片 32（§7.44，schema v16）：show_ai_request / show_ai_response 同
+    // careful_mode/show_ai_usage 先例——非可选 boolean 直接映射，非 boolean
+    // 回退默认 false，不抛错。
+    showAiRequest: typeof model.showAiRequest === 'boolean'
+      ? model.showAiRequest
+      : DEFAULT_APP_SETTINGS.showAiRequest,
+    showAiResponse: typeof model.showAiResponse === 'boolean'
+      ? model.showAiResponse
+      : DEFAULT_APP_SETTINGS.showAiResponse,
   };
 }
 
@@ -1220,6 +1229,8 @@ export class WatermelonItemRepository implements ItemRepository {
         draft.showAiUsage = normalized.showAiUsage;
         draft.aiRetryMax = validateAiRetryMax(normalized.aiRetryMax);
         draft.flashDeletedCardDisplay = normalized.flashDeletedCardDisplay;
+        draft.showAiRequest = normalized.showAiRequest;
+        draft.showAiResponse = normalized.showAiResponse;
       };
       if (settingsModel) {
         operations.push(settingsModel.prepareUpdate(writeSettingsPatch));
@@ -2609,6 +2620,10 @@ export class WatermelonItemRepository implements ItemRepository {
           // （读层有归一，此处求自描述）。
           record.aiRetryMax = DEFAULT_APP_SETTINGS.aiRetryMax;
           record.flashDeletedCardDisplay = DEFAULT_APP_SETTINGS.flashDeletedCardDisplay;
+          // 切片 32（schema v16）：补插默认行时写调试查看器开关默认值
+          //（读层有归一，此处求自描述）。
+          record.showAiRequest = DEFAULT_APP_SETTINGS.showAiRequest;
+          record.showAiResponse = DEFAULT_APP_SETTINGS.showAiResponse;
         });
         return { ...DEFAULT_APP_SETTINGS };
       }
@@ -2627,6 +2642,7 @@ export class WatermelonItemRepository implements ItemRepository {
    * 切片 26（§7.38）：showAiUsage 同 carefulMode 先例，boolean 直接写；
    * 切片 27（§7.39）：displayCalendarIds 写路径 validateDisplayCalendarIds 严格校验
    * （仅非空字符串、去重抛错；空数组 = 功能关闭，合法写入 '[]'）；
+   * 切片 32（§7.44）：showAiRequest/showAiResponse 同 carefulMode 先例，boolean 直接写；
    * 行不存在时以 patch 值（缺省用默认值）建行。
    * 改动小组件显示开关后，调用方需自行触发一次小组件快照刷新
    * （桥不订阅 app_settings；设置页负责）。
@@ -2678,6 +2694,8 @@ export class WatermelonItemRepository implements ItemRepository {
           record.aiRetryMax = aiRetryMax ?? DEFAULT_APP_SETTINGS.aiRetryMax;
           record.flashDeletedCardDisplay =
             patch.flashDeletedCardDisplay ?? DEFAULT_APP_SETTINGS.flashDeletedCardDisplay;
+          record.showAiRequest = patch.showAiRequest ?? DEFAULT_APP_SETTINGS.showAiRequest;
+          record.showAiResponse = patch.showAiResponse ?? DEFAULT_APP_SETTINGS.showAiResponse;
         });
         return;
       }
@@ -2717,6 +2735,12 @@ export class WatermelonItemRepository implements ItemRepository {
         }
         if (patch.flashDeletedCardDisplay !== undefined) {
           draft.flashDeletedCardDisplay = patch.flashDeletedCardDisplay;
+        }
+        if (patch.showAiRequest !== undefined) {
+          draft.showAiRequest = patch.showAiRequest;
+        }
+        if (patch.showAiResponse !== undefined) {
+          draft.showAiResponse = patch.showAiResponse;
         }
       });
     });

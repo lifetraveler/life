@@ -19,8 +19,10 @@ import { appSchema, tableSchema } from '@nozbe/watermelondb';
  * （AGENTS.md §7.39 系统日历 live 直读显示——显示开关，空/缺省 = 功能关闭）。
  * v15（切片 30 阶段 1）：app_settings 新增 ai_retry_max / flash_deleted_card_display
  * （AGENTS.md §7.41 AI 重试次数与已删除卡显示配置）。
+ * v16（切片 32 阶段 1）：app_settings 新增 show_ai_request / show_ai_response
+ * （AGENTS.md §7.44 AI 调试查看器——请求/响应展示开关）。
  */
-export const SCHEMA_VERSION = 15;
+export const SCHEMA_VERSION = 16;
 
 export const schema = appSchema({
   version: SCHEMA_VERSION,
@@ -166,6 +168,10 @@ export const schema = appSchema({
     // flash_deleted_card_display——已删除条目在聊天结果卡中的显示方式枚举
     // 'mark'（置灰+角标+禁用，默认）| 'remove'（从对话移除）。isOptional：既有行
     // 回填 null，读取层归一（非枚举值 → 'mark'），写路径校验（枚举外抛错）。
+    // v16（切片 32 阶段 1，AGENTS.md §7.44）：show_ai_request / show_ai_response——
+    // AI 调试查看器的请求体/响应体展示开关（各自独立控制弹层对应节，双关 = 只看
+    // 本轮解析草稿）。非可选 boolean：addColumns 对既有行自动回填类型零值 false
+    //（默认关闭，careful_mode/show_ai_usage 同款先例，无需 UPDATE）。
     tableSchema({
       name: 'app_settings',
       columns: [
@@ -181,6 +187,8 @@ export const schema = appSchema({
         { name: 'display_calendar_ids_json', type: 'string', isOptional: true },
         { name: 'ai_retry_max', type: 'number', isOptional: true },
         { name: 'flash_deleted_card_display', type: 'string', isOptional: true },
+        { name: 'show_ai_request', type: 'boolean' },
+        { name: 'show_ai_response', type: 'boolean' },
       ],
     }),
     // 切片 17 阶段 1（AGENTS.md §7.27 渠道配置中心，schema v9）：渠道预设表。

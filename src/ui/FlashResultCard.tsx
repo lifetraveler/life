@@ -76,24 +76,26 @@ export function describeCardTimeLine(payload: FlashCardPayload, tzid: string): s
  * 提醒行渠道标识（切片 23 阶段 3 / §7.35，任务卡验收 2/4）：含 alarm →
  * '⏰' + '闹钟 · 规则摘要'；含 system-notification → '🔔' + '通知 · 规则摘要'；
  * 网络渠道 → '🔔' + 渠道标签。规则摘要（formatReminderRuleSummary）保留，
- * 渠道只是行首标识。reminder null → null（整行不渲染）。
+ * 渠道只是行首标识。切片 32（§7.44）多计划：入参改快照数组，逐条产出一行、
+ * 顺序保留；空数组 → []（整块不渲染）。
  */
-export function describeCardReminderLine(
-  reminder: FlashCardReminderSnapshot | null,
-): { icon: string; text: string } | null {
-  if (reminder === null) return null;
-  const summary = formatReminderRuleSummary(reminder);
-  if (reminder.channels.includes('alarm')) {
-    return { icon: '⏰', text: `闹钟 · ${summary}` };
-  }
-  if (reminder.channels.includes('system-notification')) {
-    return { icon: '🔔', text: `通知 · ${summary}` };
-  }
-  const labels =
-    reminder.channels.length > 0
-      ? reminder.channels.map((channel) => REMINDER_CHANNEL_LABELS[channel]).join('、')
-      : '通知';
-  return { icon: '🔔', text: `${labels} · ${summary}` };
+export function describeCardReminderLines(
+  reminders: ReadonlyArray<FlashCardReminderSnapshot>,
+): Array<{ icon: string; text: string }> {
+  return reminders.map((reminder) => {
+    const summary = formatReminderRuleSummary(reminder);
+    if (reminder.channels.includes('alarm')) {
+      return { icon: '⏰', text: `闹钟 · ${summary}` };
+    }
+    if (reminder.channels.includes('system-notification')) {
+      return { icon: '🔔', text: `通知 · ${summary}` };
+    }
+    const labels =
+      reminder.channels.length > 0
+        ? reminder.channels.map((channel) => REMINDER_CHANNEL_LABELS[channel]).join('、')
+        : '通知';
+    return { icon: '🔔', text: `${labels} · ${summary}` };
+  });
 }
 
 interface FlashResultCardProps {
@@ -131,7 +133,8 @@ export default function FlashResultCard({
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const timeLine = describeCardTimeLine(payload, tzid);
-  const reminderLine = describeCardReminderLine(payload.reminder);
+  // 切片 32（§7.44）多计划：逐条提醒一行，空数组不渲染块。
+  const reminderLines = describeCardReminderLines(payload.reminders);
   const categoryColor = payload.category?.color ?? FALLBACK_CATEGORY_COLOR;
   // 切片 30（§7.41 D2）：已删除卡不渲染 chips（chips 语义已无操作对象）；
   // 历史判定保持不变（deleted 与 historical 可同时为 true，角标 deleted 优先）。
@@ -175,14 +178,16 @@ export default function FlashResultCard({
             </Text>
           </View>
         ) : null}
-        {reminderLine !== null ? (
-          <View style={styles.metaRow}>
-            <Text style={styles.metaIcon}>{reminderLine.icon}</Text>
-            <Text style={styles.metaText} numberOfLines={1}>
-              {reminderLine.text}
-            </Text>
-          </View>
-        ) : null}
+        {reminderLines.length > 0
+          ? reminderLines.map((line, index) => (
+              <View key={`${index}-${line.text}`} style={styles.metaRow}>
+                <Text style={styles.metaIcon}>{line.icon}</Text>
+                <Text style={styles.metaText} numberOfLines={1}>
+                  {line.text}
+                </Text>
+              </View>
+            ))
+          : null}
         {showPostponeChips ? (
           <View style={styles.chipRow}>
             {POSTPONE_OPTIONS.map((option) => {

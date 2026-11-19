@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.35
+版本：v0.36
 
 ## 1. 项目概览
 
@@ -482,8 +482,59 @@ schema 版本 5→6，新增/修改如下：
   diff 预览；AI Provider 配置不进快照；无新依赖；repository.md 追加非破坏性注记节
   （createDataSnapshot/applyDataSnapshot 契约外显式扩展成对）。
 
+### 7.44 闪电录入多提醒（wire reminders）与 AI 调试查看器（v0.36，切片 32）
+
+- **背景与范围**：真机缺陷 F1（「明天8点、10点提醒」→ 误报「提醒时刻已过去」且两条
+  提醒全丢）根因两处同修——wire 层无绝对时刻表达（模型把绝对时刻硬塞提前量触发
+  落库保护）与 savePlan 单计划约束（backlog 遗留 L5）；同时落地 AI 对话调试查看器
+  （F1 类缺陷排查提供输入/响应/卡片数据面）。提案
+  docs/proposals/slice-32-f1-multi-reminder-debug-viewer.md（用户 2026-11-19 确认）。
+- **wire v0.23**：`RemoteDraftWire` 新增可选键 `reminders?: RemoteDateTimeField[] | null`
+  （民用时刻数组，`time` 必须非 null）；键可缺省宽容、值出现即从严整体拒绝
+  （非数组/元素坏/超 8 条 WIRE_REMINDERS_MAX → isRemoteDraftWire 整体拒绝）；
+  `wireToParsedItemDraft` 本地换算 epoch ms 升序排序 + 同 epoch 去重，DST gap
+  条目丢弃不炸整体（全 gap → reminders undefined）。
+- **草稿层**：`ParsedItemDraft.reminders?: number[]`（guard 键可缺省、值从严有限
+  正整数数组、空数组按 reminderChannels 先例拒绝——「无提醒」由缺省表达）；
+  `merge.ts` DraftField 扩 `'reminders'`（掩码命中防御拷贝、未命中沿用、显式
+  expressed 且 undefined = 清除语义）。
+- **savePlan 多计划（F1 + L5 关闭）**：`FlashSavePlan.reminderPlan` →
+  `reminderPlans: ReminderPlan[]`、`reminderNotice` → `reminderNotices: string[]`；
+  reminders 每条 `toOncePlan`（epoch ≤ now 不落库 + 披露「提醒时刻已过去（民用），
+  未创建一次性提醒」）；offset/delay 各自独立落库（L5 关闭，删「暂不支持一次创建
+  两条提醒」文案）；强提醒锚点分支在 reminders 未表达时保持原样（reminders 已
+  表达时锚点不触发，渠道经覆盖循环带给 reminders 计划）；跨来源同 startAt 去重
+  保留先产出；recurrence 非空时 reminders/offset/delay 全披露不落一次性计划；
+  渠道覆盖/预设回填循环应用每条计划、缺预设渠道合并一句披露。
+- **执行链与卡片载荷**：`createReminder` 逐条顺序 await，单条失败 warn + 披露
+  不中断不回滚 item；reconcile 保持成功后显式一次；`FlashCardPayload.reminder` →
+  `reminders: FlashCardReminderSnapshot[]`（内存态消息无迁移负担，空数组不渲染
+  提醒行）；快捷推迟 chips 对条目全部 once 提醒联动顺延。
+- **prompt 成文（v0.23）**：字段定义加 reminders 行 + 「绝对时刻提醒判定规则」节
+  （适用语义与 start 独立、多时刻逐条展开最多 8 条超出取最早、time 必非 null、
+  **禁止把绝对时刻换算成 reminderOffsetMinutes/reminderDelayMinutes**——封堵 F1
+  根因、提前量与重复提醒不进 reminders）；buildHistoryBriefing 摘要块加
+  「提醒时刻（reminders）」行（民用时刻，前 8 条）；history 毫秒禁反算条款扩展
+  覆盖 reminders。
+- **AI 调试查看器**：schema v15→v16 两列 `show_ai_request`/`show_ai_response`
+  （非可选 boolean，addColumns 回退 false，v12/v13 先例）；provider
+  lastRequest/lastResponse 副通道（getter `lastDebug`：parse 进入清空、每轮尝试
+  覆盖、成功失败均保留、重试取最后一次；request = 实际发送请求体不含 HTTP
+  headers——Authorization 不采集；response 成功轮信封原文失败轮错误响应文本）；
+  `FlashTurnResult.debug` 域内字段（远端轮恒携带含失败降级轮，与 usage 只报
+  成功轮刻意不同；无 Key 本地轮 null）；UI 入口消息 + Modal 弹层三节
+  （request 随 show_ai_request、response/draft 随 show_ai_response），
+  settings/ai.tsx 两行 Switch。
+- **传输边界（v0.20 同款冻结）**：调试载荷不进 ParsedItemDraft、不进 history
+  JSON、不触碰 RemoteDraftWire/isRemoteDraftWire；AiParser.parse 冻结签名与
+  返回类型不变；usage.ts 快照与格式化零改动；ai.md 仅追加非破坏性条目。
+- **边界**：`src/notifications/` 零改动；`localFallback.ts` 零改动（§7.40 本地
+  兜底否决先例，reminders 仅远端路径）；ChatMessage kind 不新增；无新依赖
+  （弹层用 RN 内置 Modal）；F2（已保存条目对话式编辑防重复）不在本片；调试
+  载荷内存态不持久化/不导出/不复制。
+
 ## 8. 当前切片
 
-- **已完成**：切片 1–30 全部收尾合并（main @ `edacad5`；切片 24 夜间模式 merge `72daa78`，切片 25 认真模式 merge `5ed723f`，切片 26 AI 透明度 merge `73f9807`，切片 27 live 直读 merge `b187c5c`，切片 29 merge `e1c30e8`，切片 30 merge `a75407b`，切片 28 merge `edacad5`；schema v15，版本 0.23.0/versionCode 10）。**切片 28 配置备份 WebDAV 已完成**（2026-11-18，分支 `task/slice-28` 基点 `4c8e6ea`；提交链 2125ba3 → 90774f1 → 1d9006b → 6b4d827，merge `edacad5`；验收终态：schema 停留 v15 零迁移 / tsc 0 错 / jest 95 套件·1314 用例（基线 90/1241 只增不减）/ expo-doctor 2 项预存无新增 / 真机矩阵 10 项 + 损坏快照负例全过，见 `tasks/slice-28-closeout.md`）。各切片历史见对应 `tasks/slice-NN.md` / `tasks/slice-NN-closeout.md`。
-- **当前切片**：切片 31 数据备份 WebDAV 已完成（2026-11-18，分支 `task/slice-31` 基点 `5edeeec`；提交链 659a9bb → 0ac3e10 → 94714b4 → 收尾提交；验收终态：schema 停留 v15 零迁移 / tsc 0 错 / jest 98 套件·1365 用例（基线 95/1314 只增不减）/ expo-doctor 2 项预存无新增 / 真机矩阵 9 项 + 损坏快照负例全过，**4 项真机 pending 经用户批准移入 backlog，已于 2026-11-19 补做完成**（#4 全量还原、#10 断网/401 文案、#11 导出回归、chips 改回 [10,60]；猴王 adb 死锁事故见 closeout §四，补做结果见 closeout §四 补做结果节），见 `tasks/slice-31-closeout.md`）。下一片候选：双向同步（设计讨论先行）、插队「变更 B 网络渠道后台送达」、候选 29b 编号顺延。未完成项以 `tasks/backlog.md` 为准。
-- **未完成项以 `tasks/backlog.md` 为准**（2026-11-16 起的惯例）：候选排序（~~切片 25 认真模式~~已完成 → ~~26 AI 透明度~~已完成，关闭于切片 26 → ~~27 系统日历 live 直读~~已完成，关闭于切片 27 → ~~29 闪电录入对话能力强化包~~已完成，关闭于切片 29 → ~~30 草稿放弃/删除联动/AI 重试~~已完成，关闭于切片 30 → ~~28 备份/同步 WebDAV~~已立项为切片 28（配置备份先行）→ ~~数据备份（items/reminders/channel_presets）~~已立项为切片 31（2026-11-18）+ 双向同步为待定候选 + 插队候选「变更 B 网络渠道后台送达」+ 切片 25 收尾新增 4 条待定候选 + 候选 29b 编号顺延）、遗留 L1–L13、手验项 U1–U4、契约化已知限制均记录在 backlog，本节不再罗列候选清单。每切片 closeout 同步更新 backlog.md（划掉完成项并注明关闭切片号）并保持本节精简。
+- **已完成**：切片 1–32 全部收尾合并（main @ `525c16f`；切片 24 夜间模式 merge `72daa78`，切片 25 认真模式 merge `5ed723f`，切片 26 AI 透明度 merge `73f9807`，切片 27 live 直读 merge `b187c5c`，切片 29 merge `e1c30e8`，切片 30 merge `a75407b`，切片 28 merge `edacad5`，切片 31 merge `feec346`，切片 32 merge 见 git log；schema v16，版本 0.23.0/versionCode 10）。**切片 31 数据备份 WebDAV 已完成**（2026-11-18，分支 `task/slice-31` 基点 `5edeeec`；提交链 659a9bb → 0ac3e10 → 94714b4 → 40c4897，merge `feec346`；验收终态：schema 停留 v15 零迁移 / tsc 0 错 / jest 98 套件·1365 用例（基线 95/1314 只增不减）/ expo-doctor 2 项预存无新增 / 真机矩阵 9 项 + 损坏快照负例全过，**4 项真机 pending 经用户批准移入 backlog，已于 2026-11-19 补做完成**（#4 全量还原、#10 断网/401 文案、#11 导出回归、chips 改回 [10,60]；猴王 adb 死锁事故见 closeout §四，补做结果见 closeout §四 补做结果节），见 `tasks/slice-31-closeout.md`）。**切片 32 闪电录入多提醒 + AI 调试查看器已完成**（2026-11-19，分支 `task/slice-32` 基点 `525c16f`；提交链 56dbaf3（阶段 1）→ 50f8791（阶段 2）→ 收尾提交；验收终态：schema v15→v16 addColumns 两列 boolean / tsc 0 错 / jest 98 套件·1408 用例（基线 98/1365 只增不减，+43）/ expo-doctor 2 项预存无新增 / 真机矩阵 8 项过 7.5 项（③ 远端半项阻塞于 deepseek-flash reasoning-in-content，已记 backlog 候选；F1 修复经矩阵①远端成功轮端到端验证），见 `tasks/slice-32-closeout.md`）。各切片历史见对应 `tasks/slice-NN.md` / `tasks/slice-NN-closeout.md`。
+- **下一片候选**：以 `tasks/backlog.md` 为准（双向同步设计讨论先行 / 插队「变更 B 网络渠道后台送达」/ deepseek-flash reasoning-in-content 解析适配（切片 32 新增）/ 切片 25 收尾 4 条待定候选 / 候选 29b 编号顺延）。
+- **未完成项以 `tasks/backlog.md` 为准**（2026-11-16 起的惯例）：候选排序（~~切片 25 认真模式~~已完成 → ~~26 AI 透明度~~已完成，关闭于切片 26 → ~~27 系统日历 live 直读~~已完成，关闭于切片 27 → ~~29 闪电录入对话能力强化包~~已完成，关闭于切片 29 → ~~30 草稿放弃/删除联动/AI 重试~~已完成，关闭于切片 30 → ~~28 备份/同步 WebDAV~~已立项为切片 28（配置备份先行）→ ~~数据备份（items/reminders/channel_presets）~~已立项为切片 31（2026-11-18）→ ~~F1 闪电多提醒绝对时刻 once + AI 对话调试查看器~~已立项为切片 32（2026-11-19，用户选定）+ 双向同步为待定候选 + 插队候选「变更 B 网络渠道后台送达」+ 切片 25 收尾新增 4 条待定候选 + 候选 29b 编号顺延）、遗留 L1–L13（L5 随切片 32 关闭）、手验项 U1–U4、契约化已知限制均记录在 backlog，本节不再罗列候选清单。每切片 closeout 同步更新 backlog.md（划掉完成项并注明关闭切片号）并保持本节精简。

@@ -590,3 +590,104 @@ describe('runFlashTurn 重试披露（切片 30 / AGENTS.md §7.41）', () => {
     expect(result.assistantNote).toBe('AI 服务暂不可用（网络错误），已用本地解析');
   });
 });
+
+// ---------------------------------------------------------------------------
+// 切片 32（AGENTS.md §7.44 / ai.md v0.23）：调试查看器副通道——远端轮恒携带
+// debug（含失败降级轮），无 Key 本地轮 null；debug 不进 draft/history JSON。
+// ---------------------------------------------------------------------------
+
+describe('runFlashTurn debug 副通道（切片 32 / AGENTS.md §7.44）', () => {
+  const NOW = new Date('2026-11-10T10:00:00+08:00').getTime();
+  const TZID = 'Asia/Shanghai';
+
+  function remoteBody(wire: unknown): string {
+    return JSON.stringify({
+      choices: [{ message: { content: JSON.stringify(wire) } }],
+    });
+  }
+
+  function okFetch(body: string): typeof fetch {
+    return (async () =>
+      new Response(body, {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })) as unknown as typeof fetch;
+  }
+
+  const remoteWire = {
+    title: '开周会',
+    content: '',
+    type: 'event',
+    start: { date: '2026-11-11', time: '15:00' },
+    end: null,
+    allDay: false,
+    categoryId: 'work',
+    tags: [],
+    priority: 2,
+    recurrence: null,
+    reminderOffsetMinutes: null,
+    reminderDelayMinutes: null,
+  };
+
+  const config = {
+    active: {
+      provider: 'openai-compatible' as const,
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: 'sk-test-secret-key-do-not-leak',
+      model: 'test-model',
+      timeoutMs: undefined,
+    },
+  };
+
+  it('远端成功轮：debug 恒携带（request=发送请求体不含 apiKey，response=信封原文）；不进 draft/history', async () => {
+    const envelope = remoteBody(remoteWire);
+    const result = await runFlashTurn('明天下午3点开周会', {
+      config,
+      now: NOW,
+      tzid: TZID,
+      history: [],
+      previousDraft: null,
+      fetchImpl: okFetch(envelope),
+    });
+    expect(result.degraded).toBe(false);
+    expect(result.debug).not.toBeNull();
+    expect(result.debug?.request).not.toBeNull();
+    expect(result.debug?.request).toContain('明天下午3点开周会');
+    expect(result.debug?.request).toContain('"model":"test-model"');
+    expect(result.debug?.request).not.toContain('sk-test-secret-key-do-not-leak');
+    expect(result.debug?.response).toBe(envelope);
+    // 传输边界：debug 不进 draft / history JSON。
+    expect('debug' in result.draft).toBe(false);
+    expect('debug' in result.historyAppend[0]).toBe(false);
+    expect('debug' in result.historyAppend[1]).toBe(false);
+  });
+
+  it('失败降级轮（HTTP 500）：debug 仍携带失败尝试的请求/响应（排障面），aiRetryMax=0 单次尝试', async () => {
+    const failingFetch = (async () =>
+      new Response('boom', { status: 500 })) as unknown as typeof fetch;
+    const result = await runFlashTurn('明天买菜', {
+      config,
+      now: NOW,
+      tzid: TZID,
+      history: [],
+      previousDraft: null,
+      aiRetryMax: 0,
+      fetchImpl: failingFetch,
+    });
+    expect(result.degraded).toBe(true);
+    expect(result.debug).not.toBeNull();
+    expect(result.debug?.request).toContain('明天买菜');
+    expect(result.debug?.response).toBe('boom');
+  });
+
+  it('无 Key 本地轮：debug null（无远端往返可记录）', async () => {
+    const result = await runFlashTurn('明天买菜', {
+      config: null,
+      now: NOW,
+      tzid: TZID,
+      history: [],
+      previousDraft: null,
+    });
+    expect(result.debug).toBeNull();
+  });
+});

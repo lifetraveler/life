@@ -974,3 +974,174 @@ describe('OpenAICompatibleProvider 自动重试（切片 30 §7.41）', () => {
     expect(calls).toBe(4);
   });
 });
+
+describe('isRemoteDraftWire / wireToParsedItemDraft：reminders 绝对时刻（切片 32 §7.44）', () => {
+  const validWire: Record<string, unknown> = {
+    title: '开会',
+    content: '',
+    type: 'event',
+    start: { date: '2026-11-11', time: '15:00' },
+    end: { date: '2026-11-11', time: '16:00' },
+    allDay: false,
+    categoryId: 'work',
+    tags: ['工作'],
+    priority: 2,
+    recurrence: null,
+    reminderOffsetMinutes: 10,
+    reminderDelayMinutes: null,
+  };
+
+  it('键缺省（旧版 13 键 wire）→ 通过且 draft.reminders undefined；null 与 [] 同样宽容（[] 丢弃为 undefined）', () => {
+    expect(isRemoteDraftWire(validWire)).not.toBeNull();
+    expect(wireToParsedItemDraft(validWire as never, CONTEXT).reminders).toBeUndefined();
+
+    const nullWire = isRemoteDraftWire({ ...validWire, reminders: null });
+    expect(nullWire).not.toBeNull();
+    expect(wireToParsedItemDraft(nullWire as never, CONTEXT).reminders).toBeUndefined();
+
+    const emptyWire = isRemoteDraftWire({ ...validWire, reminders: [] });
+    expect(emptyWire).not.toBeNull();
+    expect(wireToParsedItemDraft(emptyWire as never, CONTEXT).reminders).toBeUndefined();
+  });
+
+  it('值从严整体拒绝：非数组 / 条目超 8 / 条目 time 为 null / 条目日期非法', () => {
+    expect(isRemoteDraftWire({ ...validWire, reminders: 'not-array' })).toBeNull();
+    expect(isRemoteDraftWire({ ...validWire, reminders: {} })).toBeNull();
+    // 9 条 → 超出 WIRE_REMINDERS_MAX
+    const nine = Array.from({ length: 9 }, (_, i) => ({
+      date: '2026-11-20',
+      time: `1${i % 10}:00`,
+    }));
+    expect(isRemoteDraftWire({ ...validWire, reminders: nine })).toBeNull();
+    expect(
+      isRemoteDraftWire({ ...validWire, reminders: [{ date: '2026-11-20', time: null }] }),
+    ).toBeNull();
+    expect(
+      isRemoteDraftWire({ ...validWire, reminders: [{ date: '2026-13-40', time: '08:00' }] }),
+    ).toBeNull();
+    expect(isRemoteDraftWire({ ...validWire, reminders: [{ date: '2026-11-20' }] })).toBeNull();
+  });
+
+  it('恰好 8 条 → 通过（边界合法）', () => {
+    const eight = Array.from({ length: 8 }, (_, i) => ({
+      date: '2026-11-20',
+      time: `1${i}:00`,
+    }));
+    expect(isRemoteDraftWire({ ...validWire, reminders: eight })).not.toBeNull();
+  });
+
+  it('合法民用数组 → 逐条换算 epoch ms 升序返回；乱序与重复条目去重排序', () => {
+    const wire = isRemoteDraftWire({
+      ...validWire,
+      reminders: [
+        { date: '2026-11-12', time: '10:00' },
+        { date: '2026-11-11', time: '08:00' },
+        { date: '2026-11-12', time: '10:00' },
+      ],
+    });
+    expect(wire).not.toBeNull();
+    const draft = wireToParsedItemDraft(wire as never, CONTEXT);
+    expect(draft.reminders).toEqual([
+      mustAt(2026, 11, 11, 8, 0),
+      mustAt(2026, 11, 12, 10, 0),
+    ]);
+  });
+
+  it('DST gap 条目丢弃不整体拒绝（America/New_York 2026-03-08 02:30）；其余条目保留', () => {
+    const nyContext: AiParseContext = { now: NOW, tzid: 'America/New_York', history: [] };
+    const wire = isRemoteDraftWire({
+      ...validWire,
+      reminders: [
+        { date: '2026-03-08', time: '02:30' }, // gap → 换算 null → 丢弃
+        { date: '2026-03-08', time: '09:00' }, // 合法保留
+      ],
+    });
+    expect(wire).not.toBeNull();
+    const draft = wireToParsedItemDraft(wire as never, nyContext);
+    const nyNine = resolveCivilTimeToInstant('America/New_York', 2026, 3, 8, 9, 0);
+    expect(nyNine).not.toBeNull();
+    expect(draft.reminders).toEqual([nyNine as number]);
+  });
+
+  it('全部条目均为 DST gap → reminders undefined（空集丢弃）', () => {
+    const nyContext: AiParseContext = { now: NOW, tzid: 'America/New_York', history: [] };
+    const wire = isRemoteDraftWire({
+      ...validWire,
+      reminders: [{ date: '2026-03-08', time: '02:30' }],
+    });
+    expect(wire).not.toBeNull();
+    expect(wireToParsedItemDraft(wire as never, nyContext).reminders).toBeUndefined();
+  });
+});
+
+describe('OpenAICompatibleProvider.lastDebug（切片 32 §7.44 / ai.md v0.23 副通道）', () => {
+  it('构造后 lastDebug 双段均为 null', () => {
+    const { fetchImpl } = makeFetch(() => okEnvelope(validWireJson));
+    const provider = makeProvider(fetchImpl);
+    expect(provider.lastDebug).toEqual({ request: null, response: null });
+  });
+
+  it('成功轮：request = 实际发送请求体（不含 headers），response = 信封原文', async () => {
+    const envelope = okEnvelope(validWireJson);
+    const envelopeText = await envelope.clone().text();
+    const { fetchImpl, calls } = makeFetch(() => envelope);
+    const provider = makeProvider(fetchImpl);
+    await provider.parse('明天下午3点开会', CONTEXT);
+
+    const debug = provider.lastDebug;
+    expect(debug.request).not.toBeNull();
+    expect(debug.request).not.toContain(API_KEY); // headers 不采集，Authorization 不入副通道
+    const recordedBody = JSON.parse(debug.request ?? '{}');
+    const firstCall = calls[0];
+    expect(firstCall).toBeDefined();
+    const sentBody = typeof firstCall?.init?.body === 'string' ? JSON.parse(firstCall.init.body) : {};
+    expect(recordedBody).toEqual(sentBody);
+    expect(recordedBody.model).toBe('deepseek-chat');
+    expect(recordedBody.temperature).toBe(0);
+    expect(recordedBody.stream).toBe(false);
+    expect(debug.response).toBe(envelopeText);
+  });
+
+  it('失败轮（HTTP 500）：request 照常记录，response = 错误响应文本', async () => {
+    const { fetchImpl } = makeFetch(() => new Response('{"error":{"message":"boom"}}', { status: 500 }));
+    const provider = makeProvider(fetchImpl);
+    await expect(provider.parse('明天下午3点开会', CONTEXT)).rejects.toThrow();
+    const debug = provider.lastDebug;
+    expect(debug.request).not.toBeNull();
+    expect(debug.response).toBe('{"error":{"message":"boom"}}');
+  });
+
+  it('失败轮（schema-mismatch）：信封可读 → response = 信封原文（成功失败均保留，供排障）', async () => {
+    const { fetchImpl } = makeFetch(() => okEnvelope('not-a-json'));
+    const provider = makeProvider(fetchImpl);
+    await expect(provider.parse('明天下午3点开会', CONTEXT)).rejects.toThrow();
+    const debug = provider.lastDebug;
+    expect(debug.request).not.toBeNull();
+    expect(debug.response).toContain('not-a-json'); // response = 信封原文（含 choices 包裹）
+  });
+
+  it('进入下一轮 parse 即清空（不残留上一轮载荷），失败轮同样先清空', async () => {
+    const { fetchImpl } = makeFetch(() => new Response('boom', { status: 500 }));
+    const provider = new OpenAICompatibleProvider(
+      { baseUrl: 'https://api.deepseek.com/v1', apiKey: API_KEY, model: 'deepseek-chat', retryMax: 0 },
+      fetchImpl,
+    );
+    await expect(provider.parse('第一轮', CONTEXT)).rejects.toThrow();
+    expect(provider.lastDebug.request).not.toBeNull();
+    await expect(provider.parse('第二轮', CONTEXT)).rejects.toThrow();
+    // 第二轮请求体应包含新一轮 prompt，且不含上一轮输入
+    expect(provider.lastDebug.request).not.toContain('第一轮');
+    expect(provider.lastDebug.request).toContain('第二轮');
+  });
+
+  it('重试耗尽：lastDebug 反映最后一次尝试（每轮覆盖）', async () => {
+    let calls = 0;
+    const { fetchImpl } = makeFetch(() => {
+      calls += 1;
+      return new Response(`{"error":{"message":"boom-${calls}"}}`, { status: 500 });
+    });
+    const provider = makeProvider(fetchImpl);
+    await expect(provider.parse('明天下午3点开会', CONTEXT)).rejects.toThrow(/已重试 3 次/);
+    expect(provider.lastDebug.response).toContain('boom-4'); // 1 次初始 + 3 次重试 = 第 4 次尝试
+  });
+});

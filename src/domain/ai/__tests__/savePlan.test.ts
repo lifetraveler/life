@@ -1,6 +1,9 @@
 /**
  * 确认落库计划测试（tasks/slice-15.md 阶段 3，验收 9；切片 16 阶段 3 扩 once 落库）：
  * 时间字段剥离（§4.24 链）、标签、提醒白名单、once 计划构造与各降级说明。
+ * 切片 32（AGENTS.md §7.44 / ai.md v0.23）：FlashSavePlan 多计划化（reminderPlans /
+ * reminderNotices 数组）——reminders 逐条落库、offset/delay 独立落库（L5 关闭）、
+ * 跨来源去重、recurrence 同现全披露、渠道覆盖/预设回填循环应用。
  */
 
 import { buildFlashSavePlan } from '../savePlan';
@@ -42,11 +45,11 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
       allDay: false,
     });
     expect(plan.tagNames).toEqual(['生活']);
-    expect(plan.reminderPlan).toBeNull();
-    expect(plan.reminderNotice).toBeNull();
+    expect(plan.reminderPlans).toEqual([]);
+    expect(plan.reminderNotices).toEqual([]);
   });
 
-  it('重复规则 + 白名单时区 → reminderPlan 保留', () => {
+  it('重复规则 + 白名单时区 → reminderPlans 保留重复计划', () => {
     const plan = buildFlashSavePlan(
       baseDraft({
         startAt: null,
@@ -60,20 +63,22 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
       'Asia/Shanghai',
       NOW,
     );
-    expect(plan.reminderPlan).toEqual({
-      frequency: 'weekly',
-      localTimeHour: 20,
-      localTimeMinute: 0,
-      weekdays: [3],
-      dayOfMonth: undefined,
-      tzid: 'Asia/Shanghai',
-      startAt: expect.any(Number),
-      enabled: true,
-    });
-    expect(plan.reminderNotice).toBeNull();
+    expect(plan.reminderPlans).toEqual([
+      {
+        frequency: 'weekly',
+        localTimeHour: 20,
+        localTimeMinute: 0,
+        weekdays: [3],
+        dayOfMonth: undefined,
+        tzid: 'Asia/Shanghai',
+        startAt: expect.any(Number),
+        enabled: true,
+      },
+    ]);
+    expect(plan.reminderNotices).toEqual([]);
   });
 
-  it('重复规则 + 白名单外时区 → reminderPlan 置空并附说明', () => {
+  it('重复规则 + 白名单外时区 → 重复计划置空并附说明', () => {
     const plan = buildFlashSavePlan(
       baseDraft({
         recurrence: {
@@ -84,9 +89,10 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
       'Europe/Paris',
       NOW,
     );
-    expect(plan.reminderPlan).toBeNull();
-    expect(plan.reminderNotice).toContain('Europe/Paris');
-    expect(plan.reminderNotice).toContain('暂不支持');
+    expect(plan.reminderPlans).toEqual([]);
+    expect(plan.reminderNotices).toHaveLength(1);
+    expect(plan.reminderNotices[0]).toContain('Europe/Paris');
+    expect(plan.reminderNotices[0]).toContain('暂不支持');
   });
 
   it('切片 16：有 startAt + 提前量 → once 计划（触发时刻 = startAt - offset，民用分解按 tzid）', () => {
@@ -95,28 +101,30 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
       'Asia/Shanghai',
       NOW,
     );
-    expect(plan.reminderPlan).toEqual({
-      frequency: 'once',
-      localTimeHour: 0,
-      localTimeMinute: 0,
-      onceAt: { year: 2026, month: 11, day: 11, hour: 14, minute: 50 },
-      channels: ['system-notification'],
-      channelConfigs: {},
-      tzid: 'Asia/Shanghai',
-      startAt: new Date('2026-11-11T14:50:00+08:00').getTime(),
-      enabled: true,
-    });
-    expect(plan.reminderNotice).toBeNull();
+    expect(plan.reminderPlans).toEqual([
+      {
+        frequency: 'once',
+        localTimeHour: 0,
+        localTimeMinute: 0,
+        onceAt: { year: 2026, month: 11, day: 11, hour: 14, minute: 50 },
+        channels: ['system-notification'],
+        channelConfigs: {},
+        tzid: 'Asia/Shanghai',
+        startAt: new Date('2026-11-11T14:50:00+08:00').getTime(),
+        enabled: true,
+      },
+    ]);
+    expect(plan.reminderNotices).toEqual([]);
   });
 
-  it('切片 16：无 startAt + 提前量 → 不落库，提示「需设定时间才能提前提醒」', () => {
+  it('切片 16：无 startAt + 提前量 → 不落库，披露「需设定时间才能提前提醒」', () => {
     const plan = buildFlashSavePlan(
       baseDraft({ startAt: null, endAt: null, reminderOffsetMinutes: 10 }),
       'Asia/Shanghai',
       NOW,
     );
-    expect(plan.reminderPlan).toBeNull();
-    expect(plan.reminderNotice).toBe('需设定时间才能提前提醒');
+    expect(plan.reminderPlans).toEqual([]);
+    expect(plan.reminderNotices).toEqual(['需设定时间才能提前提醒']);
   });
 
   it('切片 16：白名单外时区 + 提前量 → 不落库并附说明', () => {
@@ -125,9 +133,10 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
       'Europe/Paris',
       NOW,
     );
-    expect(plan.reminderPlan).toBeNull();
-    expect(plan.reminderNotice).toContain('Europe/Paris');
-    expect(plan.reminderNotice).toContain('暂不支持');
+    expect(plan.reminderPlans).toEqual([]);
+    expect(plan.reminderNotices).toHaveLength(1);
+    expect(plan.reminderNotices[0]).toContain('Europe/Paris');
+    expect(plan.reminderNotices[0]).toContain('暂不支持');
   });
 
   it('切片 16：触发时刻已过去（startAt - offset <= now）→ 不落库，避免 reconcile 记 missed', () => {
@@ -136,11 +145,11 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
       'Asia/Shanghai',
       NOW,
     );
-    expect(plan.reminderPlan).toBeNull();
-    expect(plan.reminderNotice).toBe('提醒时刻已过去，未创建一次性提醒');
+    expect(plan.reminderPlans).toEqual([]);
+    expect(plan.reminderNotices).toEqual(['提醒时刻已过去，未创建一次性提醒']);
   });
 
-  it('切片 16：重复规则与提前量同时存在 → 重复计划优先（offset 保留在卡片意图，行为不变）', () => {
+  it('切片 32：重复规则与提前量同现 → 重复计划落库，offset 显式披露（v0.22 静默保留 → v0.23 披露）', () => {
     const plan = buildFlashSavePlan(
       baseDraft({
         startAt: null,
@@ -155,9 +164,11 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
       'Asia/Shanghai',
       NOW,
     );
-    expect(plan.reminderPlan).not.toBeNull();
-    expect(plan.reminderPlan?.frequency).toBe('weekly');
-    expect(plan.reminderNotice).toBeNull();
+    expect(plan.reminderPlans).toHaveLength(1);
+    expect(plan.reminderPlans[0]?.frequency).toBe('weekly');
+    expect(plan.reminderNotices).toEqual([
+      '重复提醒已创建；「提前 10 分钟」未创建（重复规则下不另建一次性提醒）',
+    ]);
   });
 
   // —— 切片 19 阶段 2：延迟提醒落库（AGENTS.md §7.30 第一条） ——
@@ -170,18 +181,20 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
     );
     // NOW = 2026-11-10T10:00+08:00 → 触发 10:10；条目 startAt 锚定触发时刻（验收 3 反馈），
     // 不再落入无时间「待办」组。
-    expect(plan.reminderPlan).toEqual({
-      frequency: 'once',
-      localTimeHour: 0,
-      localTimeMinute: 0,
-      onceAt: { year: 2026, month: 11, day: 10, hour: 10, minute: 10 },
-      channels: ['system-notification'],
-      channelConfigs: {},
-      tzid: 'Asia/Shanghai',
-      startAt: NOW + 10 * 60000,
-      enabled: true,
-    });
-    expect(plan.reminderNotice).toBeNull();
+    expect(plan.reminderPlans).toEqual([
+      {
+        frequency: 'once',
+        localTimeHour: 0,
+        localTimeMinute: 0,
+        onceAt: { year: 2026, month: 11, day: 10, hour: 10, minute: 10 },
+        channels: ['system-notification'],
+        channelConfigs: {},
+        tzid: 'Asia/Shanghai',
+        startAt: NOW + 10 * 60000,
+        enabled: true,
+      },
+    ]);
+    expect(plan.reminderNotices).toEqual([]);
     expect(plan.timePatch.startAt).toBe(NOW + 10 * 60000);
   });
 
@@ -191,10 +204,11 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
       'Asia/Shanghai',
       NOW,
     );
-    expect(plan.reminderPlan?.frequency).toBe('once');
-    expect(plan.reminderPlan?.startAt).toBe(NOW + 60 * 60000);
+    expect(plan.reminderPlans).toHaveLength(1);
+    expect(plan.reminderPlans[0]?.frequency).toBe('once');
+    expect(plan.reminderPlans[0]?.startAt).toBe(NOW + 60 * 60000);
     expect(plan.timePatch.startAt).toBe(new Date('2026-11-11T15:00:00+08:00').getTime());
-    expect(plan.reminderNotice).toBeNull();
+    expect(plan.reminderNotices).toEqual([]);
   });
 
   it('切片 19：白名单外时区 + 延迟提醒 → 不落库并附说明；条目时刻仍锚定触发时刻', () => {
@@ -203,39 +217,40 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
       'Europe/Paris',
       NOW,
     );
-    expect(plan.reminderPlan).toBeNull();
-    expect(plan.reminderNotice).toContain('Europe/Paris');
-    expect(plan.reminderNotice).toContain('暂不支持');
+    expect(plan.reminderPlans).toEqual([]);
+    expect(plan.reminderNotices).toHaveLength(1);
+    expect(plan.reminderNotices[0]).toContain('Europe/Paris');
+    expect(plan.reminderNotices[0]).toContain('暂不支持');
     // 提醒未创建不影响条目时间锚定（验收 3 反馈：条目时间与提醒互相独立）。
     expect(plan.timePatch.startAt).toBe(NOW + 10 * 60000);
   });
 
-  it('切片 19：延迟与提前同现 + startAt 有值 → 提前提醒优先，延迟意图披露并保留卡片', () => {
+  it('切片 32（L5 关闭）：延迟与提前同现 + startAt 有值 → 两条计划各自落库（原降级文案废除）', () => {
     const plan = buildFlashSavePlan(
       baseDraft({ reminderOffsetMinutes: 5, reminderDelayMinutes: 30 }),
       'Asia/Shanghai',
       NOW,
     );
-    // 主提醒锚定事件开始（startAt - 5min），delay 不落库。
-    expect(plan.reminderPlan?.frequency).toBe('once');
-    expect(plan.reminderPlan?.startAt).toBe(new Date('2026-11-11T14:55:00+08:00').getTime());
-    expect(plan.reminderNotice).toContain('提前 5 分钟');
-    expect(plan.reminderNotice).toContain('30 分钟后提醒');
-    expect(plan.reminderNotice).toContain('已保留在卡片');
+    // 两条独立 once：offset 锚定事件开始（startAt - 5min），delay 锚定 now+30min。
+    expect(plan.reminderPlans).toHaveLength(2);
+    expect(plan.reminderPlans[0]?.frequency).toBe('once');
+    expect(plan.reminderPlans[0]?.startAt).toBe(new Date('2026-11-11T14:55:00+08:00').getTime());
+    expect(plan.reminderPlans[1]?.frequency).toBe('once');
+    expect(plan.reminderPlans[1]?.startAt).toBe(NOW + 30 * 60000);
+    expect(plan.reminderNotices).toEqual([]);
   });
 
-  it('切片 19：延迟与提前同现 + startAt null → 按 delay 落库，提前量披露需设定时间', () => {
+  it('切片 32（L5 关闭）：延迟与提前同现 + startAt null → delay 落库，offset 披露需设定时间', () => {
     const plan = buildFlashSavePlan(
       baseDraft({ startAt: null, endAt: null, reminderOffsetMinutes: 5, reminderDelayMinutes: 30 }),
       'Asia/Shanghai',
       NOW,
     );
-    expect(plan.reminderPlan?.frequency).toBe('once');
-    expect(plan.reminderPlan?.startAt).toBe(NOW + 30 * 60000);
+    expect(plan.reminderPlans).toHaveLength(1);
+    expect(plan.reminderPlans[0]?.frequency).toBe('once');
+    expect(plan.reminderPlans[0]?.startAt).toBe(NOW + 30 * 60000);
     expect(plan.timePatch.startAt).toBe(NOW + 30 * 60000);
-    expect(plan.reminderNotice).toContain('30 分钟后');
-    expect(plan.reminderNotice).toContain('提前 5 分钟');
-    expect(plan.reminderNotice).toContain('需设定时间');
+    expect(plan.reminderNotices).toEqual(['需设定时间才能提前提醒']);
   });
 
   it('切片 19：defaultChannels 入参 → once 提醒渠道跟随全局默认（验收 4 反馈），无预设时披露', () => {
@@ -245,11 +260,12 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
       NOW,
       ['system-notification', 'webhook'],
     );
-    expect(plan.reminderPlan?.channels).toEqual(['system-notification', 'webhook']);
+    expect(plan.reminderPlans[0]?.channels).toEqual(['system-notification', 'webhook']);
     // 无任何预设：channelConfigs 空 + 一句事实披露（不再催用户补参数）。
-    expect(plan.reminderPlan?.channelConfigs).toEqual({});
-    expect(plan.reminderNotice).toContain('尚未配置任何渠道预设');
-    expect(plan.reminderNotice).toContain('到点投递会失败');
+    expect(plan.reminderPlans[0]?.channelConfigs).toEqual({});
+    expect(plan.reminderNotices).toEqual([
+      '网络渠道（webhook）尚未配置任何渠道预设，到点投递会失败',
+    ]);
   });
 
   it('切片 19：默认渠道含 webhook + 有默认预设 → channelConfigs 自动取默认预设配置，不再披露', () => {
@@ -263,9 +279,9 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
         { id: 'p2', name: '默认', type: 'webhook', configJson: 'https://hook.example/def', isDefault: true, createdAt: 2 },
       ],
     );
-    expect(plan.reminderPlan?.channels).toEqual(['system-notification', 'webhook']);
-    expect(plan.reminderPlan?.channelConfigs).toEqual({ webhook: 'https://hook.example/def' });
-    expect(plan.reminderNotice).toBeNull();
+    expect(plan.reminderPlans[0]?.channels).toEqual(['system-notification', 'webhook']);
+    expect(plan.reminderPlans[0]?.channelConfigs).toEqual({ webhook: 'https://hook.example/def' });
+    expect(plan.reminderNotices).toEqual([]);
   });
 
   it('切片 19：无默认预设 → 网络渠道参数取该渠道第一条预设（用户既定需求）', () => {
@@ -280,8 +296,8 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
       ],
     );
     // 「第一条」= 入参首位（listChannelPresets 为 created_at 降序 → 最新创建）。
-    expect(plan.reminderPlan?.channelConfigs).toEqual({ webhook: 'https://hook.example/first' });
-    expect(plan.reminderNotice).toBeNull();
+    expect(plan.reminderPlans[0]?.channelConfigs).toEqual({ webhook: 'https://hook.example/first' });
+    expect(plan.reminderNotices).toEqual([]);
   });
 
   it('切片 19：webhook/apprise 同时默认勾选 → 各自按默认→第一条解析', () => {
@@ -295,14 +311,14 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
         { id: 'pA', name: '通知', type: 'apprise', configJson: '{"baseUrl":"http://apprise.local","key":"k"}', isDefault: true, createdAt: 2 },
       ],
     );
-    expect(plan.reminderPlan?.channelConfigs).toEqual({
+    expect(plan.reminderPlans[0]?.channelConfigs).toEqual({
       webhook: 'https://hook.example/w',
       apprise: '{"baseUrl":"http://apprise.local","key":"k"}',
     });
-    expect(plan.reminderNotice).toBeNull();
+    expect(plan.reminderNotices).toEqual([]);
   });
 
-  it('切片 19：defaultChannels 入参 → 重复计划渠道同样跟随（验收 4 反馈）', () => {
+  it('切片 19：defaultChannels 入参 → 重复计划渠道同样跟随（验收 4 反馈）；同现 delay 显式披露', () => {
     const plan = buildFlashSavePlan(
       baseDraft({
         startAt: null,
@@ -317,8 +333,13 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
       NOW,
       ['webhook'],
     );
-    expect(plan.reminderPlan?.frequency).toBe('daily');
-    expect(plan.reminderPlan?.channels).toEqual(['webhook']);
+    expect(plan.reminderPlans).toHaveLength(1);
+    expect(plan.reminderPlans[0]?.frequency).toBe('daily');
+    expect(plan.reminderPlans[0]?.channels).toEqual(['webhook']);
+    expect(plan.reminderNotices).toEqual([
+      '重复提醒已创建；「10 分钟后」未创建（重复规则下不另建一次性提醒）',
+      '网络渠道（webhook）尚未配置任何渠道预设，到点投递会失败',
+    ]);
   });
 
   it('切片 19：defaultChannels 缺省 → 维持系统通知单渠道（旧行为不变）', () => {
@@ -327,11 +348,11 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
       'Asia/Shanghai',
       NOW,
     );
-    expect(plan.reminderPlan?.channels).toEqual(['system-notification']);
-    expect(plan.reminderNotice).toBeNull();
+    expect(plan.reminderPlans[0]?.channels).toEqual(['system-notification']);
+    expect(plan.reminderNotices).toEqual([]);
   });
 
-  it('切片 19：重复规则与延迟提醒同现 → 重复计划优先（delay 保留在卡片意图）', () => {
+  it('切片 19：重复规则与延迟提醒同现 → 重复计划优先（delay 显式披露，v0.22 静默 → v0.23 披露）', () => {
     const plan = buildFlashSavePlan(
       baseDraft({
         startAt: null,
@@ -345,9 +366,11 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
       'Asia/Shanghai',
       NOW,
     );
-    expect(plan.reminderPlan).not.toBeNull();
-    expect(plan.reminderPlan?.frequency).toBe('daily');
-    expect(plan.reminderNotice).toBeNull();
+    expect(plan.reminderPlans).toHaveLength(1);
+    expect(plan.reminderPlans[0]?.frequency).toBe('daily');
+    expect(plan.reminderNotices).toEqual([
+      '重复提醒已创建；「10 分钟后」未创建（重复规则下不另建一次性提醒）',
+    ]);
   });
 
   // —— 切片 23（AGENTS.md §7.35 / ai.md v0.19）：强提醒渠道推荐落库 ——
@@ -358,18 +381,20 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
       'Asia/Shanghai',
       NOW,
     );
-    expect(plan.reminderPlan).toEqual({
-      frequency: 'once',
-      localTimeHour: 0,
-      localTimeMinute: 0,
-      onceAt: { year: 2026, month: 11, day: 11, hour: 15, minute: 0 },
-      channels: ['alarm'],
-      channelConfigs: {},
-      tzid: 'Asia/Shanghai',
-      startAt: new Date('2026-11-11T15:00:00+08:00').getTime(),
-      enabled: true,
-    });
-    expect(plan.reminderNotice).toBeNull();
+    expect(plan.reminderPlans).toEqual([
+      {
+        frequency: 'once',
+        localTimeHour: 0,
+        localTimeMinute: 0,
+        onceAt: { year: 2026, month: 11, day: 11, hour: 15, minute: 0 },
+        channels: ['alarm'],
+        channelConfigs: {},
+        tzid: 'Asia/Shanghai',
+        startAt: new Date('2026-11-11T15:00:00+08:00').getTime(),
+        enabled: true,
+      },
+    ]);
+    expect(plan.reminderNotices).toEqual([]);
   });
 
   it('切片 23：draft 显式渠道优先于 defaultChannels（强提醒语义不被全局偏好覆盖）', () => {
@@ -379,8 +404,8 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
       NOW,
       ['system-notification'],
     );
-    expect(plan.reminderPlan?.channels).toEqual(['alarm']);
-    expect(plan.reminderNotice).toBeNull();
+    expect(plan.reminderPlans[0]?.channels).toEqual(['alarm']);
+    expect(plan.reminderNotices).toEqual([]);
   });
 
   it('切片 23：draft 未携带渠道 → defaultChannels 照旧生效（普通提醒路径回归）', () => {
@@ -393,8 +418,8 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
         { id: 'p1', name: '默认', type: 'webhook', configJson: 'https://hook.example/def', isDefault: true, createdAt: 1 },
       ],
     );
-    expect(plan.reminderPlan?.channels).toEqual(['system-notification', 'webhook']);
-    expect(plan.reminderNotice).toBeNull();
+    expect(plan.reminderPlans[0]?.channels).toEqual(['system-notification', 'webhook']);
+    expect(plan.reminderNotices).toEqual([]);
   });
 
   it('切片 23：显式渠道 + 提前量 → 提前量锚定触发时刻，渠道用显式渠道（提前10分钟叫我起床）', () => {
@@ -403,11 +428,12 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
       'Asia/Shanghai',
       NOW,
     );
-    expect(plan.reminderPlan?.frequency).toBe('once');
-    expect(plan.reminderPlan?.startAt).toBe(new Date('2026-11-11T14:50:00+08:00').getTime());
-    expect(plan.reminderPlan?.onceAt).toEqual({ year: 2026, month: 11, day: 11, hour: 14, minute: 50 });
-    expect(plan.reminderPlan?.channels).toEqual(['alarm']);
-    expect(plan.reminderNotice).toBeNull();
+    expect(plan.reminderPlans).toHaveLength(1);
+    expect(plan.reminderPlans[0]?.frequency).toBe('once');
+    expect(plan.reminderPlans[0]?.startAt).toBe(new Date('2026-11-11T14:50:00+08:00').getTime());
+    expect(plan.reminderPlans[0]?.onceAt).toEqual({ year: 2026, month: 11, day: 11, hour: 14, minute: 50 });
+    expect(plan.reminderPlans[0]?.channels).toEqual(['alarm']);
+    expect(plan.reminderNotices).toEqual([]);
   });
 
   it('切片 23：显式渠道 + 延迟提醒 → delay 落库且渠道用显式渠道', () => {
@@ -416,10 +442,11 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
       'Asia/Shanghai',
       NOW,
     );
-    expect(plan.reminderPlan?.frequency).toBe('once');
-    expect(plan.reminderPlan?.startAt).toBe(NOW + 30 * 60000);
-    expect(plan.reminderPlan?.channels).toEqual(['alarm']);
-    expect(plan.reminderNotice).toBeNull();
+    expect(plan.reminderPlans).toHaveLength(1);
+    expect(plan.reminderPlans[0]?.frequency).toBe('once');
+    expect(plan.reminderPlans[0]?.startAt).toBe(NOW + 30 * 60000);
+    expect(plan.reminderPlans[0]?.channels).toEqual(['alarm']);
+    expect(plan.reminderNotices).toEqual([]);
   });
 
   it('切片 23：显式渠道 + startAt null → 不建提醒并披露（需设定时间才能创建强提醒）', () => {
@@ -428,8 +455,8 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
       'Asia/Shanghai',
       NOW,
     );
-    expect(plan.reminderPlan).toBeNull();
-    expect(plan.reminderNotice).toBe('需设定时间才能创建强提醒');
+    expect(plan.reminderPlans).toEqual([]);
+    expect(plan.reminderNotices).toEqual(['需设定时间才能创建强提醒']);
   });
 
   it('切片 23：显式渠道 + allDay → 不建提醒并披露（全天 00:00 响铃属误伤）', () => {
@@ -443,8 +470,8 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
       'Asia/Shanghai',
       NOW,
     );
-    expect(plan.reminderPlan).toBeNull();
-    expect(plan.reminderNotice).toBe('全天条目暂不创建强提醒（未表达具体时刻）');
+    expect(plan.reminderPlans).toEqual([]);
+    expect(plan.reminderNotices).toEqual(['全天条目暂不创建强提醒（未表达具体时刻）']);
   });
 
   it('切片 23：重复规则 + 显式渠道 → 重复计划仍优先，渠道被显式渠道覆盖（每天8点叫我起床）', () => {
@@ -458,8 +485,154 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
       'Asia/Shanghai',
       NOW,
     );
-    expect(plan.reminderPlan?.frequency).toBe('daily');
-    expect(plan.reminderPlan?.channels).toEqual(['alarm']);
-    expect(plan.reminderNotice).toBeNull();
+    expect(plan.reminderPlans).toHaveLength(1);
+    expect(plan.reminderPlans[0]?.frequency).toBe('daily');
+    expect(plan.reminderPlans[0]?.channels).toEqual(['alarm']);
+    expect(plan.reminderNotices).toEqual([]);
+  });
+
+  // —— 切片 32（AGENTS.md §7.44 / ai.md v0.23）：绝对时刻 reminders 多计划 ——
+
+  it('切片 32：reminders 两条未来时刻 → 逐条 once 计划（升序，F1 修复核心）', () => {
+    const eightAm = new Date('2026-11-11T08:00:00+08:00').getTime();
+    const tenAm = new Date('2026-11-11T10:00:00+08:00').getTime();
+    // draft.reminders 约定为升序（wireToParsedItemDraft 换算层保证），savePlan 按序消费。
+    const plan = buildFlashSavePlan(
+      baseDraft({ startAt: null, endAt: null, reminders: [eightAm, tenAm] }),
+      'Asia/Shanghai',
+      NOW,
+    );
+    expect(plan.reminderPlans).toHaveLength(2);
+    expect(plan.reminderPlans[0]).toMatchObject({
+      frequency: 'once',
+      onceAt: { year: 2026, month: 11, day: 11, hour: 8, minute: 0 },
+      startAt: eightAm,
+    });
+    expect(plan.reminderPlans[1]).toMatchObject({
+      frequency: 'once',
+      onceAt: { year: 2026, month: 11, day: 11, hour: 10, minute: 0 },
+      startAt: tenAm,
+    });
+    expect(plan.reminderNotices).toEqual([]);
+  });
+
+  it('切片 32：reminders 含过去时刻 → 过去条目披露（含民用时刻），未来条目照常落库', () => {
+    const past = new Date('2026-11-10T09:00:00+08:00').getTime();
+    const future = new Date('2026-11-11T10:00:00+08:00').getTime();
+    const plan = buildFlashSavePlan(
+      baseDraft({ startAt: null, endAt: null, reminders: [past, future] }),
+      'Asia/Shanghai',
+      NOW,
+    );
+    expect(plan.reminderPlans).toHaveLength(1);
+    expect(plan.reminderPlans[0]?.startAt).toBe(future);
+    expect(plan.reminderNotices).toEqual([
+      '提醒时刻已过去（2026-11-10 09:00），未创建一次性提醒',
+    ]);
+  });
+
+  it('切片 32：reminders 与 offset 同现 → 各自独立成条（reminders 先产出，去重池顺序）', () => {
+    const tenAm = new Date('2026-11-11T10:00:00+08:00').getTime();
+    const plan = buildFlashSavePlan(
+      baseDraft({ reminders: [tenAm], reminderOffsetMinutes: 10 }),
+      'Asia/Shanghai',
+      NOW,
+    );
+    expect(plan.reminderPlans).toHaveLength(2);
+    expect(plan.reminderPlans[0]?.startAt).toBe(tenAm);
+    expect(plan.reminderPlans[1]?.startAt).toBe(new Date('2026-11-11T14:50:00+08:00').getTime());
+    expect(plan.reminderNotices).toEqual([]);
+  });
+
+  it('切片 32：reminders 与 offset 同刻 → 跨来源去重保留先产出（reminders 胜出）', () => {
+    // startAt 15:00 − 300min = 10:00，与 reminders 条目同刻。
+    const tenAm = new Date('2026-11-11T10:00:00+08:00').getTime();
+    const plan = buildFlashSavePlan(
+      baseDraft({ reminders: [tenAm], reminderOffsetMinutes: 300 }),
+      'Asia/Shanghai',
+      NOW,
+    );
+    expect(plan.reminderPlans).toHaveLength(1);
+    expect(plan.reminderPlans[0]?.startAt).toBe(tenAm);
+    expect(plan.reminderNotices).toEqual([]);
+  });
+
+  it('切片 32：reminders 已表达时强提醒锚点不触发（渠道经覆盖循环带给 reminders）', () => {
+    const startAt = new Date('2026-11-11T15:00:00+08:00').getTime();
+    const plan = buildFlashSavePlan(
+      baseDraft({ reminders: [startAt], reminderChannels: ['alarm'] }),
+      'Asia/Shanghai',
+      NOW,
+    );
+    // 锚点不触发：唯一计划来自 reminders（15:00），channels 被显式 alarm 覆盖。
+    expect(plan.reminderPlans).toHaveLength(1);
+    expect(plan.reminderPlans[0]?.startAt).toBe(startAt);
+    expect(plan.reminderPlans[0]?.channels).toEqual(['alarm']);
+    expect(plan.reminderNotices).toEqual([]);
+  });
+
+  it('切片 32：recurrence + reminders → 重复计划落库，reminders 条数披露不落库', () => {
+    const tenAm = new Date('2026-11-11T10:00:00+08:00').getTime();
+    const plan = buildFlashSavePlan(
+      baseDraft({
+        startAt: null,
+        endAt: null,
+        recurrence: { frequency: 'daily', localTime: { hour: 9, minute: 0 } },
+        reminders: [tenAm],
+      }),
+      'Asia/Shanghai',
+      NOW,
+    );
+    expect(plan.reminderPlans).toHaveLength(1);
+    expect(plan.reminderPlans[0]?.frequency).toBe('daily');
+    expect(plan.reminderNotices).toEqual([
+      '重复提醒已创建；1 条绝对时刻提醒未逐条创建（重复规则下不另建一次性提醒）',
+    ]);
+  });
+
+  it('切片 32：渠道覆盖循环应用到每条计划（reminders 2 条 + 显式 alarm）', () => {
+    const eightAm = new Date('2026-11-11T08:00:00+08:00').getTime();
+    const tenAm = new Date('2026-11-11T10:00:00+08:00').getTime();
+    const plan = buildFlashSavePlan(
+      baseDraft({ startAt: null, endAt: null, reminders: [eightAm, tenAm], reminderChannels: ['alarm'] }),
+      'Asia/Shanghai',
+      NOW,
+    );
+    expect(plan.reminderPlans).toHaveLength(2);
+    expect(plan.reminderPlans[0]?.channels).toEqual(['alarm']);
+    expect(plan.reminderPlans[1]?.channels).toEqual(['alarm']);
+    expect(plan.reminderNotices).toEqual([]);
+  });
+
+  it('切片 32：预设回填循环应用到每条计划（reminders 2 条 + defaultChannels webhook）', () => {
+    const eightAm = new Date('2026-11-11T08:00:00+08:00').getTime();
+    const tenAm = new Date('2026-11-11T10:00:00+08:00').getTime();
+    const plan = buildFlashSavePlan(
+      baseDraft({ startAt: null, endAt: null, reminders: [eightAm, tenAm] }),
+      'Asia/Shanghai',
+      NOW,
+      ['webhook'],
+      [
+        { id: 'p1', name: '默认', type: 'webhook', configJson: 'https://hook.example/def', isDefault: true, createdAt: 1 },
+      ],
+    );
+    expect(plan.reminderPlans).toHaveLength(2);
+    expect(plan.reminderPlans[0]?.channels).toEqual(['webhook']);
+    expect(plan.reminderPlans[0]?.channelConfigs).toEqual({ webhook: 'https://hook.example/def' });
+    expect(plan.reminderPlans[1]?.channelConfigs).toEqual({ webhook: 'https://hook.example/def' });
+    expect(plan.reminderNotices).toEqual([]);
+  });
+
+  it('切片 32：白名单外 + reminders → 逐条披露（多计划数组化动机：不合并语义）', () => {
+    const tenAm = new Date('2026-11-11T10:00:00+08:00').getTime();
+    const plan = buildFlashSavePlan(
+      baseDraft({ startAt: null, endAt: null, reminders: [tenAm, tenAm + 60 * 60000] }),
+      'Europe/Paris',
+      NOW,
+    );
+    expect(plan.reminderPlans).toEqual([]);
+    expect(plan.reminderNotices).toHaveLength(2);
+    expect(plan.reminderNotices[0]).toContain('Europe/Paris');
+    expect(plan.reminderNotices[1]).toContain('Europe/Paris');
   });
 });

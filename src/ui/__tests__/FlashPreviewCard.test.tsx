@@ -9,7 +9,7 @@
 import TestRenderer from 'react-test-renderer';
 import type { ReactTestInstance, ReactTestRenderer } from 'react-test-renderer';
 
-import FlashPreviewCard from '../FlashPreviewCard';
+import FlashPreviewCard, { describeDraftRemindersLine } from '../FlashPreviewCard';
 import type { ParsedItemDraft } from '../../domain/ai/types';
 
 function makeDraft(overrides: Partial<ParsedItemDraft> = {}): ParsedItemDraft {
@@ -36,6 +36,12 @@ function collectTexts(instance: ReactTestInstance): string[] {
     const children = node.props.children;
     if (typeof children === 'string' || typeof children === 'number') {
       texts.push(String(children));
+    } else if (Array.isArray(children)) {
+      // 模板插值 Text（如「提醒：{line}（绝对时刻）」）children 为数组，拼接后收集。
+      const joined = children
+        .map((child) => (typeof child === 'string' || typeof child === 'number' ? String(child) : ''))
+        .join('');
+      if (joined.length > 0) texts.push(joined);
     }
   }
   return texts;
@@ -101,5 +107,43 @@ describe('FlashPreviewCard（切片 30 阶段 3 弃置态）', () => {
         (entry as Record<string, unknown>).opacity === 0.55,
     );
     expect(hasDim).toBe(true);
+  });
+});
+
+describe('describeDraftRemindersLine（切片 32 绝对时刻提醒意图行）', () => {
+  const baseProps = {
+    categories: [],
+    tzid: 'Asia/Shanghai',
+    onPress: () => {
+      /* noop */
+    },
+  };
+
+  it('reminders 未表达 / 空数组 → null（不渲染行）', () => {
+    expect(describeDraftRemindersLine(undefined, 'Asia/Shanghai')).toBeNull();
+    expect(describeDraftRemindersLine([], 'Asia/Shanghai')).toBeNull();
+  });
+
+  it('多条绝对时刻 → 逐条民用时刻（显式 tzid）「、」衔接', () => {
+    const eight = new Date('2026-11-19T08:00:00+08:00').getTime();
+    const ten = new Date('2026-11-19T10:00:00+08:00').getTime();
+    expect(describeDraftRemindersLine([eight, ten], 'Asia/Shanghai')).toBe(
+      '2026-11-19 08:00、2026-11-19 10:00',
+    );
+  });
+
+  it('渲染：draft 带 reminders → 卡片出现「提醒：…（绝对时刻）」行', async () => {
+    const eight = new Date('2026-11-19T08:00:00+08:00').getTime();
+    let tree!: ReactTestRenderer;
+    await TestRenderer.act(async () => {
+      tree = TestRenderer.create(
+        <FlashPreviewCard
+          draft={makeDraft({ reminders: [eight] })}
+          {...baseProps}
+        />,
+      );
+    });
+    const texts = collectTexts(tree.root);
+    expect(texts).toContain('提醒：2026-11-19 08:00（绝对时刻）');
   });
 });

@@ -97,6 +97,21 @@ export interface AppSettings {
    * 写路径校验（isFlashDeletedCardDisplay 否则抛错）。
    */
   flashDeletedCardDisplay: FlashDeletedCardDisplay;
+  /**
+   * AI 调试查看器——请求体展示开关（切片 32，AGENTS.md §7.44）：开启后，聊天
+   * 中的「🔍 AI 调试」入口弹层展示本轮远端请求体 JSON（system prompt + history
+   * + user 输入；不含 Authorization 头——provider 副通道不采集 headers）。默认
+   * false。非可选 boolean 存 show_ai_request 列；读层防御归一（非 boolean 回退
+   * false），boolean 无枚举语义、无独立 parse/validate 函数（carefulMode 同款）。
+   */
+  showAiRequest: boolean;
+  /**
+   * AI 调试查看器——响应体展示开关（切片 32，AGENTS.md §7.44）：开启后，调试
+   * 弹层展示本轮远端响应体（成功轮 = chat-completions 信封；失败轮 = 错误响应
+   * 文本，重试取最后一次）与解析草稿 JSON。默认 false。非可选 boolean 存
+   * show_ai_response 列；读层防御归一同上。
+   */
+  showAiResponse: boolean;
 }
 
 /** 已删除卡显示方式枚举（切片 30，AGENTS.md §7.41） */
@@ -130,6 +145,7 @@ export const CHIPS_MAX_MINUTES = 10080;
  * 切片 25：carefulMode 默认 false = 默认模式（AGENTS.md §7.37）；
  * 切片 26：showAiUsage 默认 false = 不显示（AGENTS.md §7.38）；
  * 切片 27：displayCalendarIds 默认 [] = 功能关闭（AGENTS.md §7.39）；
+ * 切片 32：showAiRequest/showAiResponse 默认 false（AGENTS.md §7.44）；
  * getSettings 无记录时的兜底返回值）。
  */
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -145,6 +161,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   displayCalendarIds: [],
   aiRetryMax: DEFAULT_AI_RETRY_MAX,
   flashDeletedCardDisplay: 'mark',
+  showAiRequest: false,
+  showAiResponse: false,
 };
 
 /** app_settings 单行主键（§7.22） */

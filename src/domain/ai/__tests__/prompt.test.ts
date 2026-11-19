@@ -143,10 +143,11 @@ describe('AI_SYSTEM_PROMPT：澄清与渠道推荐（切片 23 §7.35）', () =>
     expect(P).toContain('不要新建条目');
   });
 
-  it('毫秒禁令：民用时间一律以摘要块为准，禁止由毫秒反算日期（切片 23 阶段 2）', () => {
-    expect(P).toContain('startAt/endAt 是毫秒时间戳，仅供程序读取');
-    expect(P).toContain('禁止由毫秒反算日期');
+  it('毫秒禁令：民用时间一律以摘要块为准，禁止由毫秒反算日期（切片 23 阶段 2；切片 32 扩 reminders）', () => {
+    expect(P).toContain('startAt/endAt 是毫秒时间戳、reminders 是毫秒时间戳数组，仅供程序读取');
+    expect(P).toContain('禁止由毫秒反算日期或时刻');
     expect(P).toContain('民用时间一律以摘要块为准');
+    expect(P).toContain('摘要块的「提醒时刻」行同样是民用时刻');
     expect(P).toContain('无摘要块时按“当前时间”基准正常解析');
   });
 });
@@ -311,5 +312,62 @@ describe('buildNowFacts（既有行为回归）', () => {
     const facts = buildNowFacts({ now, tzid: 'Asia/Shanghai', history: [] });
     expect(facts).toContain('当前时间：2026年11月13日 周五 10:30（时区 Asia/Shanghai）');
     expect(facts).toContain('以上述当前时间为基准');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 切片 32（AGENTS.md §7.44 / ai.md v0.23）：绝对时刻提醒（reminders）——
+// 字段行、判定节、禁换算封堵、摘要块提醒行。
+// ---------------------------------------------------------------------------
+
+describe('AI_SYSTEM_PROMPT：绝对时刻提醒 reminders（切片 32 §7.44）', () => {
+  const P = AI_SYSTEM_PROMPT;
+
+  it('字段定义含 reminders（可选数组、民用时刻数组语义）', () => {
+    expect(P).toContain('reminders');
+    expect(P).toContain('绝对时刻提醒');
+  });
+
+  it('“绝对时刻提醒判定规则”一节存在：逐条展开、最多 8 条、time 必非 null、禁换算', () => {
+    expect(P).toContain('绝对时刻提醒判定规则');
+    expect(P).toContain('不得自行推断');
+    expect(P).toContain('数组最多 8 条，超出时优先保留最早的时刻，禁止输出超过 8 条的数组');
+    expect(P).toContain('time 必须是具体时刻（"HH:mm"），禁止 null');
+    // 禁换算封堵（F1 根因）：绝对时刻不得换算成提前量或 delay。
+    expect(P).toContain('禁止把绝对提醒时刻换算成 reminderOffsetMinutes 或 reminderDelayMinutes');
+  });
+
+  it('摘要块提醒行：buildHistoryBriefing 输出含「提醒时刻（reminders）」行（民用时刻）', () => {
+    const NOW = new Date('2026-11-10T10:00:00+08:00').getTime();
+    const history: Array<{ role: 'user' | 'assistant'; text: string }> = [
+      { role: 'user', text: '明天8点、10点提醒我吃药' },
+      {
+        role: 'assistant',
+        text: JSON.stringify({
+          title: '吃药',
+          content: '',
+          type: 'todo',
+          startAt: new Date('2026-11-11T00:00:00+08:00').getTime(),
+          endAt: null,
+          allDay: false,
+          categoryId: 'health',
+          tags: [],
+          priority: null,
+          recurrence: null,
+          reminderOffsetMinutes: null,
+          reminderDelayMinutes: null,
+          reminders: [
+            new Date('2026-11-11T08:00:00+08:00').getTime(),
+            new Date('2026-11-11T10:00:00+08:00').getTime(),
+          ],
+        }),
+      },
+    ];
+    const briefing = buildHistoryBriefing(history, 'Asia/Shanghai');
+    expect(briefing).not.toBeNull();
+    expect(briefing).toContain('提醒时刻（reminders）');
+    expect(briefing).toContain('2026-11-11 08:00');
+    expect(briefing).toContain('2026-11-11 10:00');
+    expect(briefing).not.toContain(String(new Date('2026-11-11T08:00:00+08:00').getTime()));
   });
 });

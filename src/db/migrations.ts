@@ -373,5 +373,24 @@ export default schemaMigrations({
         }),
       ],
     },
+    {
+      // 切片 32 阶段 1（AGENTS.md §7.44 AI 调试查看器）：v16 app_settings 加列；
+      // v2–v15 step 保持原样，不得修改。
+      // - 单条 addColumns 两列，零 unsafeExecuteSql、零 UPDATE：show_ai_request /
+      //   show_ai_response 均为非可选 boolean 列，addColumns 对既有行自动回填类型
+      //   零值 false（= 默认关闭，v12 careful_mode / v13 show_ai_usage 同款先例，
+      //   无需 UPDATE）；
+      // - 列定义与 schema.ts 的 tableSchema 严格一致（漂移会被模式不匹配检测抛错）。
+      toVersion: 16,
+      steps: [
+        addColumns({
+          table: 'app_settings',
+          columns: [
+            { name: 'show_ai_request', type: 'boolean' },
+            { name: 'show_ai_response', type: 'boolean' },
+          ],
+        }),
+      ],
+    },
   ],
 });

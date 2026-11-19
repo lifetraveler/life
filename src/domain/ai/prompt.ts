@@ -29,6 +29,11 @@
  *   不含新事由名词的口语修正句默认编辑上一张卡；含新事由名词短句仍新建防误伤）
  *   与推迟语义条款（「推迟X分钟」＝卡摘要基准±X；「X分钟后」＝说话时刻基准，
  *   两种表达同现互不覆盖）。纯 prompt 文本改动，契约面零变化。
+ * - v0.23（切片 32，AGENTS.md §7.44）：新增 reminders 字段与「绝对时刻提醒判定
+ *   规则」一节——绝对时刻提醒（如「明天8点、10点提醒我吃药」）逐条展开进
+ *   reminders 数组，与 start 语义独立；禁止把绝对提醒时刻换算成 offset/delay
+ *  （F1 真机缺陷「提醒时刻已过去」误报的根因封堵）。摘要块增加「提醒时刻」行
+ *  （epoch 本地换算民用），history 毫秒禁反算条款扩展覆盖 reminders。
  *
  * 本文件是纯文本模板（常量 + 纯函数），不属于解析逻辑；单测只断言关键句存在，
  * 避免脆弱的全文比对。
@@ -57,6 +62,7 @@ export const AI_SYSTEM_PROMPT = [
   '  表达了重复（每天/每周X/每月X号）时，start 仍按字面日期填写即可（首次发生的日期），系统会自行计算。',
   '- reminderOffsetMinutes: number | null，必填。用户说“提前X分钟提醒”时填 X（正整数），否则 null。',
   '- reminderDelayMinutes: number | null，必填。用户说“X分钟/小时后提醒我”（相对当前时刻延迟多久再提醒）时填换算后的正整数分钟，否则 null。',
+  '- reminders: [{"date":"YYYY-MM-DD","time":"HH:mm"}] | null，必填。用户要求“在某个绝对民用时刻提醒我”（提醒发生时刻与事项开始时间无关，可一次给多个时刻）时逐条列出，否则 null。判定规则见下方“绝对时刻提醒判定规则”一节。',
   '- reminderChannels: ("system-notification" | "alarm" | "webhook" | "apprise")[] | null，必填。提醒渠道推荐：强提醒场景填 ["alarm"]；普通提醒或用户未提及渠道填 null（禁止自填 ["system-notification"]）；仅当用户明确要求特定渠道时才填该渠道。',
   '- needsClarification: boolean，必填。信息不完整需要反问用户才填 true（规则见下方“主动澄清”一节），其余一律 false。',
   '- clarificationPrompt: string | null，必填。needsClarification=true 时的单句反问（复用用户原词、只问缺失的信息）；false 时填 null。',
@@ -68,6 +74,14 @@ export const AI_SYSTEM_PROMPT = [
   '- 没有“延迟多久”语义时填 null：“明天提醒我吃药”“下午3点提醒我吃药”是 start 时间语义（照常填 start），不是延迟提醒。',
   '- “提前X分钟提醒”填 reminderOffsetMinutes，不填 reminderDelayMinutes——两者语义独立，可在同一句里分别出现、分别填写，互不覆盖。',
   '- reminderDelayMinutes 只表示“当前时刻之后多久提醒”，禁止换算成 start/end 的具体时刻；同句若另有具体时间（如“10分钟后提醒我吃药，明天下午3点开会”），start 照常按字面填写。',
+  '',
+  '绝对时刻提醒判定规则（reminders，必须逐条遵守，不得自行推断）：',
+  '- 适用语义：“在某个民用时刻提醒我”，提醒发生时刻与事项开始时间无关——如“明天8点、10点提醒我吃药”：start 不因提醒存在而改变（该句没有事项时间，start 填 null），reminders 填 [{"date":"<明天>","time":"08:00"},{"date":"<明天>","time":"10:00"}]。',
+  '- 与 start 可同句出现：“明天上午8点提醒我吃药，下午3点开会”→ start={"date":"<明天>","time":"15:00"}，reminders=[{"date":"<明天>","time":"08:00"}]。',
+  '- 多时刻逐条展开：“8点、10点各提醒我一次”→ 两条；数组最多 8 条，超出时优先保留最早的时刻，禁止输出超过 8 条的数组。',
+  '- 每个元素必须同时给出 date 与 time，time 必须是具体时刻（"HH:mm"），禁止 null（提醒必带时刻）。',
+  '- 禁止把绝对提醒时刻换算成 reminderOffsetMinutes 或 reminderDelayMinutes——绝对时刻提醒与相对偏移是两类字段，混填会导致提醒丢失（如“明天8点、10点提醒我”绝不能写成 reminderOffsetMinutes）。',
+  '- “提前X分钟提醒”仍填 reminderOffsetMinutes，不写 reminders；重复提醒（每天/每周X/每月X号）走 recurrence，不逐条展开进 reminders。',
   '',
   '强提醒场景与渠道推荐（reminderChannels，必须逐条遵守，不得自行推断）：',
   '- 强提醒场景：起床/叫我/叫醒/吃药/抢购/响铃/闹钟等“错过会造成实际损失”的提醒——用户未指定提前量时 reminderChannels 填 ["alarm"]（闹钟语义：8点叫就8点响，不需要提前量）。',
@@ -91,7 +105,7 @@ export const AI_SYSTEM_PROMPT = [
   '- 短纠正句判定（切片 29）：「上一张卡片草稿摘要」块存在时，用户输入是不含新事由名词的短句——没有引入摘要标题之外的新标题性名词短语或新动作主体，只有时间或属性的修正表达，常带「还是/就/吧/算了」等语气词（如「还是30分钟后吧」「就改成明天上午吧」「算了，改到周五」）——默认视为对上一张卡的编辑：以摘要为基准修正被提及的字段，其余字段照抄摘要，输出完整 JSON，禁止新建条目。无摘要块时本条不生效，按普通解析处理。',
   '- 推迟语义（切片 29）：「推迟/延后 X 分钟」＝以上一张卡（摘要块）的时间为基准平移 ±X 分钟，start 与 end（如有）同 Δ 平移、保持时长不变——摘要块时间是唯一基准，禁止以当前说话时刻平移；「X 分钟后」＝以当前说话时刻为基准：编辑语境（短纠正句）下卡片新时间＝说话时刻+X 分钟、end 如有按原时长顺延，全新意图语境下仍按 reminderDelayMinutes 延迟提醒语义（不换算成 start）。两种表达可在同一句出现，各按各的基准计算，互不覆盖。推迟/延后类修正只调整时间字段，禁止把「推迟 X 分钟」这类原文写入 title 或 content。',
   '- 反向边界（切片 25/29）：用户输入是全新意图（与上一张卡无关的新事项）时，输出一个新建条目，title 取本轮输入的主题词，禁止复用/照抄上一张卡的标题——只有修改类输入（改成/改为、补充细节、澄清续答、短纠正句）才以上一张卡草稿为基准。含新事由名词的短句（如「明天开会」「周六聚餐」）不是短纠正句，仍是全新意图照常新建，防误伤。',
-  '- history 中 assistant 草稿 JSON 的 startAt/endAt 是毫秒时间戳，仅供程序读取；禁止由毫秒反算日期——民用时间一律以摘要块为准；无摘要块时按“当前时间”基准正常解析。',
+  '- history 中 assistant 草稿 JSON 的 startAt/endAt 是毫秒时间戳、reminders 是毫秒时间戳数组，仅供程序读取；禁止由毫秒反算日期或时刻——民用时间一律以摘要块为准（摘要块的「提醒时刻」行同样是民用时刻）；无摘要块时按“当前时间”基准正常解析。',
   '',
   '时间字段书写规则：',
   '- date 一律 YYYY-MM-DD（公历），相对词（今天/明天/下周三/每月15号）先依据下方“当前时间”换算成绝对日期；',
@@ -134,11 +148,17 @@ interface BriefingDraftShape {
   tags: unknown;
   priority: unknown;
   reminderChannels: unknown;
+  reminders: unknown;
   needsClarification: unknown;
 }
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+/** 防御式 number[] 判据（历史草稿可能来自旧版本，reminders 缺失/形状不符即视为无）。 */
+function isNumberArray(value: unknown): value is number[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'number');
 }
 
 /**
@@ -183,6 +203,7 @@ function tryParseBriefingDraft(text: string): BriefingDraftShape | null {
     tags: record['tags'],
     priority: record['priority'],
     reminderChannels: record['reminderChannels'],
+    reminders: record['reminders'],
     needsClarification: record['needsClarification'],
   };
 }
@@ -219,6 +240,16 @@ function renderBriefing(draft: BriefingDraftShape, tzid: string): string {
     typeof draft.recurrence === 'object'
   ) {
     lines.push(`- 重复：${JSON.stringify(draft.recurrence)}`);
+  }
+  if (isNumberArray(draft.reminders) && draft.reminders.length > 0) {
+    // 切片 32 / ai.md v0.23：摘要块补「提醒时刻」行（epoch 本地换算民用）——
+    // 否则保存后下一轮编辑轮模型看不到 reminders 意图，短纠正句/编辑会丢提醒。
+    // 防御式截断 8 条（历史草稿理论上由 guard 限 8 条，这里只兜异常输入）。
+    const rendered = draft.reminders
+      .slice(0, 8)
+      .map((epoch) => formatBriefingDateTime(epoch, tzid))
+      .join('、');
+    lines.push(`- 提醒时刻（reminders）：${rendered}`);
   }
   if (typeof draft.categoryId === 'string' && draft.categoryId.length > 0) {
     lines.push(`- 分类：${draft.categoryId}`);

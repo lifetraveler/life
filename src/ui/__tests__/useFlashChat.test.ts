@@ -353,7 +353,7 @@ describe('useFlashChat：主动澄清流转（切片 23 阶段 3，§7.35）', (
     const cards = hook().messages.filter((message) => message.kind === 'card');
     expect(cards).toHaveLength(1);
     expect(cards[0]?.cardPayload?.title).toBe(title);
-    expect(cards[0]?.cardPayload?.reminder?.channels).toEqual(['alarm']);
+    expect(cards[0]?.cardPayload?.reminders[0]?.channels).toEqual(['alarm']);
     // 保存后草稿清空（切片 15 既有行为，澄清/出卡状态一并复位）。
     expect(hook().draft).toBeNull();
   });
@@ -877,5 +877,113 @@ describe('useFlashChat：AI 用量展示（切片 26 阶段 2，§7.38）', () =
     expect(confirmMessages()).toHaveLength(1);
     // turn1 出卡轮的用量行仍在；拦截轮（turn2）不追加第二条。
     expect(usageLines()).toHaveLength(1);
+  });
+});
+
+describe('useFlashChat：AI 调试入口消息（切片 32，§7.44）', () => {
+  /** 与用量 describe 同款远端 fetch mock（轮次按序消费）。 */
+  function installDebugFetchMock(wires: RemoteDraftWire[], failure?: { status: number; body: string }): void {
+    globalScope.fetch = jest.fn(async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(typeof init?.body === 'string' ? init.body : '{}') as CapturedRequest;
+      fetchBodies.push(body);
+      if (failure !== undefined) {
+        return {
+          ok: false,
+          status: failure.status,
+          text: async () => failure.body,
+        } as unknown as Response;
+      }
+      const wire = wires.shift() ?? makeWire({});
+      return {
+        ok: true,
+        status: 200,
+        text: async () => makeEnvelopeWithUsage(wire, RAW_USAGE),
+      } as unknown as Response;
+    });
+  }
+
+  /** 远端配置 + 开关状态。 */
+  function enableRemoteForDebug(
+    extraSettings: Record<string, unknown> = {},
+  ): void {
+    SecureStoreClass.mockImplementation(() => ({
+      load: jest.fn(async () => REMOTE_CONFIG),
+    }));
+    repo.getSettings.mockResolvedValue({
+      ...DEFAULT_APP_SETTINGS,
+      ...extraSettings,
+    });
+  }
+
+  function debugMessages(): FlashChatMessage[] {
+    return hook().messages.filter((message) => message.debugPayload !== undefined);
+  }
+
+  afterEach(() => {
+    globalScope.fetch = originalFetch;
+  });
+
+  it('远端成功轮 + showAiRequest 开：入口消息携带 debugPayload（请求体含 model、不含 API Key）', async () => {
+    enableRemoteForDebug({ showAiRequest: true });
+    installDebugFetchMock([makeWire({})]);
+    await mountHook();
+    await act(async () => {
+      await hook().send('明天上午十点项目周会');
+    });
+
+    const debugs = debugMessages();
+    expect(debugs).toHaveLength(1);
+    expect(debugs[0]?.text).toBe('🔍 AI 调试：点击查看本轮 AI 输入/输出');
+    const payload = debugs[0]?.debugPayload;
+    expect(payload?.request).not.toBeNull();
+    expect(payload?.request).toContain('"model":"test-model"');
+    expect(payload?.request).not.toContain('test-api-key');
+    expect(payload?.response).not.toBeNull();
+    expect(payload?.response).toContain('choices')
+    expect(payload?.draft).toContain('项目周会');
+  });
+
+  it('远端成功轮 + 两开关全关：无入口消息（现状不变）', async () => {
+    enableRemoteForDebug();
+    installDebugFetchMock([makeWire({})]);
+    await mountHook();
+    await act(async () => {
+      await hook().send('明天上午十点项目周会');
+    });
+    expect(debugMessages()).toHaveLength(0);
+  });
+
+  it('失败降级轮（HTTP 500 耗尽重试）+ 开关开：入口消息文案区分降级、载荷仍携带', async () => {
+    enableRemoteForDebug({ showAiRequest: true, aiRetryMax: 0 });
+    installDebugFetchMock([], { status: 500, body: '{"error":{"message":"boom"}}' });
+    await mountHook();
+    await act(async () => {
+      await hook().send('明天上午十点项目周会');
+    });
+
+    const debugs = debugMessages();
+    expect(debugs).toHaveLength(1);
+    expect(debugs[0]?.text).toBe('🔍 AI 调试：远端解析失败已降级，点击查看请求/响应');
+    const payload = debugs[0]?.debugPayload;
+    expect(payload?.request).toContain('"model":"test-model"');
+    expect(payload?.response).toBe('{"error":{"message":"boom"}}');
+    // 失败降级轮 draft = 本地兜底草稿（仍有解析结果可查）。
+    expect(payload?.draft).toContain('项目周会');
+  });
+
+  it('无 Key 本地轮：debug 恒 null，两开关开也无入口消息', async () => {
+    SecureStoreClass.mockImplementation(() => ({
+      load: jest.fn(async () => null),
+    }));
+    repo.getSettings.mockResolvedValue({
+      ...DEFAULT_APP_SETTINGS,
+      showAiRequest: true,
+      showAiResponse: true,
+    });
+    await mountHook();
+    await act(async () => {
+      await hook().send('明天上午十点项目周会');
+    });
+    expect(debugMessages()).toHaveLength(0);
   });
 });

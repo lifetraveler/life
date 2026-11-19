@@ -4,7 +4,9 @@ import {
   Alert,
   FlatList,
   KeyboardAvoidingView,
+  Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -13,12 +15,13 @@ import {
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { itemRepository } from '../../data';
 import FlashConfirmCard from '../../ui/FlashConfirmCard';
 import FlashEditModal from '../../ui/FlashEditModal';
 import FlashPreviewCard from '../../ui/FlashPreviewCard';
 import FlashResultCard from '../../ui/FlashResultCard';
 import { useFlashChat } from '../../ui/useFlashChat';
-import type { FlashChatMessage } from '../../ui/useFlashChat';
+import type { FlashChatMessage, FlashDebugPayload } from '../../ui/useFlashChat';
 import { getDeviceTzid } from '../../ui/timeFormat';
 import { useTheme } from '../../ui/theme';
 import type { ThemeColors } from '../../ui/theme';
@@ -35,16 +38,30 @@ import type { ThemeColors } from '../../ui/theme';
  *   接线（推迟 + once 提醒 onceAt 联动 + 卡片原地刷新）。
  */
 
-function MessageRow({ message }: { message: FlashChatMessage }) {
+function MessageRow({
+  message,
+  onPress,
+}: {
+  message: FlashChatMessage;
+  /** 切片 32（§7.44）：调试入口消息点击回调（undefined = 普通文本不可点）。 */
+  onPress?: () => void;
+}) {
   // 切片 24（§7.36）：颜色走全局 Token（夜间模式），深浅色跟随系统。
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const isUser = message.role === 'user';
+  const bubble = (
+    <Text style={isUser ? styles.bubbleTextUser : styles.bubbleTextAssistant}>
+      {message.text}
+    </Text>
+  );
+  if (onPress === undefined) {
+    return <View style={[styles.row, isUser ? styles.rowUser : styles.rowAssistant]}>{bubble}</View>;
+  }
+  // 调试入口消息（assistant 侧）：淡色底 + 可点击。
   return (
-    <View style={[styles.row, isUser ? styles.rowUser : styles.rowAssistant]}>
-      <Text style={isUser ? styles.bubbleTextUser : styles.bubbleTextAssistant}>
-        {message.text}
-      </Text>
+    <View style={[styles.row, styles.rowAssistant]}>
+      <Pressable onPress={onPress}>{bubble}</Pressable>
     </View>
   );
 }
@@ -56,6 +73,15 @@ export default function FlashScreen() {
   const chat = useFlashChat();
   const [input, setInput] = useState('');
   const [editVisible, setEditVisible] = useState(false);
+  // 切片 32（AGENTS.md §7.44）：调试弹层载荷（null = 关闭）。showRequest/
+  // showResponse 在打开时读取当下设置（开关即时生效，弹层按当下值显隐节）。
+  const [debugView, setDebugView] = useState<{
+    request: string | null;
+    response: string | null;
+    draft: string;
+    showRequest: boolean;
+    showResponse: boolean;
+  } | null>(null);
   const deviceTzid = getDeviceTzid();
   // 切片 21（AGENTS.md §7.32）：Tab 页顶部必须让出系统状态栏；底部让出手势条。
   const insets = useSafeAreaInsets();
@@ -66,6 +92,30 @@ export default function FlashScreen() {
     setInput('');
     void chat.send(text);
   };
+
+  /**
+   * 切片 32（AGENTS.md §7.44）：打开调试弹层——节显隐按「当下」设置读取
+   * （开关即时生效：入口消息可能是旧开关态下追加的，弹层以打开时为准）。
+   * 读取失败回退双关（仅展示提示行，不炸弹层）。
+   */
+  const openDebugModal = useCallback(async (payload: FlashDebugPayload): Promise<void> => {
+    let showRequest = false;
+    let showResponse = false;
+    try {
+      const settings = await itemRepository.getSettings();
+      showRequest = settings.showAiRequest === true;
+      showResponse = settings.showAiResponse === true;
+    } catch (error) {
+      console.warn('[slice-32] 调试弹层设置读取失败', error);
+    }
+    setDebugView({
+      request: payload.request,
+      response: payload.response,
+      draft: payload.draft,
+      showRequest,
+      showResponse,
+    });
+  }, []);
 
   const handleConfirm = (): void => {
     void chat.confirmSave().then((result) => {
@@ -165,6 +215,19 @@ export default function FlashScreen() {
           }}
           onDismiss={() => {
             chat.dismissConfirm(confirmPayload.confirmId);
+          }}
+        />
+      );
+    }
+    // 切片 32（AGENTS.md §7.44）：AI 调试入口消息（debugPayload 必有）——
+    // 点击弹调试弹层；节显隐按当下设置读取（开关即时生效）。
+    if (item.debugPayload !== undefined) {
+      const debugPayload = item.debugPayload;
+      return (
+        <MessageRow
+          message={item}
+          onPress={() => {
+            void openDebugModal(debugPayload);
           }}
         />
       );
@@ -299,6 +362,57 @@ export default function FlashScreen() {
           setEditVisible(false);
         }}
       />
+
+      {/* 切片 32（AGENTS.md §7.44）：AI 调试弹层——三节「AI 输入（请求体）」
+          随 show_ai_request、「AI 输出（原始响应）」「卡片数据（草稿 JSON）」
+          随 show_ai_response；ScrollView 只读展示，点遮罩/关闭按钮收起。 */}
+      <Modal
+        visible={debugView !== null}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setDebugView(null)}
+      >
+        <Pressable style={styles.debugOverlay} onPress={() => setDebugView(null)}>
+          <Pressable style={styles.debugSheet} onPress={() => undefined}>
+            <View style={styles.debugHeader}>
+              <Text style={styles.debugTitle}>🔍 AI 调试详情</Text>
+              <Pressable onPress={() => setDebugView(null)}>
+                <Text style={styles.debugClose}>关闭</Text>
+              </Pressable>
+            </View>
+            {debugView === null ? null : !debugView.showRequest && !debugView.showResponse ? (
+              <Text style={styles.debugEmpty}>
+                调试开关均已关闭（设置 → AI 配置区块），无可展示内容。
+              </Text>
+            ) : (
+              <ScrollView style={styles.debugScroll}>
+                {debugView.showRequest ? (
+                  <View style={styles.debugSection}>
+                    <Text style={styles.debugSectionTitle}>AI 输入（请求体，不含请求头）</Text>
+                    <Text style={styles.debugSectionText}>
+                      {debugView.request ?? '（本轮未采集到请求体）'}
+                    </Text>
+                  </View>
+                ) : null}
+                {debugView.showResponse ? (
+                  <View style={styles.debugSection}>
+                    <Text style={styles.debugSectionTitle}>AI 输出（原始响应）</Text>
+                    <Text style={styles.debugSectionText}>
+                      {debugView.response ?? '（本轮未采集到响应）'}
+                    </Text>
+                  </View>
+                ) : null}
+                {debugView.showResponse ? (
+                  <View style={styles.debugSection}>
+                    <Text style={styles.debugSectionTitle}>卡片数据（草稿 JSON）</Text>
+                    <Text style={styles.debugSectionText}>{debugView.draft}</Text>
+                  </View>
+                ) : null}
+              </ScrollView>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -448,6 +562,62 @@ function makeStyles(c: ThemeColors) {
       color: c.textOnPrimary,
       fontSize: 14,
       fontWeight: '600',
+    },
+    // 切片 32（§7.44）：AI 调试弹层（Token 化，深浅色可读）。
+    debugOverlay: {
+      flex: 1,
+      backgroundColor: 'rgba(0, 0, 0, 0.5)',
+      justifyContent: 'flex-end',
+    },
+    debugSheet: {
+      backgroundColor: c.card,
+      borderTopLeftRadius: 16,
+      borderTopRightRadius: 16,
+      paddingHorizontal: 16,
+      paddingTop: 14,
+      paddingBottom: 24,
+      maxHeight: '82%',
+    },
+    debugHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 10,
+    },
+    debugTitle: {
+      fontSize: 16,
+      fontWeight: '600',
+      color: c.text,
+    },
+    debugClose: {
+      fontSize: 14,
+      color: c.primary,
+    },
+    debugEmpty: {
+      fontSize: 13,
+      color: c.textMuted,
+      paddingVertical: 12,
+    },
+    debugScroll: {
+      maxHeight: 560,
+    },
+    debugSection: {
+      marginBottom: 14,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.border,
+      borderRadius: 8,
+      padding: 10,
+    },
+    debugSectionTitle: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: c.text,
+      marginBottom: 6,
+    },
+    debugSectionText: {
+      fontSize: 11,
+      color: c.text,
+      lineHeight: 16,
     },
   });
 }

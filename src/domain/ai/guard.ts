@@ -13,6 +13,8 @@
  *   与 alarm 不同现）的数组——三者与 offset/delay 的“键必填”纪律刻意不同：它们是
  *   建议性/澄清性信息而非结构性字段，键缺省（旧版响应）合法、值出现即从严，
  *   避免把整个解析炸成降级（ai.md v0.19 变更记录）。
+ * - 切片 32（§7.44 / ai.md v0.23）：reminders（绝对时刻提醒 epoch 数组）与上述
+ *   建议性字段同纪律——键可缺省、值出现即从严（数组、每项有限正整数）。
  * - tags 数组元素必须是 string；
  * - recurrence 必须完整匹配 daily/weekly/monthly 三种形状之一（weekdays 1..7、
  *   dayOfMonth 1..31、localTime.hour 0..23、localTime.minute 0..59，均为整数）；
@@ -170,6 +172,27 @@ export function isParsedItemDraft(value: unknown): ParsedItemDraft | null {
     reminderChannels = [...reminderChannelsRaw];
   }
 
+  // 切片 32（§7.44 / ai.md v0.23）：绝对时刻提醒数组——与 needsClarification/
+  // clarificationPrompt/reminderChannels 同纪律：键可缺省（旧版响应向前兼容），
+  // 值出现即从严（数组、每项为有限正整数 epoch ms）。epoch 由 provider 本地
+  // 民用换算产生（v0.16 纪律），wire 侧对应 reminders 民用数组另有整包校验。
+  const remindersRaw = value.reminders;
+  let reminders: number[] | undefined;
+  if (remindersRaw !== undefined) {
+    // 空数组同样拒绝（reminderChannels 先例）：「无提醒」由缺省表达，
+    // 自身管道 wire 层已把 [] 丢弃为 undefined，draft 守卫不会合法见到 []。
+    if (
+      !Array.isArray(remindersRaw) ||
+      remindersRaw.length === 0 ||
+      !remindersRaw.every(
+        (r) => typeof r === 'number' && Number.isFinite(r) && r > 0 && Number.isInteger(r),
+      )
+    ) {
+      return null;
+    }
+    reminders = [...remindersRaw];
+  }
+
   return {
     title,
     content,
@@ -183,6 +206,7 @@ export function isParsedItemDraft(value: unknown): ParsedItemDraft | null {
     recurrence: recurrenceRaw === null ? null : (recurrenceRaw as RecurrenceRule),
     reminderOffsetMinutes,
     reminderDelayMinutes,
+    reminders,
     needsClarification,
     clarificationPrompt,
     reminderChannels,

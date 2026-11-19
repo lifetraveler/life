@@ -51,6 +51,7 @@ import {
 } from '../domain/ai/editIntent';
 import { buildFlashCardPayload } from '../domain/ai/cardPayload';
 import { runFlashTurn } from '../domain/ai/chat';
+import type { FlashTurnResult } from '../domain/ai/chat';
 import { diffDraftChanges } from '../domain/ai/editDiff';
 import type { DraftFieldChanges } from '../domain/ai/editDiff';
 import { formatAiUsageLine } from '../domain/ai/usage';
@@ -102,6 +103,19 @@ export interface FlashConfirmPayload {
   resolved: boolean;
 }
 
+/**
+ * 切片 32（AGENTS.md §7.44）：AI 调试查看器载荷——本轮远端解析的请求体原文
+ * （不含 HTTP headers）、响应原文（失败轮为错误响应文本）与解析草稿 JSON。
+ * 内存态消息字段，不持久化、不进 history、不进 ParsedItemDraft（传输边界
+ * v0.20 同款冻结）。request/response 来自 FlashTurnResult.debug 副通道。
+ */
+export interface FlashDebugPayload {
+  request: string | null;
+  response: string | null;
+  /** 本轮解析草稿 JSON（远端成功轮=远端草稿；失败降级轮=本地兜底草稿）。 */
+  draft: string;
+}
+
 export interface FlashChatMessage {
   id: number;
   role: 'user' | 'assistant';
@@ -113,6 +127,11 @@ export interface FlashChatMessage {
   kind: 'text' | 'card' | 'confirm';
   cardPayload?: FlashCardPayload;
   confirmPayload?: FlashConfirmPayload;
+  /**
+   * 切片 32（§7.44）：AI 调试入口消息携带（debugPayload 必有）；点击弹出
+   * 调试弹层，三节显隐由当下设置（showAiRequest/showAiResponse）决定。
+   */
+  debugPayload?: FlashDebugPayload;
 }
 
 export interface ConfirmSaveResult {
@@ -145,19 +164,20 @@ const CONFIRM_MESSAGE_TEXT = '标题/内容修改需要你确认。';
 const CONFIRM_DISMISS_NOTE = '已放弃本次修改，卡片保持原样。';
 
 /**
- * 编辑/推迟后刷新卡片提醒快照：被顺延的 once 提醒若正是卡片快照里那条，
- * 用新 onceAt 替换（卡片提醒行 once 显示绝对触发时刻，随之可见变化）；
- * 未被顺延（重复提醒/无提醒/快照与库中不一致）保持原快照。
+ * 编辑/推迟后刷新卡片提醒快照（切片 32 / §7.44 多计划）：对载荷里**每一条**
+ * once 提醒快照，若其 id 命中被顺延集合则用新 onceAt 替换（chips 快捷推迟对
+ * 全部 once 提醒生效，卡片段落随之可见变化）；未命中（重复提醒/无提醒/快照
+ * 与库中不一致）保持原快照。
  */
 function patchReminderSnapshot(
   target: FlashCardPayload,
   updatedOnceAt: Map<string, OnceCivilTime>,
-): FlashCardPayload['reminder'] {
-  if (target.reminder === null) return null;
-  const nextOnceAt = updatedOnceAt.get(target.reminder.id);
-  return nextOnceAt === undefined
-    ? target.reminder
-    : { ...target.reminder, onceAt: nextOnceAt };
+): FlashCardPayload['reminders'] {
+  if (target.reminders.length === 0) return [];
+  return target.reminders.map((snapshot) => {
+    const nextOnceAt = updatedOnceAt.get(snapshot.id);
+    return nextOnceAt === undefined ? snapshot : { ...snapshot, onceAt: nextOnceAt };
+  });
 }
 
 /**
@@ -424,7 +444,7 @@ export function useFlashChat() {
         updateCard(target.itemId, {
           startAt: newStart,
           endAt: newEnd,
-          reminder: patchReminderSnapshot(target, updatedOnceAt),
+          reminders: patchReminderSnapshot(target, updatedOnceAt),
         });
         const note = `已改为 ${formatItemTime(newStart, tzid)}`;
         appendEditHistory(input, note);
@@ -459,6 +479,8 @@ export function useFlashChat() {
     carefulMode: boolean;
     showAiUsage: boolean;
     aiRetryMax: number;
+    showAiRequest: boolean;
+    showAiResponse: boolean;
   }> => {
     try {
       const settings = await itemRepository.getSettings();
@@ -466,10 +488,19 @@ export function useFlashChat() {
         carefulMode: settings.carefulMode === true,
         showAiUsage: settings.showAiUsage === true,
         aiRetryMax: settings.aiRetryMax,
+        // 切片 32（§7.44）：调试查看器两开关（读层 boolean 守卫已回退默认）。
+        showAiRequest: settings.showAiRequest === true,
+        showAiResponse: settings.showAiResponse === true,
       };
     } catch (error) {
       console.warn('[slice-25/26/30] 本轮设置读取失败，回退默认', error);
-      return { carefulMode: false, showAiUsage: false, aiRetryMax: DEFAULT_AI_RETRY_MAX };
+      return {
+        carefulMode: false,
+        showAiUsage: false,
+        aiRetryMax: DEFAULT_AI_RETRY_MAX,
+        showAiRequest: false,
+        showAiResponse: false,
+      };
     }
   }, []);
 
@@ -486,6 +517,44 @@ export function useFlashChat() {
       push('assistant', formatAiUsageLine(usage));
     },
     [push],
+  );
+
+  /**
+   * 切片 32（AGENTS.md §7.44）：AI 调试入口消息——远端解析轮（成功或失败
+   * 降级）且任一调试开关开启时，在 AI 回复/用量行之后追加一条带 debugPayload
+   * 的入口消息（弹层点击入口；本地/无 Key 轮 debug 恒 null 不追加）。开关全关
+   * 不采集不展示（现状）。
+   */
+  const pushDebugEntry = useCallback(
+    (
+      debug: FlashTurnResult['debug'],
+      draft: ParsedItemDraft,
+      degraded: boolean,
+      turnSettings: { showAiRequest: boolean; showAiResponse: boolean },
+    ): void => {
+      if (debug === null) return;
+      if (!turnSettings.showAiRequest && !turnSettings.showAiResponse) return;
+      const text = degraded
+        ? '🔍 AI 调试：远端解析失败已降级，点击查看请求/响应'
+        : '🔍 AI 调试：点击查看本轮 AI 输入/输出';
+      const id = nextIdRef.current;
+      nextIdRef.current += 1;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id,
+          role: 'assistant',
+          text,
+          kind: 'text',
+          debugPayload: {
+            request: debug.request,
+            response: debug.response,
+            draft: JSON.stringify(draft),
+          },
+        },
+      ]);
+    },
+    [],
   );
 
   /**
@@ -702,14 +771,18 @@ export function useFlashChat() {
             push('assistant', result.assistantNote);
           }
           // 切片 26（§7.38）：远端澄清轮同样在回复尾追加用量行（降级轮 usage
-          // 恒 null，不展示）。
+          // 恒 null，不展示）。切片 32（§7.44）：调试入口消息随后（远端澄清
+          // 轮同样可查看请求/响应）。
           pushUsageLine(result.usage, turnSettings.showAiUsage);
+          pushDebugEntry(result.debug, result.draft, result.degraded, turnSettings);
           return;
         }
         setDraft(result.draft);
         push('assistant', result.assistantNote);
         // 切片 26（§7.38）：远端解析轮在 AI 回复消息尾追加一行用量摘要。
+        // 切片 32（§7.44）：调试入口消息随后（降级轮 degraded 文案区分）。
         pushUsageLine(result.usage, turnSettings.showAiUsage);
+        pushDebugEntry(result.debug, result.draft, result.degraded, turnSettings);
       } catch (error) {
         console.warn('[slice-15] 解析失败', error);
         push(
@@ -723,7 +796,7 @@ export function useFlashChat() {
         setRetryNotice(null);
       }
     },
-    [busy, push, applyEditToCard, applyEditToDraft, cancelPendingConfirm, readTurnSettings, pushUsageLine, pushConfirm],
+    [busy, push, applyEditToCard, applyEditToDraft, cancelPendingConfirm, readTurnSettings, pushUsageLine, pushDebugEntry, pushConfirm],
   );
 
   /**
@@ -822,12 +895,23 @@ export function useFlashChat() {
       for (const name of plan.tagNames) {
         await itemRepository.addTagToItem(created.id, name);
       }
-      let createdReminder: Reminder | null = null;
-      if (plan.reminderPlan !== null) {
-        createdReminder = await itemRepository.createReminder({
-          ...plan.reminderPlan,
-          itemId: created.id,
-        });
+      // 切片 32（§7.44）多计划执行链：逐条顺序 await，单条失败 warn + 披露、
+      // 不中断不回滚（条目已落库；部分提醒未创建属可披露的部分成功，与
+      // createItem 失败=整链失败的语义分开）。披露追加在 plan.reminderNotices
+      //（域层披露，含「提醒时刻已过去」等）之后一并出消息。
+      const createdReminders: Reminder[] = [];
+      const reminderFailureNotices: string[] = [];
+      for (const reminderPlan of plan.reminderPlans) {
+        try {
+          createdReminders.push(
+            await itemRepository.createReminder({ ...reminderPlan, itemId: created.id }),
+          );
+        } catch (error) {
+          console.warn('[slice-32] 提醒创建失败（不中断保存链）', error);
+          reminderFailureNotices.push(
+            `一条提醒创建失败：${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
       }
       try {
         await reminderScheduler.reconcile();
@@ -860,12 +944,16 @@ export function useFlashChat() {
       }
       pushCard(
         message,
-        buildFlashCardPayload(created, plan.timePatch, createdReminder, cardCategories),
+        buildFlashCardPayload(created, plan.timePatch, createdReminders, cardCategories),
       );
-      if (plan.reminderNotice !== null) {
-        push('assistant', plan.reminderNotice);
+      // 切片 32（§7.44）：提醒披露从单条改多条——域层 reminderNotices（每条
+      // 一消息，顺序保留）+ 执行链创建失败披露；ConfirmSaveResult.notice 聚合
+      // 供调用方 Alert（换行衔接，与消息流逐条展示并存）。
+      const notices = [...plan.reminderNotices, ...reminderFailureNotices];
+      for (const notice of notices) {
+        push('assistant', notice);
       }
-      return { ok: true, notice: plan.reminderNotice, message };
+      return { ok: true, notice: notices.length > 0 ? notices.join('\n') : null, message };
     } catch (error) {
       // 保存链失败维持纯文本失败提示，不出卡片（切片 22 方案确认）。
       console.warn('[slice-15] 保存失败', error);
@@ -912,7 +1000,7 @@ export function useFlashChat() {
         updateCard(itemId, {
           startAt: newStart,
           endAt: newEnd,
-          reminder: patchReminderSnapshot(target, updatedOnceAt),
+          reminders: patchReminderSnapshot(target, updatedOnceAt),
         });
       } catch (error) {
         console.warn('[slice-22] 快捷推迟失败', error);

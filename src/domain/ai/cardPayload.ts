@@ -7,7 +7,9 @@
  * - created：createItem 返回（id/title/type/categoryId 已定，时间字段此时仍为 null）；
  * - timePatch：buildFlashSavePlan 的 timePatch（含切片 19 delay 锚定后的最终 startAt），
  *   载荷 startAt/endAt/allDay 必须取落库终值，不能取 createItem 原始返回；
- * - reminder：createReminder 返回（保存链未创建提醒时为 null → 卡片不渲染提醒行）；
+ * - reminders：createReminder 逐条返回的全量数组（切片 32 / §7.44 多计划：
+ *   reminders/offset/delay/强提醒锚点各自独立落库；空数组 = 未创建提醒 →
+ *   卡片不渲染提醒行）；
  * - categories：水合分类列表（§7.23 纪律：UI/domain 只消费传入的 Category，不自查分类表）。
  *
  * 快照语义：weekdays / onceAt 做防御性拷贝，载荷不受后续对 Reminder 对象的
@@ -29,7 +31,7 @@ export interface FlashCardTimePatch {
 export function buildFlashCardPayload(
   created: Item,
   timePatch: FlashCardTimePatch,
-  reminder: Reminder | null,
+  reminders: ReadonlyArray<Reminder>,
   categories: ReadonlyArray<Category>,
 ): FlashCardPayload {
   const category = categories.find((candidate) => candidate.id === created.categoryId) ?? null;
@@ -50,19 +52,16 @@ export function buildFlashCardPayload(
             color: category.color,
             emoji: category.emoji,
           },
-    reminder:
-      reminder === null
-        ? null
-        : {
-            id: reminder.id,
-            frequency: reminder.frequency,
-            localTimeHour: reminder.localTimeHour,
-            localTimeMinute: reminder.localTimeMinute,
-            weekdays: [...reminder.weekdays],
-            dayOfMonth: reminder.dayOfMonth,
-            onceAt: reminder.onceAt === null ? null : { ...reminder.onceAt },
-            tzid: reminder.tzid,
-            channels: [...reminder.channels],
-          },
+    reminders: reminders.map((reminder) => ({
+      id: reminder.id,
+      frequency: reminder.frequency,
+      localTimeHour: reminder.localTimeHour,
+      localTimeMinute: reminder.localTimeMinute,
+      weekdays: [...reminder.weekdays],
+      dayOfMonth: reminder.dayOfMonth,
+      onceAt: reminder.onceAt === null ? null : { ...reminder.onceAt },
+      tzid: reminder.tzid,
+      channels: [...reminder.channels],
+    })),
   };
 }
