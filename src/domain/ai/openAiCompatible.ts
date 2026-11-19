@@ -2,8 +2,9 @@
  * 切片 15 阶段 1：OpenAI 兼容 Provider（OpenAI / DeepSeek 等自定义 API Key）。
  *
  * 职责（§7.24）：调用 /chat/completions，取 choices[0].message.content，
- * 剥离可能的 ```json 围栏后 JSON.parse，经 isRemoteDraftWire 严格校验，
- * 再由 wireToParsedItemDraft 本地换算为 ParsedItemDraft（Unix 毫秒时间戳）。
+ * 剥离可能的 ```json 围栏、尾部平衡 JSON 提取（切片 33 / ai.md v0.24：思维链
+ * 散文拼 content 时取最靠后配平块）后 JSON.parse，经 isRemoteDraftWire 严格
+ * 校验，再由 wireToParsedItemDraft 本地换算为 ParsedItemDraft（Unix 毫秒时间戳）。
  *
  * v0.16 变更（ai.md）：模型不再直接输出毫秒时间戳——已实证 LLM 算 epoch
  * 不可靠（整年错、时区反算、照抄 history 旧值）。远端 wire 改用民用时间
@@ -14,7 +15,7 @@
  * - HTTP 非 2xx → http-status（带 status）；
  * - 响应体不是合法 JSON → invalid-json；
  * - 响应体是 JSON 但缺少 choices[0].message.content → schema-mismatch（信封不完整）；
- * - content 不是合法 JSON（剥围栏后仍失败）→ invalid-json；
+ * - content 不是合法 JSON（剥围栏 + 尾部平衡提取后仍失败）→ invalid-json；
  * - content JSON 未通过结构守卫 → schema-mismatch；
  * - fetch 抛 AbortError（超时）→ timeout；其他 fetch 异常 → network。
  *
@@ -137,6 +138,80 @@ function extractContent(body: unknown): string {
 export function stripCodeFence(text: string): string {
   const fenced = /^\s*```(?:json)?\s*([\s\S]*?)\s*```\s*$/u.exec(text);
   return fenced !== null ? fenced[1] : text;
+}
+
+/**
+ * 从 text[end]（必须是 '}'）向前扫描配平对象块：遇 '}'/']' 压栈期望的开括号，
+ * 遇 '{'/'[' 弹栈配平（字符串字面量感知——字面量内的大括号与引号不参与配平，
+ * `\"` 转义引号不是字符串边界）；栈空时的 '{' 即块起点。返回块子串（含两端
+ * 括号）。以下情形返回 null（上层换锚点重试或放弃）：括号错配、栈空时先遇
+ * '['（数组根，非对象块）、扫到串首仍未配平。
+ */
+function scanBalancedObjectBackward(text: string, end: number): string | null {
+  const stack: Array<'{' | '['> = ['{'];
+  let inString = false;
+  for (let i = end - 1; i >= 0; i -= 1) {
+    const ch = text[i];
+    if (ch === '"') {
+      // 引号是否为字符串边界：紧邻其前的连续反斜杠为偶数（含 0）才是边界
+      // （奇数 = \" 转义引号，JSON 语义上不结束/不开始字符串）。
+      let backslashes = 0;
+      for (let j = i - 1; j >= 0 && text[j] === '\\'; j -= 1) backslashes += 1;
+      if (backslashes % 2 === 0) inString = !inString;
+      continue;
+    }
+    if (inString) continue; // 字符串字面量内的大括号不参与配平
+    if (ch === '}') {
+      stack.push('{');
+      continue;
+    }
+    if (ch === ']') {
+      stack.push('[');
+      continue;
+    }
+    if (ch === '{') {
+      if (stack[stack.length - 1] !== '{') return null;
+      stack.pop();
+      if (stack.length === 0) return text.slice(i, end + 1);
+      continue;
+    }
+    if (ch === '[') {
+      if (stack[stack.length - 1] !== '[') return null;
+      stack.pop();
+      continue;
+    }
+  }
+  return null; // 扫到串首仍未配平（锚点 '}' 无对应开括号）
+}
+
+/**
+ * 切片 33（§7.45 / ai.md v0.24）：尾部平衡 JSON 提取——从字符串末尾向前扫描，
+ * 返回最靠后的配平 `{...}` 块。
+ *
+ * 背景：deepseek-flash 等推理模型把思维链（纯散文、无 <think> 标签）直接拼进
+ * content，`JSON.parse(散文+JSON)` 必然失败 → schema-mismatch 降级（L8 主因）。
+ * 从尾部向前扫描保证取到最终输出块；思维链中推演/引用的 JSON 片段（含
+ * `{\"date\"...}` 转义形式）位于最终块之前、不会被误取——字符串字面量内的大
+ * 括号不参与配平。
+ *
+ * 行为：
+ * - 无任何 '}'（或所有锚点扫描失败）→ 返回原文，走既有 JSON.parse 失败路径，
+ *   行为与不提取时一致；
+ * - 输入是纯 JSON → 最靠后配平块即整个字符串，零回归；
+ * - 提取结果仍要过 isRemoteDraftWire 严格守卫——误取的形状不符片段会正常
+ *   降级，不比现状差。
+ */
+export function extractLastBalancedJson(text: string): string {
+  // 锚点：最后一个 '}'（目标块必为对象 {…}——wire 根恒为对象；数组根不返回）。
+  for (
+    let end = text.lastIndexOf('}');
+    end !== -1;
+    end = text.lastIndexOf('}', end - 1)
+  ) {
+    const block = scanBalancedObjectBackward(text, end);
+    if (block !== null) return block;
+  }
+  return text;
 }
 
 // ---------------------------------------------------------------------------
@@ -660,9 +735,12 @@ export class OpenAICompatibleProvider implements AiParser {
 
       const content = extractContent(envelope);
       const candidateText = stripCodeFence(content);
+      // 切片 33（§7.45 / ai.md v0.24）：尾部平衡 JSON 提取——思维链散文拼进
+      // content 时剥出最终输出块；无配平块原样返回，行为与不提取时一致。
+      const balancedText = extractLastBalancedJson(candidateText);
       let candidate: unknown;
       try {
-        candidate = JSON.parse(candidateText);
+        candidate = JSON.parse(balancedText);
       } catch {
         throw new AiParseError('invalid-json', 'AI 返回内容不是合法 JSON（已拦截，不做补救）');
       }

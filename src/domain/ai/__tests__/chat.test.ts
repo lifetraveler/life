@@ -62,7 +62,14 @@ describe('runFlashTurn（阶段 3 编排）', () => {
     expect(result.assistantNote).toBe('未配置 AI Key，已用本地解析');
     expect(result.draft.title).toBe('买菜');
     expect(result.historyAppend[0]).toEqual({ role: 'user', text: '明天买菜' });
-    expect(JSON.parse(result.historyAppend[1].text)).toEqual(result.draft);
+    // 切片 33（§7.45 / ai.md v0.24）：history assistant 文本 = 民用序列化
+    // （serializeDraftForHistory），不再是域形状逐字段相等——毫秒被 few-shot
+    // 同化是 deepseek-flash 降级根因 B，history 一律民用。
+    const historyDraft = JSON.parse(result.historyAppend[1].text) as Record<string, unknown>;
+    expect(historyDraft.title).toBe('买菜');
+    expect(historyDraft.startAt).toEqual({ date: '2026-11-11', time: null }); // allDay → time null
+    expect(historyDraft.endAt).toBeNull();
+    expect(result.historyAppend[1].text).not.toContain(String(NOW));
   });
 
   it('有 Key → 远程解析成功，不做本地合并', async () => {
@@ -689,5 +696,28 @@ describe('runFlashTurn debug 副通道（切片 32 / AGENTS.md §7.44）', () =>
       previousDraft: null,
     });
     expect(result.debug).toBeNull();
+  });
+
+  it('远端成功轮：history assistant 文本为民用序列化（start/end {date,time}，不含毫秒）', async () => {
+    const envelope = remoteBody(remoteWire);
+    const result = await runFlashTurn('明天下午3点开周会', {
+      config,
+      now: NOW,
+      tzid: TZID,
+      history: [],
+      previousDraft: null,
+      fetchImpl: okFetch(envelope),
+    });
+    expect(result.degraded).toBe(false);
+    expect(result.historyAppend[1].role).toBe('assistant');
+    const historyDraft = JSON.parse(result.historyAppend[1].text) as Record<string, unknown>;
+    expect(historyDraft.title).toBe('开周会');
+    // 民用形状（ai.md v0.24）：非 allDay → time 具体时刻。
+    expect(historyDraft.startAt).toEqual({ date: '2026-11-11', time: '15:00' });
+    expect(historyDraft.endAt).toBeNull();
+    // 根因 B 防回归：history 文本不得再出现毫秒 epoch。
+    expect(result.historyAppend[1].text).not.toContain(
+      String(new Date('2026-11-11T15:00:00+08:00').getTime()),
+    );
   });
 });

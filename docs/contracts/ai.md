@@ -1,4 +1,4 @@
-# AI 解析层契约（v0.23）
+# AI 解析层契约（v0.24）
 
 ## 接口定义
 ```typescript
@@ -400,3 +400,35 @@ Reminder 模型中没有落库位置：data-model.md §4.1 冻结
   show_ai_response，boolean 非可选默认 false，旧数据回退 false，v12/v13 先例，
   零 unsafeExecuteSql）；draft.reminders 为可选字段，旧 history JSON 缺键照常
   通过摘要解析与 merge。
+
+## 变更记录（v0.24，切片 33 阶段 1，提案 docs/proposals/slice-33-deepseek-flash-parsing-adaptation.md 已经用户确认）
+
+- history assistant 草稿 JSON 民用化（根因 B）：chat.ts 两处 historyAppend
+  （fallbackTurn / runFlashTurn）assistant 文本从域形状 JSON（startAt/endAt/
+  reminders 为 epoch 毫秒）改为 `serializeDraftForHistory(draft, tzid)`
+  （prompt.ts）——startAt/endAt epoch → `{date,time} | null`（allDay → time
+  null）、reminders epoch[] → `[{date,time}]`、其余字段照抄。buildHistoryBriefing
+  消费面双形状兼容：number = legacy 毫秒本地换算渲染（getZonedParts，与落库
+  同源，v0.16 纪律不变）、`{date,time}` = 新形状直接渲染，升级瞬间内存混合
+  新旧格式均可消费。原因：毫秒 JSON 进 history 后被 few-shot 同化——模型自述
+  「为保持一致输出 startAt 毫秒」压过 prompt 禁令，毫秒形状 wire 守卫仍拒绝
+  → schema-mismatch 降级；仅剥离思维链不修同化，两修复必须捆绑。prompt 多轮
+  节「history 毫秒仅供程序读取」条款随之改写为「history 中 assistant 草稿
+  JSON 一律是民用时间格式；民用时间一律以摘要块为准——摘要块是唯一民用时间
+  基准；输出 JSON 严禁出现毫秒时间戳或任何非字段定义格式的日期时间」。
+  ParsedItemDraft 域形状不变（reminders 仍 `number[]` epoch，仅序列化出口
+  民用化）。
+- 解析链尾部平衡 JSON 提取（根因 A）：新增纯函数
+  `extractLastBalancedJson(text): string`（openAiCompatible.ts 导出）——从
+  末尾向前扫描配平 `{}[]`、字符串字面量与 `\"` 转义感知、取最靠后配平块；
+  无配平块原样返回走既有 invalid-json 失败路径；纯 JSON 输入零回归。解析链序
+  `extractContent → stripCodeFence → extractLastBalancedJson → JSON.parse`。
+  原因：deepseek-flash 思维链为纯散文、无 <think> 标签，直接拼进
+  choices[0].message.content，JSON.parse 失败 → schema-mismatch 降级（L8
+  「返回结构异常」主因）。
+- 边界：RemoteDraftWire 键纪律与 12 必填键清单零改动；isRemoteDraftWire 仍对
+  毫秒形状整体拒绝（不做宽容解析）；AiParser.parse 冻结签名与返回类型不变；
+  不消费 reasoning_content 字段（多渠道 reasoning 形状探测不做）；
+  localFallback / lastUsage / lastDebug 副通道零改动；schema 停留 v16 零迁移；
+  无新依赖；冻结区（src/notifications/、src/domain/recurrence/、
+  src/domain/export.ts）零改动。

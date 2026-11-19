@@ -34,13 +34,22 @@
  *   reminders 数组，与 start 语义独立；禁止把绝对提醒时刻换算成 offset/delay
  *  （F1 真机缺陷「提醒时刻已过去」误报的根因封堵）。摘要块增加「提醒时刻」行
  *  （epoch 本地换算民用），history 毫秒禁反算条款扩展覆盖 reminders。
+ * - v0.37（切片 33，AGENTS.md §7.45 / ai.md v0.24）：history assistant 草稿
+ *   序列化民用化——serializeDraftForHistory（startAt/endAt/reminders epoch →
+ *   {date,time} 民用对象，其余照抄）替代 JSON.stringify(draft)（毫秒），杜绝
+ *   毫秒 JSON 被 few-shot 同化（根因 B：模型自述「为保持一致输出 startAt 毫秒」
+ *   压过 prompt 禁令）；tryParseBriefingDraft/renderBriefing 双形状兼容
+ *   （number=legacy 毫秒本地换算、{date,time}=新直接渲染），升级瞬间内存里
+ *   新旧格式混合均可消费；「history 毫秒仅供程序读取」条款改写为「history 一律
+ *   民用、摘要块唯一民用时间基准、输出 JSON 严禁毫秒」。ParsedItemDraft 域形状
+ *   不变，本文件纯文本模板与序列化面改动，契约正文仅 ai.md 变更记录追加。
  *
  * 本文件是纯文本模板（常量 + 纯函数），不属于解析逻辑；单测只断言关键句存在，
  * 避免脆弱的全文比对。
  */
 
 import { getZonedParts } from '../recurrence/civilTime';
-import type { AiParseContext, ChatMessage } from './types';
+import type { AiParseContext, ChatMessage, ParsedItemDraft } from './types';
 
 export const AI_SYSTEM_PROMPT = [
   '你是一个日程/灵感解析助手。把用户输入解析成一个 JSON 对象，不要输出 JSON 以外的任何解释。',
@@ -105,7 +114,7 @@ export const AI_SYSTEM_PROMPT = [
   '- 短纠正句判定（切片 29）：「上一张卡片草稿摘要」块存在时，用户输入是不含新事由名词的短句——没有引入摘要标题之外的新标题性名词短语或新动作主体，只有时间或属性的修正表达，常带「还是/就/吧/算了」等语气词（如「还是30分钟后吧」「就改成明天上午吧」「算了，改到周五」）——默认视为对上一张卡的编辑：以摘要为基准修正被提及的字段，其余字段照抄摘要，输出完整 JSON，禁止新建条目。无摘要块时本条不生效，按普通解析处理。',
   '- 推迟语义（切片 29）：「推迟/延后 X 分钟」＝以上一张卡（摘要块）的时间为基准平移 ±X 分钟，start 与 end（如有）同 Δ 平移、保持时长不变——摘要块时间是唯一基准，禁止以当前说话时刻平移；「X 分钟后」＝以当前说话时刻为基准：编辑语境（短纠正句）下卡片新时间＝说话时刻+X 分钟、end 如有按原时长顺延，全新意图语境下仍按 reminderDelayMinutes 延迟提醒语义（不换算成 start）。两种表达可在同一句出现，各按各的基准计算，互不覆盖。推迟/延后类修正只调整时间字段，禁止把「推迟 X 分钟」这类原文写入 title 或 content。',
   '- 反向边界（切片 25/29）：用户输入是全新意图（与上一张卡无关的新事项）时，输出一个新建条目，title 取本轮输入的主题词，禁止复用/照抄上一张卡的标题——只有修改类输入（改成/改为、补充细节、澄清续答、短纠正句）才以上一张卡草稿为基准。含新事由名词的短句（如「明天开会」「周六聚餐」）不是短纠正句，仍是全新意图照常新建，防误伤。',
-  '- history 中 assistant 草稿 JSON 的 startAt/endAt 是毫秒时间戳、reminders 是毫秒时间戳数组，仅供程序读取；禁止由毫秒反算日期或时刻——民用时间一律以摘要块为准（摘要块的「提醒时刻」行同样是民用时刻）；无摘要块时按“当前时间”基准正常解析。',
+  '- history 中 assistant 草稿 JSON 一律是民用时间格式（start/end 为 date/time 对象、reminders 为对象数组）；民用时间一律以摘要块为准——摘要块是唯一民用时间基准（摘要块的「提醒时刻」行同样是民用时刻）；输出 JSON 严禁出现毫秒时间戳或任何非字段定义格式的日期时间；无摘要块时按“当前时间”基准正常解析。',
   '',
   '时间字段书写规则：',
   '- date 一律 YYYY-MM-DD（公历），相对词（今天/明天/下周三/每月15号）先依据下方“当前时间”换算成绝对日期；',
@@ -135,13 +144,63 @@ export function buildNowFacts(context: AiParseContext): string {
 }
 
 /**
+ * 切片 33（§7.45 / ai.md v0.24）：history assistant JSON 里的民用时间字段形状
+ * ——与远端 wire 的 RemoteDateTimeField 同构（date 必为合法日历日、time null =
+ * 全天）。ParsedItemDraft 域形状不变（epoch ms），仅序列化面转换。
+ */
+export interface CivilianTimeField {
+  date: string;
+  time: string | null;
+}
+
+/**
+ * history assistant 草稿 JSON 序列化（切片 33 / ai.md v0.24）：时间一律民用
+ * 形状——startAt/endAt epoch → {date,time}|null（allDay→time null）、reminders
+ * epoch[] → [{date,time}]，其余字段照抄。
+ *
+ * 动机（根因 B）：毫秒 JSON 进 history 后被 few-shot 同化——模型自述「为保持
+ * 一致输出 startAt 毫秒」压过 prompt 禁令，毫秒形状 wire 守卫仍拒绝 → 降级。
+ * history 一律民用后，同化方向反过来保护民用输出。民用换算经 getZonedParts
+ * 本地完成（v0.16 纪律：epoch 换算绝不交给模型），与落库换算同源。
+ */
+export function serializeDraftForHistory(
+  draft: ParsedItemDraft,
+  tzid: string,
+): string {
+  const toCivilian = (
+    epoch: number,
+    allDay: boolean,
+  ): CivilianTimeField => {
+    const parts = getZonedParts(epoch, tzid);
+    const pad = (n: number): string => String(n).padStart(2, '0');
+    return {
+      date: `${parts.year}-${pad(parts.month)}-${pad(parts.day)}`,
+      time: allDay ? null : `${pad(parts.hour)}:${pad(parts.minute)}`,
+    };
+  };
+  const toCivilianOrNull = (
+    epoch: number | null,
+    allDay: boolean,
+  ): CivilianTimeField | null => (epoch === null ? null : toCivilian(epoch, allDay));
+  return JSON.stringify({
+    ...draft,
+    startAt: toCivilianOrNull(draft.startAt, draft.allDay),
+    endAt: toCivilianOrNull(draft.endAt, draft.allDay),
+    reminders: draft.reminders?.map((epoch) => toCivilian(epoch, false)),
+  });
+}
+
+/**
  * history 中最近一张草稿的最小形状（防御式判据，不是完整 ParsedItemDraft 校验）。
  * 字段值为 JSON.parse 产物，除判据字段外保持 unknown，由渲染侧逐项从严校验。
+ * 切片 33 双形状：startAt/endAt 可为 legacy epoch 毫秒（number|null，升级瞬间
+ * 内存里仍残留旧条目）或新民用对象（CivilianTimeField|null，serializeDraftForHistory
+ * 产物）；reminders 形状同理（number[] | CivilianTimeField[]），由渲染侧兼容。
  */
 interface BriefingDraftShape {
   title: string;
-  startAt: number | null;
-  endAt: number | null;
+  startAt: number | CivilianTimeField | null;
+  endAt: number | CivilianTimeField | null;
   allDay: boolean;
   recurrence: unknown;
   categoryId: unknown;
@@ -161,11 +220,39 @@ function isNumberArray(value: unknown): value is number[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'number');
 }
 
+/** 民用时间对象形状判据（切片 33）：date string + time string|null，非数组对象。 */
+function isCivilianTimeField(value: unknown): value is CivilianTimeField {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const v = value as { date?: unknown; time?: unknown };
+  return (
+    typeof v.date === 'string' &&
+    (v.time === null || typeof v.time === 'string')
+  );
+}
+
+/** 双形状时间值判据（切片 33）：legacy epoch 毫秒 或 民用对象，null 合法。 */
+function isBriefingTimeValue(
+  value: unknown,
+): value is number | CivilianTimeField | null {
+  return (
+    value === null || typeof value === 'number' || isCivilianTimeField(value)
+  );
+}
+
+/** 民用时刻数组判据（切片 33）：serializeDraftForHistory 产物的 reminders 形状。 */
+function isCivilianTimeFieldArray(value: unknown): value is CivilianTimeField[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((item) => isCivilianTimeField(item))
+  );
+}
+
 /**
  * 尝试把一条 history 消息文本解析成「形似草稿」的对象。
- * 判据：对象非数组、title 为 string、含 startAt 键且为 number|null、allDay 为
- * boolean——足以区分草稿 JSON 与编辑/引导轮的纯文本 note（后者 parse 失败或
- * 形状不符，直接跳过）。
+ * 判据：对象非数组、title 为 string、含 startAt 键且为双形状时间值（切片 33：
+ * legacy epoch 毫秒或民用对象）、allDay 为 boolean——足以区分草稿 JSON 与
+ * 编辑/引导轮的纯文本 note（后者 parse 失败或形状不符，直接跳过）。
  */
 function tryParseBriefingDraft(text: string): BriefingDraftShape | null {
   const trimmed = text.trim();
@@ -188,8 +275,8 @@ function tryParseBriefingDraft(text: string): BriefingDraftShape | null {
     typeof record['title'] !== 'string' ||
     typeof record['allDay'] !== 'boolean' ||
     !('startAt' in record) ||
-    (startAt !== null && typeof startAt !== 'number') ||
-    (endAt !== undefined && endAt !== null && typeof endAt !== 'number')
+    !isBriefingTimeValue(startAt) ||
+    (endAt !== undefined && !isBriefingTimeValue(endAt))
   ) {
     return null;
   }
@@ -220,12 +307,34 @@ function formatBriefingDateTime(epoch: number, tzid: string): string {
   return `${formatBriefingDate(epoch, tzid)} ${pad(parts.hour)}:${pad(parts.minute)}`;
 }
 
+/**
+ * 双形状日期渲染（切片 33）：legacy epoch 毫秒本地换算（与落库同源）、
+ * 新民用对象直接渲染（不再换算，杜绝二次时区折算）。
+ */
+function formatBriefingDateValue(
+  value: number | CivilianTimeField,
+  tzid: string,
+): string {
+  return typeof value === 'number' ? formatBriefingDate(value, tzid) : value.date;
+}
+
+/** 双形状日期时间渲染（切片 33）：民用对象 time null（全天）只出日期。 */
+function formatBriefingDateTimeValue(
+  value: number | CivilianTimeField,
+  tzid: string,
+): string {
+  if (typeof value === 'number') return formatBriefingDateTime(value, tzid);
+  return value.time === null ? value.date : `${value.date} ${value.time}`;
+}
+
 function describeBriefingTime(draft: BriefingDraftShape, tzid: string): string {
   if (draft.startAt === null) return '未设时间';
-  if (draft.allDay) return `${formatBriefingDate(draft.startAt, tzid)} 全天`;
+  if (draft.allDay) return `${formatBriefingDateValue(draft.startAt, tzid)} 全天`;
   const endText =
-    draft.endAt !== null ? ` ～ ${formatBriefingDateTime(draft.endAt, tzid)}` : '';
-  return `${formatBriefingDateTime(draft.startAt, tzid)}${endText}（时区 ${tzid}）`;
+    draft.endAt !== null
+      ? ` ～ ${formatBriefingDateTimeValue(draft.endAt, tzid)}`
+      : '';
+  return `${formatBriefingDateTimeValue(draft.startAt, tzid)}${endText}（时区 ${tzid}）`;
 }
 
 function renderBriefing(draft: BriefingDraftShape, tzid: string): string {
@@ -248,6 +357,17 @@ function renderBriefing(draft: BriefingDraftShape, tzid: string): string {
     const rendered = draft.reminders
       .slice(0, 8)
       .map((epoch) => formatBriefingDateTime(epoch, tzid))
+      .join('、');
+    lines.push(`- 提醒时刻（reminders）：${rendered}`);
+  } else if (isCivilianTimeFieldArray(draft.reminders)) {
+    // 切片 33 双形状：新 history 条目的 reminders 已是民用对象，直接渲染。
+    // （legacy 毫秒分支在上——两形状互斥的整型数组判据，混合形状两支都不命中、
+    // 提醒行省略，防御式不炸。）
+    const rendered = draft.reminders
+      .slice(0, 8)
+      .map((field) =>
+        field.time === null ? field.date : `${field.date} ${field.time}`,
+      )
       .join('、');
     lines.push(`- 提醒时刻（reminders）：${rendered}`);
   }
@@ -274,10 +394,12 @@ function renderBriefing(draft: BriefingDraftShape, tzid: string): string {
 /**
  * 上一张卡片草稿摘要（切片 23 阶段 2 / ai.md）：从 history 末尾向前找最后一条
  * assistant 草稿 JSON 消息（切片 15 约定：草稿轮 assistant 文本 = 合并后草稿的
- * JSON；编辑/引导轮是纯文本 note，parse 失败自动跳过继续向前扫），把毫秒时间戳
- * 本地换算为民用时间（v0.16 纪律：epoch 换算绝不交给模型），输出一段可直接引用
- * 的摘要块。远端编辑意图（“改成7点半”）以此块为基准：模型不再从毫秒反算日期，
- * 且被明确禁止新建条目。找不到任何草稿 → null（单轮行为不变）。
+ * JSON；编辑/引导轮是纯文本 note，parse 失败自动跳过继续向前扫），把时间字段
+ * 渲染为可直接引用的摘要块。切片 33 双形状：新条目（serializeDraftForHistory，
+ * 民用对象）直接渲染；legacy 条目（毫秒，升级瞬间的内存残留）本地换算民用
+ * （v0.16 纪律：epoch 换算绝不交给模型）。远端编辑意图（“改成7点半”）以此块
+ * 为基准：模型不再从毫秒反算日期，且被明确禁止新建条目。找不到任何草稿 →
+ * null（单轮行为不变）。
  */
 export function buildHistoryBriefing(
   history: ReadonlyArray<ChatMessage>,
