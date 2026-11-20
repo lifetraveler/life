@@ -424,7 +424,13 @@ Reminder 模型中没有落库位置：data-model.md §4.1 冻结
   assistant 草稿 JSON 一律是民用时间格式；民用时间一律以摘要块为准——摘要块
   是唯一民用时间基准；输出 JSON 严禁出现毫秒时间戳或任何非字段定义格式的日期
   时间」。ParsedItemDraft 域形状不变（reminders 仍 `number[]` epoch，仅序列化
-  出口民用化）。
+  出口民用化）。阶段 2 补全（真机矩阵 #6 发现，用户批准）：UI 层
+  useFlashChat.ts 两个 assistant history 写入点——保存后播种（§7.40）与本地
+  编辑成功回写（ai.md v0.19 草稿 JSON 回正）——原为域形状毫秒 JSON，是
+  保存→继续编辑场景 few-shot 的同化源残留；两处改接
+  `serializeDraftForHistory(draft, tzid)`，与 chat.ts historyAppend 同格式
+  （民用时刻 + wire 键名 start/end），history assistant 条目四个写入点全部
+  归一。
 - 解析链尾部平衡 JSON 提取（根因 A）：新增纯函数
   `extractLastBalancedJson(text): string`（openAiCompatible.ts 导出）——从
   末尾向前扫描配平 `{}[]`、字符串字面量与 `\"` 转义感知、取最靠后配平块；

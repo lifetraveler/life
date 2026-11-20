@@ -27,6 +27,12 @@
     自我纠正、轮 3 照抄 history 未纠正的实证；同化源从毫秒换成键名）。消费面
     扩为三形状兼容（start/end 键优先、startAt 键回退、legacy 毫秒），渲染侧
     归一入口零变化。ai.md v0.24 条目同步修订。
+  - **阶段 2 播种/本地回写接线补全（矩阵 #6 发现，用户批准 A 方案）**：UI 层
+    useFlashChat.ts 两个 assistant history 写入点（保存后播种 :929、本地编辑
+    成功回写 :400）原为 JSON.stringify(draft) 毫秒 JSON——保存→继续编辑场景
+    few-shot 混合民用+毫秒形状，键名/形状同化复活路径；两处改接
+    serializeDraftForHistory（tzid 分别取自函数参数与 getDeviceTzid()），
+    与 chat.ts 两处 historyAppend 同格式。
 - **D3** ai.md v0.24 变更记录：history 格式演进 + 解析链提取；wire 零改动。
 - **D4** L8 定性闭环：修复后真机复验，feedback-log L8 注记（显著回落→「已定性已修复」；仍复现→记录残余症状观察）。
 - **D5** 验收矩阵 7 条（见 §3）。
