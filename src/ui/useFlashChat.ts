@@ -54,6 +54,7 @@ import { runFlashTurn } from '../domain/ai/chat';
 import type { FlashTurnResult } from '../domain/ai/chat';
 import { diffDraftChanges } from '../domain/ai/editDiff';
 import type { DraftFieldChanges } from '../domain/ai/editDiff';
+import { serializeDraftForHistory } from '../domain/ai/prompt';
 import { formatAiUsageLine } from '../domain/ai/usage';
 import type { AiUsageSnapshot } from '../domain/ai/usage';
 import {
@@ -395,9 +396,11 @@ export function useFlashChat() {
       draftRef.current = next;
       setDraft(next);
       const note = `已改为 ${formatItemTime(newStart, tzid)}（请核对卡片）`;
-      // 切片 23 阶段 2：history 回写编辑后的草稿 JSON（切片 15 格式），
-      // note 只作消息流展示。
-      appendEditHistory(input, note, JSON.stringify(next));
+      // 切片 23 阶段 2：history 回写编辑后的草稿 JSON，note 只作消息流展示。
+      // 切片 33（§7.45）：序列化经 serializeDraftForHistory——民用时刻 + 时间
+      // 键名对齐 wire（start/end），与 chat.ts historyAppend 同格式；原
+      // JSON.stringify 直接写毫秒草稿，是保存/编辑后轮次 few-shot 的同化源。
+      appendEditHistory(input, note, serializeDraftForHistory(next, tzid));
       push('assistant', note);
       return true;
     },
@@ -926,7 +929,11 @@ export function useFlashChat() {
       // 草稿摘要」块可用，多轮节「短纠正句判定/推迟语义」条款在保存后的轮次
       // 继续生效（修复「保存后『还是30分钟后吧』被误判全新解析」缺陷）。
       // 仅播种这一条、不携带更早对话——保持「每存一张=新对话」设计，不跨条目串味。
-      historyRef.current = [{ role: 'assistant', text: JSON.stringify(current) }];
+      // 切片 33（§7.45）：播种经 serializeDraftForHistory（tzid 与落库同源）——
+      // 民用时刻 + wire 键名 start/end，消除保存后 few-shot 毫秒/旧键名同化源。
+      historyRef.current = [
+        { role: 'assistant', text: serializeDraftForHistory(current, tzid) },
+      ];
       // 切片 22 阶段 1（AGENTS.md §7.34）：保存成功后的 AI 回复改为结果卡片消息
       //（替代原「已添加《xx》」纯文本）；提醒未自动落库的说明（reminderNotice）
       // 仍追加一条纯文本消息，Alert 提示行为不变。

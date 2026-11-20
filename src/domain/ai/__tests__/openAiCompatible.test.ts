@@ -3,7 +3,7 @@
  * 安全断言：任何错误消息都不得包含 apiKey。
  */
 
-import { OpenAICompatibleProvider, stripCodeFence, isRemoteDraftWire, wireToParsedItemDraft } from '../openAiCompatible';
+import { OpenAICompatibleProvider, stripCodeFence, extractLastBalancedJson, isRemoteDraftWire, wireToParsedItemDraft } from '../openAiCompatible';
 import { AiParseError } from '../errors';
 import type { AiParseContext } from '../types';
 import { resolveCivilTimeToInstant } from '../../recurrence/civilTime';
@@ -281,6 +281,19 @@ describe('OpenAICompatibleProvider', () => {
     expect(stripCodeFence('{"a":1}')).toBe('{"a":1}');    expect(stripCodeFence('```\n{"a":1}\n```')).toBe('{"a":1}');
   });
 
+  it('切片 33 端到端：思维链散文拼进 content → 尾部提取后解析成功（根因 A）', async () => {
+    // deepseek-flash 真机形态：纯散文推理 + 推演中带残缺 JSON + 末尾完整 wire。
+    const cot =
+      '用户想在明天提醒。我先推演一下格式：{\\"date\\":\\"2026-11-11\\"} 这样对吗？' +
+      '再想想 end 怎么填。最终输出：\n' +
+      validWireJson;
+    const { fetchImpl } = makeFetch(() => okEnvelope(cot));
+    const provider = makeProvider(fetchImpl);
+    const draft = await provider.parse('明天下午3点开会', CONTEXT);
+    expect(draft.title).toBe('开会');
+    expect(draft.startAt).toBe(mustAt(2026, 11, 11, 15, 0));
+  });
+
   describe('testConnection（阶段 2）', () => {
     it('200 → ok 且请求体为最小 ping（max_tokens=1）', async () => {
       const { fetchImpl, calls } = makeFetch(() => new Response('{"x":1}', { status: 200 }));
@@ -332,6 +345,60 @@ describe('OpenAICompatibleProvider', () => {
       const result = await provider.testConnection();
       expect(result).toMatchObject({ ok: false, reason: expect.stringContaining('网络错误') });
     });
+  });
+});
+
+describe('extractLastBalancedJson（切片 33 §7.45 尾部平衡提取）', () => {
+  const WIRE = '{"title":"开会","tags":["工作"],"start":{"date":"2026-11-11","time":"15:00"}}';
+
+  it('纯 JSON 输入原样返回（零回归）', () => {
+    expect(extractLastBalancedJson(WIRE)).toBe(WIRE);
+    expect(extractLastBalancedJson('{"a":1}')).toBe('{"a":1}');
+    expect(extractLastBalancedJson('{"a":{"b":[1,2,{"c":3}]}}')).toBe(
+      '{"a":{"b":[1,2,{"c":3}]}}',
+    );
+    expect(extractLastBalancedJson('  {"a":1}  ')).toBe('{"a":1}');
+  });
+
+  it('CoT 散文 + 末尾 JSON → 只取最靠后配平块', () => {
+    const cot = `用户提到明天开会。需要提取 title 和 start。\n结论：${WIRE}`;
+    expect(extractLastBalancedJson(cot)).toBe(WIRE);
+  });
+
+  it('CoT 推演中的 JSON 片段（含转义引号形式）不被误取', () => {
+    const cot =
+      '备选 {\\"date\\":\\"2026-11-11\\"} 或 {"draft":true} 都不对。最终：' +
+      WIRE;
+    expect(extractLastBalancedJson(cot)).toBe(WIRE);
+  });
+
+  it('字符串字面量内的大括号/中括号/引号不参与配平', () => {
+    const tricky = '{"note":"含 } ] { [ 的字符串","tags":["a]b"]}尾注';
+    expect(extractLastBalancedJson(tricky)).toBe(
+      '{"note":"含 } ] { [ 的字符串","tags":["a]b"]}',
+    );
+  });
+
+  it('字符串内的转义引号（\\"）不是字符串边界', () => {
+    const tricky = '{"note":"他说 \\"好了}\\" 然后离开","tags":[]}';
+    expect(extractLastBalancedJson(tricky)).toBe(tricky);
+  });
+
+  it('无配平块（纯散文 / 截断 JSON / 括号错配）→ 原样返回走既有失败路径', () => {
+    expect(extractLastBalancedJson('完全没有大括号的散文')).toBe(
+      '完全没有大括号的散文',
+    );
+    expect(extractLastBalancedJson('{"title":"截断的')).toBe('{"title":"截断的');
+    expect(extractLastBalancedJson('{"a":[1,2}')).toBe('{"a":[1,2}');
+    expect(extractLastBalancedJson('[1,2]')).toBe('[1,2]'); // 数组根不返回也原样
+  });
+
+  it('JSON 后尾随说明文字 → 仍取 JSON 块；嵌套 []/{} 混合正确配平', () => {
+    expect(extractLastBalancedJson(`${WIRE} 以上就是结果。`)).toBe(WIRE);
+    const nested = '推演 [a,b] 后输出 {"a":{"b":[1,{"c":[2]}],"d":null}} 完成';
+    expect(extractLastBalancedJson(nested)).toBe(
+      '{"a":{"b":[1,{"c":[2]}],"d":null}}',
+    );
   });
 });
 

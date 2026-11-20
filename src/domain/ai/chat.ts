@@ -13,14 +13,17 @@
  * - Fallback 路径：无状态槽位解析 + parseSlots 的 expressed 掩码，与上一轮
  *   卡片做字段级合并（merge.ts），实现"改成后天"只动时间不动标题。
  *
- * historyAppend 的 assistant 文本统一为合并后草稿的 JSON：远程模型下一轮
- * 可读，本地路径不需要（无状态），且便于调试回放。
+ * historyAppend 的 assistant 文本统一为合并后草稿的 JSON（切片 33 / ai.md
+ * v0.24：serializeDraftForHistory 民用序列化——毫秒 JSON 被 few-shot 同化是
+ * deepseek-flash 降级根因之一，history 一律民用）：远程模型下一轮可读，本地
+ * 路径不需要（无状态），且便于调试回放。
  */
 
 import { AiParseError } from './errors';
 import { matchesEditIntent } from './editIntent';
 import { LocalFallbackProvider } from './localFallback';
 import { mergeDraftCorrection } from './merge';
+import { serializeDraftForHistory } from './prompt';
 import { OpenAICompatibleProvider } from './openAiCompatible';
 import type { AiTurnDebugSnapshot } from './openAiCompatible';
 import type { AiConfig } from './configStore';
@@ -156,7 +159,9 @@ function fallbackTurn(
     debug,
     historyAppend: [
       { role: 'user', text: trimmed },
-      { role: 'assistant', text: JSON.stringify(draft) },
+      // 切片 33（§7.45 / ai.md v0.24）：民用序列化（startAt/endAt/reminders
+      // epoch → {date,time}），毫秒不再进 history（few-shot 同化封堵）。
+      { role: 'assistant', text: serializeDraftForHistory(draft, deps.tzid) },
     ],
   };
 }
@@ -205,7 +210,8 @@ export async function runFlashTurn(
         debug: provider.lastDebug,
         historyAppend: [
           { role: 'user', text: trimmed },
-          { role: 'assistant', text: JSON.stringify(draft) },
+          // 切片 33（§7.45 / ai.md v0.24）：同 fallbackTurn，民用序列化。
+          { role: 'assistant', text: serializeDraftForHistory(draft, deps.tzid) },
         ],
       };
     } catch (e) {
