@@ -20,6 +20,13 @@
 
 - **D1** 尾部平衡 JSON 提取 `extractLastBalancedJson(text): string`：末尾向前扫描配平 `{}[]`（字符串字面量感知+转义处理），取最靠后配平块；无配平块原样返回；纯 JSON 零回归。链序 `extractContent → stripCodeFence → extractLastBalancedJson → JSON.parse`。
 - **D2** history assistant 序列化民用化 `serializeDraftForHistory(draft, tzid): string`（prompt.ts 导出）：startAt/endAt epoch→`{date,time}|null`（allDay→time null）、reminders epoch[]→`[{date,time}]`、其余照抄；chat.ts 两处 `historyAppend` 接线（fallbackTurn / runFlashTurn）。`tryParseBriefingDraft`/`renderBriefing` 双形状兼容（number=legacy 毫秒换算渲染、`{date,time}`=新直接渲染）。prompt :108 措辞改写（history 一律民用、摘要块唯一基准、严禁输出毫秒）。
+  - **阶段 2 键名修正注记（真机矩阵 #3 轮 3 定性，用户批准 B 方案）**：序列化
+    时间键名从草稿键名 startAt/endAt 改为 **wire 键名 start/end**——history
+    few-shot 若用 startAt，模型编辑轮照抄输出 startAt 民用对象，与
+    RemoteDraftWire 必填键 start/end 冲突 → schema-mismatch 降级（轮 2 模型
+    自我纠正、轮 3 照抄 history 未纠正的实证；同化源从毫秒换成键名）。消费面
+    扩为三形状兼容（start/end 键优先、startAt 键回退、legacy 毫秒），渲染侧
+    归一入口零变化。ai.md v0.24 条目同步修订。
 - **D3** ai.md v0.24 变更记录：history 格式演进 + 解析链提取；wire 零改动。
 - **D4** L8 定性闭环：修复后真机复验，feedback-log L8 注记（显著回落→「已定性已修复」；仍复现→记录残余症状观察）。
 - **D5** 验收矩阵 7 条（见 §3）。

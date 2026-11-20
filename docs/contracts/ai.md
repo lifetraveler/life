@@ -406,18 +406,25 @@ Reminder 模型中没有落库位置：data-model.md §4.1 冻结
 - history assistant 草稿 JSON 民用化（根因 B）：chat.ts 两处 historyAppend
   （fallbackTurn / runFlashTurn）assistant 文本从域形状 JSON（startAt/endAt/
   reminders 为 epoch 毫秒）改为 `serializeDraftForHistory(draft, tzid)`
-  （prompt.ts）——startAt/endAt epoch → `{date,time} | null`（allDay → time
-  null）、reminders epoch[] → `[{date,time}]`、其余字段照抄。buildHistoryBriefing
-  消费面双形状兼容：number = legacy 毫秒本地换算渲染（getZonedParts，与落库
-  同源，v0.16 纪律不变）、`{date,time}` = 新形状直接渲染，升级瞬间内存混合
-  新旧格式均可消费。原因：毫秒 JSON 进 history 后被 few-shot 同化——模型自述
-  「为保持一致输出 startAt 毫秒」压过 prompt 禁令，毫秒形状 wire 守卫仍拒绝
-  → schema-mismatch 降级；仅剥离思维链不修同化，两修复必须捆绑。prompt 多轮
-  节「history 毫秒仅供程序读取」条款随之改写为「history 中 assistant 草稿
-  JSON 一律是民用时间格式；民用时间一律以摘要块为准——摘要块是唯一民用时间
-  基准；输出 JSON 严禁出现毫秒时间戳或任何非字段定义格式的日期时间」。
-  ParsedItemDraft 域形状不变（reminders 仍 `number[]` epoch，仅序列化出口
-  民用化）。
+  （prompt.ts）——时间 epoch → `{date,time} | null`（allDay → time null）、
+  reminders epoch[] → `[{date,time}]`、其余字段照抄；**键名对齐远端 wire**
+  （时间键输出为 `start`/`end`，不再沿用草稿键名 startAt/endAt）。阶段 1 修正
+  （真机矩阵 #3 轮 3 定性）：序列化若沿用草稿键名 startAt/endAt，模型在编辑轮
+  照抄输出 startAt 民用对象，与 RemoteDraftWire 必填键 start/end 冲突 →
+  isRemoteDraftWire 整体拒绝 → schema-mismatch 降级（同轮模型随机偏向：轮 2
+  自我纠正用 start、轮 3 照抄 history 用 startAt 的实证）；history 键名与
+  prompt 字段定义一致后 few-shot 同化与 wire 同向。buildHistoryBriefing 消费面
+  三形状兼容：number = legacy 毫秒本地换算渲染（getZonedParts，与落库同源，
+  v0.16 纪律不变）、startAt 键 `{date,time}` = v0.24 首轮发布形状直接渲染
+  （升级瞬间内存残留）、start/end 键 `{date,time}` = 现产物直接渲染（解析优先
+  start/end、回退 startAt/endAt）。原因：毫秒 JSON 进 history 后被 few-shot
+  同化——模型自述「为保持一致输出 startAt 毫秒」压过 prompt 禁令，毫秒形状
+  wire 守卫仍拒绝 → schema-mismatch 降级；仅剥离思维链不修同化，两修复必须
+  捆绑。prompt 多轮节「history 毫秒仅供程序读取」条款随之改写为「history 中
+  assistant 草稿 JSON 一律是民用时间格式；民用时间一律以摘要块为准——摘要块
+  是唯一民用时间基准；输出 JSON 严禁出现毫秒时间戳或任何非字段定义格式的日期
+  时间」。ParsedItemDraft 域形状不变（reminders 仍 `number[]` epoch，仅序列化
+  出口民用化）。
 - 解析链尾部平衡 JSON 提取（根因 A）：新增纯函数
   `extractLastBalancedJson(text): string`（openAiCompatible.ts 导出）——从
   末尾向前扫描配平 `{}[]`、字符串字面量与 `\"` 转义感知、取最靠后配平块；

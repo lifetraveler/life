@@ -546,9 +546,13 @@ schema 版本 5→6，新增/修改如下：
   stripCodeFence → extractLastBalancedJson → JSON.parse。
 - **history assistant 序列化民用化**：prompt.ts 导出 serializeDraftForHistory(draft, tzid)
   ——startAt/endAt epoch→{date,time}|null（allDay→time null）、reminders epoch[]→
-  [{date,time}]、其余字段照抄；chat.ts 两处 historyAppend 接线；tryParseBriefingDraft/
-  renderBriefing 双形状兼容（number=legacy 毫秒换算渲染、{date,time}=新直接渲染）；
-  prompt「history 毫秒仅供程序读取」条款改写为「history 一律民用、摘要块唯一基准、
+  [{date,time}]、其余字段照抄，**时间键名输出 wire 键名 start/end（阶段 2 键名
+  修正，真机矩阵 #3 轮 3 定性：history few-shot 若用草稿键名 startAt，模型编辑轮
+  照抄输出 startAt 民用对象与 wire 必填键 start/end 冲突 → schema-mismatch，
+  同化源从毫秒换成键名）**；chat.ts 两处 historyAppend 接线；tryParseBriefingDraft/
+  renderBriefing 三形状兼容（number=legacy 毫秒换算渲染、startAt 键 {date,time}=
+  首轮发布形状、start/end 键=现产物，解析 start 优先回退 startAt）；prompt
+  「history 毫秒仅供程序读取」条款改写为「history 一律民用、摘要块唯一基准、
   严禁输出毫秒」。
 - **契约面**：ai.md v0.24 变更记录（history 格式演进 + 解析链提取）；RemoteDraftWire
   键纪律与 12 必填键清单零改动；AiParser.parse 冻结签名不变；不消费 reasoning_content

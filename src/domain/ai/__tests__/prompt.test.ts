@@ -414,29 +414,39 @@ describe('serializeDraftForHistory（切片 33 §7.45 民用序列化）', () =>
     };
   }
 
-  it('有时刻：startAt/endAt epoch → {date,time} 民用对象（时区换算正确）', () => {
+  it('有时刻：startAt/endAt epoch → start/end 键 {date,time} 民用对象（时区换算正确）', () => {
     const out = JSON.parse(
       serializeDraftForHistory(makeDraft(), TZID),
     ) as Record<string, unknown>;
-    expect(out.startAt).toEqual({ date: '2026-11-16', time: '00:30' });
-    expect(out.endAt).toEqual({ date: '2026-11-16', time: '01:30' });
+    expect(out.start).toEqual({ date: '2026-11-16', time: '00:30' });
+    expect(out.end).toEqual({ date: '2026-11-16', time: '01:30' });
     expect(out.allDay).toBe(false);
+  });
+
+  it('键名对齐 wire：产物含 start/end 键、不含 startAt/endAt 键（真机矩阵 #3 轮 3 防回归）', () => {
+    const out = JSON.parse(
+      serializeDraftForHistory(makeDraft(), TZID),
+    ) as Record<string, unknown>;
+    expect('start' in out).toBe(true);
+    expect('end' in out).toBe(true);
+    expect('startAt' in out).toBe(false);
+    expect('endAt' in out).toBe(false);
   });
 
   it('allDay=true → time null（只表达日期）', () => {
     const out = JSON.parse(
       serializeDraftForHistory(makeDraft({ allDay: true, endAt: null }), TZID),
     ) as Record<string, unknown>;
-    expect(out.startAt).toEqual({ date: '2026-11-16', time: null });
-    expect(out.endAt).toBeNull();
+    expect(out.start).toEqual({ date: '2026-11-16', time: null });
+    expect(out.end).toBeNull();
   });
 
   it('startAt null → null；无时间草稿不炸', () => {
     const out = JSON.parse(
       serializeDraftForHistory(makeDraft({ startAt: null, endAt: null }), TZID),
     ) as Record<string, unknown>;
-    expect(out.startAt).toBeNull();
-    expect(out.endAt).toBeNull();
+    expect(out.start).toBeNull();
+    expect(out.end).toBeNull();
   });
 
   it('reminders epoch[] → [{date,time}] 民用对象数组', () => {
@@ -481,7 +491,7 @@ describe('serializeDraftForHistory（切片 33 §7.45 民用序列化）', () =>
   });
 });
 
-describe('buildHistoryBriefing 双形状（切片 33 §7.45）', () => {
+describe('buildHistoryBriefing 三形状（切片 33 §7.45 + 阶段 1 键名修正）', () => {
   const TZID = 'Asia/Shanghai';
   const START = new Date('2026-11-16T00:30:00+08:00').getTime();
   const R1 = new Date('2026-11-11T08:00:00+08:00').getTime();
@@ -492,7 +502,6 @@ describe('buildHistoryBriefing 双形状（切片 33 §7.45）', () => {
       content: '',
       type: 'task',
       allDay: false,
-      endAt: null,
       categoryId: 'health',
       tags: ['健康'],
       priority: 0,
@@ -505,18 +514,32 @@ describe('buildHistoryBriefing 双形状（切片 33 §7.45）', () => {
     };
   }
 
-  function civilianDraftJson(): string {
+  /** v0.24 阶段 1 修正后产物：wire 键名 start/end 民用对象。 */
+  function wireKeyDraftJson(): string {
     return JSON.stringify({
       ...draftFields(),
-      startAt: { date: '2026-11-16', time: '00:30' },
+      start: { date: '2026-11-16', time: '00:30' },
+      end: null,
       reminders: [{ date: '2026-11-11', time: '08:00' }],
     });
   }
 
+  /** v0.24 首轮发布产物（升级瞬间的内存残留）：startAt 键民用对象。 */
+  function civilianDraftJson(): string {
+    return JSON.stringify({
+      ...draftFields(),
+      startAt: { date: '2026-11-16', time: '00:30' },
+      endAt: null,
+      reminders: [{ date: '2026-11-11', time: '08:00' }],
+    });
+  }
+
+  /** 切片 32 及以前产物：startAt 键 legacy 毫秒。 */
   function legacyDraftJson(): string {
     return JSON.stringify({
       ...draftFields(),
       startAt: START,
+      endAt: null,
       reminders: [R1],
     });
   }
@@ -528,19 +551,21 @@ describe('buildHistoryBriefing 双形状（切片 33 §7.45）', () => {
     ];
   }
 
-  it('民用形状条目与 legacy 毫秒条目渲染结果一致（摘要块唯一基准不漂移）', () => {
+  it('三形状条目（wire 键名/首轮 startAt 民用/legacy 毫秒）渲染结果一致（摘要块唯一基准不漂移）', () => {
+    const wireKey = buildHistoryBriefing(brief(wireKeyDraftJson()), TZID);
     const civilian = buildHistoryBriefing(brief(civilianDraftJson()), TZID);
     const legacy = buildHistoryBriefing(brief(legacyDraftJson()), TZID);
-    expect(civilian).not.toBeNull();
-    expect(civilian).toBe(legacy);
-    expect(civilian).toContain('吃药');
-    expect(civilian).toContain('2026-11-16 00:30');
-    expect(civilian).toContain('提醒时刻（reminders）');
-    expect(civilian).toContain('2026-11-11 08:00');
+    expect(wireKey).not.toBeNull();
+    expect(wireKey).toBe(civilian);
+    expect(wireKey).toBe(legacy);
+    expect(wireKey).toContain('吃药');
+    expect(wireKey).toContain('2026-11-16 00:30');
+    expect(wireKey).toContain('提醒时刻（reminders）');
+    expect(wireKey).toContain('2026-11-11 08:00');
   });
 
   it('民用形状渲染绝不含毫秒 epoch（无换算歧义）', () => {
-    const briefing = buildHistoryBriefing(brief(civilianDraftJson()), TZID);
+    const briefing = buildHistoryBriefing(brief(wireKeyDraftJson()), TZID);
     expect(briefing).not.toContain(String(START));
     expect(briefing).not.toContain(String(R1));
   });

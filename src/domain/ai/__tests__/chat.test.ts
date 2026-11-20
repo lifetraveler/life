@@ -67,8 +67,8 @@ describe('runFlashTurn（阶段 3 编排）', () => {
     // 同化是 deepseek-flash 降级根因 B，history 一律民用。
     const historyDraft = JSON.parse(result.historyAppend[1].text) as Record<string, unknown>;
     expect(historyDraft.title).toBe('买菜');
-    expect(historyDraft.startAt).toEqual({ date: '2026-11-11', time: null }); // allDay → time null
-    expect(historyDraft.endAt).toBeNull();
+    expect(historyDraft.start).toEqual({ date: '2026-11-11', time: null }); // allDay → time null
+    expect(historyDraft.end).toBeNull();
     expect(result.historyAppend[1].text).not.toContain(String(NOW));
   });
 
@@ -698,7 +698,7 @@ describe('runFlashTurn debug 副通道（切片 32 / AGENTS.md §7.44）', () =>
     expect(result.debug).toBeNull();
   });
 
-  it('远端成功轮：history assistant 文本为民用序列化（start/end {date,time}，不含毫秒）', async () => {
+  it('远端成功轮：history assistant 文本为民用序列化（start/end 键 {date,time}，不含毫秒）', async () => {
     const envelope = remoteBody(remoteWire);
     const result = await runFlashTurn('明天下午3点开周会', {
       config,
@@ -712,9 +712,11 @@ describe('runFlashTurn debug 副通道（切片 32 / AGENTS.md §7.44）', () =>
     expect(result.historyAppend[1].role).toBe('assistant');
     const historyDraft = JSON.parse(result.historyAppend[1].text) as Record<string, unknown>;
     expect(historyDraft.title).toBe('开周会');
-    // 民用形状（ai.md v0.24）：非 allDay → time 具体时刻。
-    expect(historyDraft.startAt).toEqual({ date: '2026-11-11', time: '15:00' });
-    expect(historyDraft.endAt).toBeNull();
+    // 民用形状（ai.md v0.24，键名对齐 wire）：非 allDay → time 具体时刻。
+    expect(historyDraft.start).toEqual({ date: '2026-11-11', time: '15:00' });
+    expect(historyDraft.end).toBeNull();
+    expect('startAt' in historyDraft).toBe(false);
+    expect('endAt' in historyDraft).toBe(false);
     // 根因 B 防回归：history 文本不得再出现毫秒 epoch。
     expect(result.historyAppend[1].text).not.toContain(
       String(new Date('2026-11-11T15:00:00+08:00').getTime()),

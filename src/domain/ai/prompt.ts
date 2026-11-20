@@ -43,6 +43,12 @@
  *   新旧格式混合均可消费；「history 毫秒仅供程序读取」条款改写为「history 一律
  *   民用、摘要块唯一民用时间基准、输出 JSON 严禁毫秒」。ParsedItemDraft 域形状
  *   不变，本文件纯文本模板与序列化面改动，契约正文仅 ai.md 变更记录追加。
+ * - v0.37 阶段 1 修正（真机矩阵 #3 轮 3 定性）：serializeDraftForHistory 键名
+ *   对齐 wire（start/end）——history few-shot 若用草稿键名 startAt/endAt，模型
+ *   编辑轮照抄输出 startAt 民用对象，与 RemoteDraftWire 必填键 start/end 冲突
+ *   → isRemoteDraftWire 拒绝 → schema-mismatch 降级（轮 2 模型自我纠正、轮 3
+ *   未纠正的实证）；tryParseBriefingDraft 三形状（start/end 键优先、startAt 键
+ *   回退、legacy 毫秒），渲染侧归一入口零变化。
  *
  * 本文件是纯文本模板（常量 + 纯函数），不属于解析逻辑；单测只断言关键句存在，
  * 避免脆弱的全文比对。
@@ -156,12 +162,20 @@ export interface CivilianTimeField {
 /**
  * history assistant 草稿 JSON 序列化（切片 33 / ai.md v0.24）：时间一律民用
  * 形状——startAt/endAt epoch → {date,time}|null（allDay→time null）、reminders
- * epoch[] → [{date,time}]，其余字段照抄。
+ * epoch[] → [{date,time}]，其余字段照抄。键名对齐远端 wire（start/end），
+ * 序列化产物即 wire 形状的民用子集（真机矩阵 #3 轮 3 定性的键名修正）。
  *
  * 动机（根因 B）：毫秒 JSON 进 history 后被 few-shot 同化——模型自述「为保持
  * 一致输出 startAt 毫秒」压过 prompt 禁令，毫秒形状 wire 守卫仍拒绝 → 降级。
  * history 一律民用后，同化方向反过来保护民用输出。民用换算经 getZonedParts
  * 本地完成（v0.16 纪律：epoch 换算绝不交给模型），与落库换算同源。
+ *
+ * 键名纪律（v0.24 阶段 1 修正，真机矩阵 #3 轮 3）：history few-shot 若用草稿
+ * 键名 startAt/endAt，模型会在编辑轮照抄该键名输出 startAt 民用对象，而
+ * RemoteDraftWire 要求必填键 start/end——两处信号冲突，模型随机偏向 →
+ * isRemoteDraftWire 整体拒绝 → schema-mismatch 降级（轮 2 模型自我纠正、
+ * 轮 3 未纠正的实证）。history 键名必须与 prompt 字段定义（start/end）一致，
+ * few-shot 同化才与 wire 同向。
  */
 export function serializeDraftForHistory(
   draft: ParsedItemDraft,
@@ -182,10 +196,11 @@ export function serializeDraftForHistory(
     epoch: number | null,
     allDay: boolean,
   ): CivilianTimeField | null => (epoch === null ? null : toCivilian(epoch, allDay));
+  const { startAt, endAt, ...rest } = draft;
   return JSON.stringify({
-    ...draft,
-    startAt: toCivilianOrNull(draft.startAt, draft.allDay),
-    endAt: toCivilianOrNull(draft.endAt, draft.allDay),
+    ...rest,
+    start: toCivilianOrNull(startAt, draft.allDay),
+    end: toCivilianOrNull(endAt, draft.allDay),
     reminders: draft.reminders?.map((epoch) => toCivilian(epoch, false)),
   });
 }
@@ -193,9 +208,12 @@ export function serializeDraftForHistory(
 /**
  * history 中最近一张草稿的最小形状（防御式判据，不是完整 ParsedItemDraft 校验）。
  * 字段值为 JSON.parse 产物，除判据字段外保持 unknown，由渲染侧逐项从严校验。
- * 切片 33 双形状：startAt/endAt 可为 legacy epoch 毫秒（number|null，升级瞬间
- * 内存里仍残留旧条目）或新民用对象（CivilianTimeField|null，serializeDraftForHistory
- * 产物）；reminders 形状同理（number[] | CivilianTimeField[]），由渲染侧兼容。
+ * 切片 33 三形状（startAt/endAt 归一入口）：startAt 可为 legacy epoch 毫秒
+ * （number|null，升级瞬间内存里仍残留旧条目）、v0.24 首轮发布的民用对象
+ * （CivilianTimeField|null，键名 startAt/endAt）或键名对齐 wire 的新民用对象
+ * （CivilianTimeField|null，键名 start/end，serializeDraftForHistory 现产物，
+ * 解析时优先读 start/end、回退 startAt/endAt 并归一到 startAt 字段）；reminders
+ * 形状同理（number[] | CivilianTimeField[]），由渲染侧兼容。
  */
 interface BriefingDraftShape {
   title: string;
@@ -250,8 +268,9 @@ function isCivilianTimeFieldArray(value: unknown): value is CivilianTimeField[] 
 
 /**
  * 尝试把一条 history 消息文本解析成「形似草稿」的对象。
- * 判据：对象非数组、title 为 string、含 startAt 键且为双形状时间值（切片 33：
- * legacy epoch 毫秒或民用对象）、allDay 为 boolean——足以区分草稿 JSON 与
+ * 判据：对象非数组、title 为 string、含 start（新）或 startAt（legacy/首轮）
+ * 键且为三形状时间值（切片 33：legacy epoch 毫秒、startAt 键民用对象或
+ * start 键民用对象——start 优先）、allDay 为 boolean——足以区分草稿 JSON 与
  * 编辑/引导轮的纯文本 note（后者 parse 失败或形状不符，直接跳过）。
  */
 function tryParseBriefingDraft(text: string): BriefingDraftShape | null {
@@ -269,21 +288,22 @@ function tryParseBriefingDraft(text: string): BriefingDraftShape | null {
     return null;
   }
   const record = parsed as Record<string, unknown>;
-  const startAt = record['startAt'];
-  const endAt = record['endAt'];
+  const hasStart = 'start' in record;
+  const startTimeRaw = hasStart ? record['start'] : record['startAt'];
+  const endTimeRaw = 'end' in record ? record['end'] : record['endAt'];
   if (
     typeof record['title'] !== 'string' ||
     typeof record['allDay'] !== 'boolean' ||
-    !('startAt' in record) ||
-    !isBriefingTimeValue(startAt) ||
-    (endAt !== undefined && !isBriefingTimeValue(endAt))
+    (!hasStart && !('startAt' in record)) ||
+    !isBriefingTimeValue(startTimeRaw) ||
+    (endTimeRaw !== undefined && !isBriefingTimeValue(endTimeRaw))
   ) {
     return null;
   }
   return {
     title: record['title'],
-    startAt,
-    endAt: endAt === undefined ? null : endAt,
+    startAt: startTimeRaw,
+    endAt: endTimeRaw === undefined ? null : endTimeRaw,
     allDay: record['allDay'],
     recurrence: record['recurrence'],
     categoryId: record['categoryId'],
@@ -395,8 +415,9 @@ function renderBriefing(draft: BriefingDraftShape, tzid: string): string {
  * 上一张卡片草稿摘要（切片 23 阶段 2 / ai.md）：从 history 末尾向前找最后一条
  * assistant 草稿 JSON 消息（切片 15 约定：草稿轮 assistant 文本 = 合并后草稿的
  * JSON；编辑/引导轮是纯文本 note，parse 失败自动跳过继续向前扫），把时间字段
- * 渲染为可直接引用的摘要块。切片 33 双形状：新条目（serializeDraftForHistory，
- * 民用对象）直接渲染；legacy 条目（毫秒，升级瞬间的内存残留）本地换算民用
+ * 渲染为可直接引用的摘要块。切片 33 三形状：新条目（serializeDraftForHistory，
+ * start/end 键民用对象）直接渲染；首轮发布条目（startAt 键民用对象，升级瞬间
+ * 的内存残留）与 legacy 条目（startAt 键毫秒）同样直接渲染或本地换算民用
  * （v0.16 纪律：epoch 换算绝不交给模型）。远端编辑意图（“改成7点半”）以此块
  * 为基准：模型不再从毫秒反算日期，且被明确禁止新建条目。找不到任何草稿 →
  * null（单轮行为不变）。
