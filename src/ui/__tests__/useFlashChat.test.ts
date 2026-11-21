@@ -36,7 +36,8 @@ import { useFlashChat } from '../useFlashChat';
 import type { ConfirmSaveResult, FlashChatMessage } from '../useFlashChat';
 import { formatItemDate, formatItemTime } from '../timeFormat';
 import { DEFAULT_APP_SETTINGS } from '../../domain/settings';
-import type { CreateItemInput, Item } from '../../domain/item';
+import type { CreateItemInput, Item, UpdateItemInput } from '../../domain/item';
+import type { ItemWithRelations } from '../../domain/relations/itemWithRelations';
 import type { CreateReminderInput, Reminder } from '../../domain/reminder';
 import type { Category } from '../../domain/category';
 import type { Tag } from '../../domain/tag';
@@ -56,6 +57,10 @@ jest.mock('../../data', () => ({
     createReminder: jest.fn(),
     listRemindersByItem: jest.fn(),
     updateReminder: jest.fn(),
+    getItemById: jest.fn(),
+    updateItem: jest.fn(),
+    deleteReminder: jest.fn(),
+    removeTagFromItem: jest.fn(),
   },
 }));
 
@@ -189,6 +194,41 @@ function makeCreatedReminder(input: CreateReminderInput): Reminder {
   };
 }
 
+// 切片 34（§7.46）：update 落库链测试共用件——已保存条目基线（ItemWithRelations
+// 形状，getItemById 返回）与其 once/重复提醒行。
+function makeBaselineItem(overrides: Partial<ItemWithRelations> = {}): ItemWithRelations {
+  return {
+    ...makeCreatedItem({ type: 'event', title: '旧标题', categoryId: 'work' }),
+    id: 'item-001',
+    tags: [{ id: 'tag-1', name: '生活', color: null, emoji: null, createdAt: 1000 }],
+    category: CATEGORIES[0] ?? null,
+    ...overrides,
+  };
+}
+
+function makeBaselineReminder(id: string, hour: number, overrides: Partial<Reminder> = {}): Reminder {
+  return {
+    id,
+    itemId: 'item-001',
+    frequency: 'once',
+    localTimeHour: 0,
+    localTimeMinute: 0,
+    weekdays: [],
+    dayOfMonth: 0,
+    onceAt: { year: 2030, month: 1, day: 15, hour, minute: 0 },
+    tzid: TZID,
+    startAt: new Date(`2030-01-15T${String(hour).padStart(2, '0')}:00:00+08:00`).getTime(),
+    enabled: true,
+    channels: ['system-notification'],
+    channelConfigs: {},
+    lastFiredOccurrenceKey: null,
+    lastReconciledAt: null,
+    createdAt: 1000,
+    updatedAt: 1000,
+    ...overrides,
+  };
+}
+
 /** 每次 render 都把最新 hook 返回值镜像到模块级变量（月历测试同款探测模式）。 */
 let latest: ReturnType<typeof useFlashChat> | undefined;
 
@@ -244,6 +284,19 @@ beforeEach(() => {
     makeCreatedReminder(input),
   );
   repo.listRemindersByItem.mockResolvedValue([]);
+  repo.getItemById.mockResolvedValue(null);
+  repo.updateItem.mockImplementation(async (id: string, patch: UpdateItemInput) => ({
+    ...makeBaselineItem(),
+    id,
+    title: patch.title ?? '',
+    content: patch.content ?? '',
+    type: patch.type ?? 'task',
+    categoryId: patch.categoryId ?? 'other',
+    priority: patch.priority ?? 0,
+    updatedAt: 2000,
+  }));
+  repo.deleteReminder.mockResolvedValue(undefined);
+  repo.removeTagFromItem.mockResolvedValue(undefined);
   SecureStoreClass.mockImplementation(() => ({
     load: jest.fn(async () => null),
   }));
@@ -985,5 +1038,183 @@ describe('useFlashChat：AI 调试入口消息（切片 32，§7.44）', () => {
       await hook().send('明天上午十点项目周会');
     });
     expect(debugMessages()).toHaveLength(0);
+  });
+});
+
+describe('useFlashChat：已保存条目对话式编辑（切片 34，§7.46 / 提案 D4）', () => {
+  // 远端路径前置（认真模式 history 提交 describe 同款）：无 Key 会走本地降级，
+  // 降级轮无 targetItemId（提案 §3 边界），update 链测试必须挂远端配置。
+  beforeEach(() => {
+    fetchBodies.length = 0;
+    SecureStoreClass.mockImplementation(() => ({
+      load: jest.fn(async () => REMOTE_CONFIG),
+    }));
+  });
+
+  afterEach(() => {
+    globalScope.fetch = originalFetch;
+  });
+
+  it('update 落库链：全量 patch + once 集合 replace 差异 + tags 差异 + 「已更新」卡 + 播种带 itemId', async () => {
+    repo.getItemById.mockResolvedValue(makeBaselineItem());
+    repo.listRemindersByItem.mockResolvedValue([
+      makeBaselineReminder('r1', 10),
+      makeBaselineReminder('r2', 14),
+      makeBaselineReminder('r-weekly', 10, {
+        frequency: 'weekly',
+        onceAt: null,
+        weekdays: [3],
+        localTimeHour: 10,
+        localTimeMinute: 0,
+        startAt: new Date('2030-01-15T10:00:00+08:00').getTime(),
+      }),
+    ]);
+    installFetchMock([
+      makeWire({
+        targetItemId: 'item-001',
+        start: { date: '2030-01-15', time: '14:00' },
+        tags: ['学习'],
+        reminders: [{ date: '2030-01-15', time: '14:00' }],
+      }),
+    ]);
+    await mountHook();
+    await act(async () => {
+      await hook().send('改成下午2点，提醒改到2点');
+    });
+    expect(hook().draft?.targetItemId).toBe('item-001');
+
+    let result!: ConfirmSaveResult;
+    await act(async () => {
+      result = await hook().confirmSave();
+    });
+    expect(result.ok).toBe(true);
+
+    // 全量 patch：只含内容字段，无时间字段（时间只走 updateItemTime，§4.24）。
+    expect(repo.updateItem).toHaveBeenCalledTimes(1);
+    const [updateId, updatePatch] = repo.updateItem.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(updateId).toBe('item-001');
+    expect(updatePatch.title).toBe('项目周会');
+    expect('startAt' in updatePatch).toBe(false);
+    expect('endAt' in updatePatch).toBe(false);
+    expect('allDay' in updatePatch).toBe(false);
+    expect(repo.updateItemTime).toHaveBeenCalledWith('item-001', {
+      startAt: new Date('2030-01-15T14:00:00+08:00').getTime(),
+      endAt: null,
+      allDay: false,
+    });
+
+    // once 集合 replace：基线 10:00 删除；基线 14:00 与 weekly 行保留；
+    // 目标 14:00 epoch 已命中基线 → 不重复创建……
+    expect(repo.deleteReminder).toHaveBeenCalledTimes(1);
+    expect(repo.deleteReminder).toHaveBeenCalledWith('r1');
+    expect(repo.createReminder).not.toHaveBeenCalled();
+
+    // tags 差异（normalizeTagName 归一）：目标['学习'] vs 基线['生活']。
+    expect(repo.addTagToItem).toHaveBeenCalledWith('item-001', '学习');
+    expect(repo.removeTagFromItem).toHaveBeenCalledWith('item-001', 'tag-1');
+
+    // 措辞与卡片快照（toKeep 含 weekly 与 14:00 基线行）。
+    const cards = hook().messages.filter((message) => message.kind === 'card');
+    expect(cards).toHaveLength(1);
+    expect(cards[0]?.text).toBe('已更新《项目周会》');
+    expect(cards[0]?.cardPayload?.itemId).toBe('item-001');
+    const cardReminderIds = (cards[0]?.cardPayload?.reminders ?? []).map((r) => r.id);
+    expect(cardReminderIds).toContain('r2');
+    expect(cardReminderIds).toContain('r-weekly');
+    expect(cardReminderIds).not.toContain('r1');
+    expect(cardReminderIds).toHaveLength(2);
+
+    // 播种带 itemId（D2）：下一轮请求的摘要块渲染「关联条目 id」行（D3 链路）。
+    installFetchMock([makeWire({ targetItemId: 'item-001' })]);
+    await act(async () => {
+      await hook().send('把内容改成复盘纪要');
+    });
+    const lastBody = JSON.stringify(fetchBodies[fetchBodies.length - 1] ?? {});
+    expect(lastBody).toContain('关联条目 id：item-001');
+  });
+
+  it('update 新增 once 提醒：目标 epoch 基线没有 → createReminder（提醒增）', async () => {
+    repo.getItemById.mockResolvedValue(makeBaselineItem());
+    repo.listRemindersByItem.mockResolvedValue([makeBaselineReminder('r1', 10)]);
+    installFetchMock([
+      makeWire({
+        targetItemId: 'item-001',
+        start: { date: '2030-01-15', time: '14:00' },
+        reminders: [
+          { date: '2030-01-15', time: '10:00' },
+          { date: '2030-01-15', time: '14:00' },
+        ],
+      }),
+    ]);
+    await mountHook();
+    await act(async () => {
+      await hook().send('提醒改成10点和下午2点');
+    });
+    await act(async () => {
+      await hook().confirmSave();
+    });
+    // replace：10:00 命中基线保留；14:00 新增创建；无删除。
+    expect(repo.deleteReminder).not.toHaveBeenCalled();
+    expect(repo.createReminder).toHaveBeenCalledTimes(1);
+    expect(repo.createReminder.mock.calls[0]?.[0]).toMatchObject({
+      itemId: 'item-001',
+      frequency: 'once',
+      onceAt: { year: 2030, month: 1, day: 15, hour: 14, minute: 0 },
+    });
+  });
+
+  it('降级：targetItemId 指向不存在条目 → 按 create 处理 + 披露置首（提案 D4-a）', async () => {
+    repo.getItemById.mockResolvedValue(null);
+    installFetchMock([makeWire({ targetItemId: 'item-404' })]);
+    await mountHook();
+    await act(async () => {
+      await hook().send('改一下那个条目');
+    });
+    let result!: ConfirmSaveResult;
+    await act(async () => {
+      result = await hook().confirmSave();
+    });
+    expect(result.ok).toBe(true);
+    expect(repo.createItem).toHaveBeenCalledTimes(1);
+    expect(repo.updateItem).not.toHaveBeenCalled();
+    expect(result.notice).toContain('目标条目不存在或已被删除，已按新建处理');
+    const cards = hook().messages.filter((message) => message.kind === 'card');
+    expect(cards[0]?.text).toBe('已添加《项目周会》');
+  });
+
+  it('降级：sourceReadOnly 导入条目 → 按 create 处理 + 披露（只读护栏沿用，提案 D4-a）', async () => {
+    repo.getItemById.mockResolvedValue(makeBaselineItem({ sourceReadOnly: true }));
+    installFetchMock([makeWire({ targetItemId: 'item-001' })]);
+    await mountHook();
+    await act(async () => {
+      await hook().send('改一下那个条目');
+    });
+    let result!: ConfirmSaveResult;
+    await act(async () => {
+      result = await hook().confirmSave();
+    });
+    expect(result.ok).toBe(true);
+    expect(repo.updateItem).not.toHaveBeenCalled();
+    expect(repo.createItem).toHaveBeenCalledTimes(1);
+    expect(result.notice).toContain('目标条目为外部导入只读条目，已按新建处理');
+  });
+
+  it('回归：wire 无 targetItemId → 走 create（全新意图语义不变，§7.46 边界）', async () => {
+    installFetchMock([makeWire({})]);
+    await mountHook();
+    await act(async () => {
+      await hook().send('新建条目');
+    });
+    await act(async () => {
+      await hook().confirmSave();
+    });
+    expect(repo.getItemById).not.toHaveBeenCalled();
+    expect(repo.updateItem).not.toHaveBeenCalled();
+    expect(repo.createItem).toHaveBeenCalledTimes(1);
+    const cards = hook().messages.filter((message) => message.kind === 'card');
+    expect(cards[0]?.text).toBe('已添加《项目周会》');
   });
 });

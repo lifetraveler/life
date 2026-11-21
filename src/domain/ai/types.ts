@@ -155,6 +155,14 @@ export interface ParsedItemDraft {
   needsClarification?: boolean;
   /** needsClarification=true 时的单句反问（复用用户原词，只问缺失属性）。 */
   clarificationPrompt?: string;
+  /**
+   * 已保存条目对话式编辑的落库路由信号（切片 34 / ai.md v0.25）：上一张卡片
+   * 摘要块带「关联条目 id」且本轮是对该已保存条目的修改时，由远端解析回填该
+   * id；确认保存据此走 update 落库链（非空时），否则走 create。
+   * undefined=未表达（wire 键缺省宽容，旧响应兼容）=全新意图/本地降级轮。
+   * 仅作路由信号不参与 merge 掩码合并（id 非内容字段，恒取本轮解析值）。
+   */
+  targetItemId?: string;
 }
 
 /** AI 解析器接口（§7.24 冻结语义）：LocalFallbackProvider 与 OpenAICompatibleProvider 均实现它。 */

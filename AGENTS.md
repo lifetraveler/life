@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.37
+版本：v0.38
 
 ## 1. 项目概览
 
@@ -563,8 +563,38 @@ schema 版本 5→6，新增/修改如下：
   src/domain/recurrence/、src/domain/export.ts）零改动；localFallback/lastDebug/
   lastUsage 零改动；L8 定性闭环（修复后真机复验，feedback-log 注记）。
 
+### 7.46 已保存条目对话式编辑（v0.38，切片 34）
+
+- **背景与范围**：F2 真机实证（保存后继续对话修改 → 确认保存新建重复条目）同修——
+  把「最后保存的条目」挂回对话上下文并扩展编辑语义。提案
+  docs/proposals/slice-34-saved-item-conversational-edit.md（用户 2026-11-21 三问
+  定案：wire 加键显式回填 / 含提醒增删 / 仅当前基线可编辑）；切片 25 候选①②合并
+  立项；切片 33 serializeDraftForHistory/播种/回写四写入点为链路基础。
+- **wire 可选键 targetItemId（ai.md v0.25）**：RemoteDraftWire 追加可选键
+  targetItemId?: string | null——键可缺省宽容（reminders v0.23 同构）、值出现即
+  从严整体拒绝（非串/空串）、不校验存在性（落库层校验）；ParsedItemDraft 追加可选
+  targetItemId?: string（guard 同纪律）；不纳入 merge 掩码（路由信号非内容字段，
+  直接透传）；AiParser.parse 冻结签名不变。
+- **播种 JSON 带条目 id**：serializeDraftForHistory 输出追加 itemId 键（保存链播种
+  传 created.id、本地编辑回写传基线 id、chat.ts historyAppend 场景缺省）；
+  renderBriefing 摘要块加「关联条目 id」行（tryParseBriefingDraft 判据字段不变，
+  itemId 透传）；prompt 字段定义 targetItemId 行（编辑基线回填、全新意图 null、
+  禁止编造）+ 多轮节编辑已保存条目语义（reminders 输出编辑后完整绝对时刻集合）。
+- **update 落库链（handleConfirmSave 分支）**：plan.targetItemId 非空且条目存在且
+  非 sourceReadOnly（导入只读护栏沿用，拒绝转披露降级 create）→ updateItem 全量
+  patch + updateItemTime → tags 差异（add/removeTagToItem 逐个）→ once 提醒集合
+  全量替换（listRemindersByItem 按 frequency==='once' 分组按 epoch 对比：增
+  create/减 delete/同 epoch 不动；重复提醒与非 once 频率不参与；reminders 缺省=
+  不动；offset/delay 产物经摘要块照抄保留）→ reconcile 显式一次（失败不阻断）→
+  结果卡措辞「已更新《title》」→ 播种更新后草稿（itemId 保持，基线连续）。
+- **边界**：仅当前基线可编辑（播种 JSON 携带条目；更早历史卡保持切片 29 视觉区分、
+  点击跳详情页）；认真模式 confirm 守卫零改动复用（update 路径 title/content 变化
+  天然覆盖）；本地降级链路零改动（降级轮无 targetItemId 走 create，既有语义）；
+  不支持重复提醒对话式增删与「删除全部 once 提醒」（wire 空数组仍拒绝，v0.23 纪律
+  不动，全删场景披露走详情页）；schema 停留 v16 零迁移；无新依赖；冻结区零改动。
+
 ## 8. 当前切片
 
 - **已完成**：切片 1–33 全部收尾合并（main @ 见 git log；schema v16，版本 0.23.0/versionCode 10）。**切片 31 数据备份 WebDAV 已完成**（2026-11-18，分支 `task/slice-31` 基点 `5edeeec`；提交链 659a9bb → 0ac3e10 → 94714b4 → 40c4897，merge `feec346`；验收终态：schema 停留 v15 零迁移 / tsc 0 错 / jest 98 套件·1365 用例（基线 95/1314 只增不减）/ expo-doctor 2 项预存无新增 / 真机矩阵 9 项 + 损坏快照负例全过，**4 项真机 pending 经用户批准移入 backlog，已于 2026-11-19 补做完成**（#4 全量还原、#10 断网/401 文案、#11 导出回归、chips 改回 [10,60]；猴王 adb 死锁事故见 closeout §四，补做结果见 closeout §四 补做结果节），见 `tasks/slice-31-closeout.md`）。**切片 32 闪电录入多提醒 + AI 调试查看器已完成**（2026-11-19，分支 `task/slice-32` 基点 `525c16f`；提交链 56dbaf3（阶段 1）→ 50f8791（阶段 2）→ 收尾提交；验收终态：schema v15→v16 addColumns 两列 boolean / tsc 0 错 / jest 98 套件·1408 用例（基线 98/1365 只增不减，+43）/ expo-doctor 2 项预存无新增 / 真机矩阵 8 项过 7.5 项（③ 远端半项阻塞于 deepseek-flash reasoning-in-content，已记 backlog 候选；F1 修复经矩阵①远端成功轮端到端验证），见 `tasks/slice-32-closeout.md`）。**切片 33 deepseek-flash 解析适配已完成**（2026-11-20，分支 `task/slice-33` 基点 `00b5ce1`；提交链 736d136（阶段 1：extractLastBalancedJson+serializeDraftForHistory+briefing 双形状+prompt 措辞）→ 2751555（阶段 2 键名修正：时间键对齐 wire start/end+三形状兼容，用户批准 B 方案）→ 822d65d（阶段 2 播种/回写接线：useFlashChat 保存播种与本地编辑回写接入序列化，用户批准 A 方案）→ 收尾提交；验收终态：schema 停留 v16 零迁移 / tsc 0 错 / jest 98 套件·1426 用例（基线 98/1408 只增不减，+18）/ expo-doctor 2 项预存无新增 / 真机矩阵 7/7 全过（含切片 32 矩阵③补验与保存→继续编辑场景，调试弹层实证民用 start/end 键名链路）；L8 关闭，见 `tasks/slice-33-closeout.md`）。各切片历史见对应 `tasks/slice-NN.md` / `tasks/slice-NN-closeout.md`。
-- **当前切片**：无进行中切片。下一片候选：以 `tasks/backlog.md` 为准（双向同步设计讨论先行 / 插队「变更 B 网络渠道后台送达」/ 切片 25 收尾 4 条待定候选 / 候选 29b 编号顺延）。
-- **未完成项以 `tasks/backlog.md` 为准**（2026-11-16 起的惯例）：候选排序（~~切片 25 认真模式~~已完成 → ~~26 AI 透明度~~已完成，关闭于切片 26 → ~~27 系统日历 live 直读~~已完成，关闭于切片 27 → ~~29 闪电录入对话能力强化包~~已完成，关闭于切片 29 → ~~30 草稿放弃/删除联动/AI 重试~~已完成，关闭于切片 30 → ~~28 备份/同步 WebDAV~~已立项为切片 28（配置备份先行）→ ~~数据备份（items/reminders/channel_presets）~~已立项为切片 31（2026-11-18）→ ~~F1 闪电多提醒绝对时刻 once + AI 对话调试查看器~~已立项为切片 32（2026-11-19，用户选定）+ 双向同步为待定候选 + 插队候选「变更 B 网络渠道后台送达」+ 切片 25 收尾新增 4 条待定候选 + 候选 29b 编号顺延 + ~~deepseek-flash reasoning-in-content 解析适配~~已立项为切片 33（2026-11-19））、遗留 L1–L13（L5 随切片 32 关闭）、手验项 U1–U4、契约化已知限制均记录在 backlog，本节不再罗列候选清单。每切片 closeout 同步更新 backlog.md（划掉完成项并注明关闭切片号）并保持本节精简。
+- **当前切片**：切片 34 已保存条目对话式编辑已立项（2026-11-21 用户三问定案；提案 `docs/proposals/slice-34-saved-item-conversational-edit.md`；分支 `task/slice-34` 从 main `862a227` 切出；wire 可选键 targetItemId + 播种 JSON itemId + update 落库链（含 once 提醒集合差异）；ai.md v0.25、schema 停留 v16；提案/卡+AGENTS v0.38 随阶段 1 提交）。下一片候选：以 `tasks/backlog.md` 为准（双向同步设计讨论先行 / 插队「变更 B 网络渠道后台送达」/ 切片 25 候选③④ / 候选 29b 编号顺延）。
+- **未完成项以 `tasks/backlog.md` 为准**（2026-11-16 起的惯例）：候选排序（~~切片 25 认真模式~~已完成 → ~~26 AI 透明度~~已完成，关闭于切片 26 → ~~27 系统日历 live 直读~~已完成，关闭于切片 27 → ~~29 闪电录入对话能力强化包~~已完成，关闭于切片 29 → ~~30 草稿放弃/删除联动/AI 重试~~已完成，关闭于切片 30 → ~~28 备份/同步 WebDAV~~已立项为切片 28（配置备份先行）→ ~~数据备份（items/reminders/channel_presets）~~已立项为切片 31（2026-11-18）→ ~~F1 闪电多提醒绝对时刻 once + AI 对话调试查看器~~已立项为切片 32（2026-11-19，用户选定）+ 双向同步为待定候选 + 插队候选「变更 B 网络渠道后台送达」+ ~~切片 25 收尾候选①保存后上下文/②已保存条目对话式编辑~~已合并立项为切片 34（2026-11-21，F2 实证）+ 切片 25 候选③④仍待定 + 候选 29b 编号顺延 + ~~deepseek-flash reasoning-in-content 解析适配~~已立项为切片 33（2026-11-19））、遗留 L1–L13（L5 随切片 32 关闭）、手验项 U1–U4、契约化已知限制均记录在 backlog，本节不再罗列候选清单。每切片 closeout 同步更新 backlog.md（划掉完成项并注明关闭切片号）并保持本节精简。

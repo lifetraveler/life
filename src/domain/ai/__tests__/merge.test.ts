@@ -234,3 +234,43 @@ describe('mergeDraftCorrection reminders 掩码合并（切片 32 §7.44）', ()
     expect(merged.reminders).toBeUndefined();
   });
 });
+
+describe('mergeDraftCorrection：targetItemId 透传（切片 34 §7.46 / 提案 §3）', () => {
+  const previous: ParsedItemDraft = {
+    title: '开周会',
+    content: '',
+    type: 'event',
+    startAt: 1000,
+    endAt: 2000,
+    allDay: false,
+    categoryId: 'work',
+    tags: ['工作'],
+    priority: 3,
+    recurrence: null,
+    reminderOffsetMinutes: 10,
+    reminderDelayMinutes: null,
+  };
+  const next: ParsedItemDraft = {
+    ...previous,
+    title: '改成后天',
+    startAt: 5000,
+    endAt: null,
+    allDay: true,
+  };
+
+  it('恒取本轮（不参与掩码）：next 有 → 透传；previous 有 next 无 → undefined（本地降级轮语义）', () => {
+    const carried = mergeDraftCorrection(
+      { ...previous, targetItemId: 'item-001' },
+      { ...next, targetItemId: 'item-001' },
+      new Set(['startAt']),
+    );
+    expect(carried.targetItemId).toBe('item-001');
+
+    const cleared = mergeDraftCorrection(
+      { ...previous, targetItemId: 'item-001' },
+      next,
+      new Set(['startAt']),
+    );
+    expect(cleared.targetItemId).toBeUndefined();
+  });
+});

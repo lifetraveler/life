@@ -67,7 +67,7 @@ import {
   computePostponedOnceAt,
   computePostponedStartAt,
 } from '../domain/ai/postpone';
-import { buildFlashSavePlan } from '../domain/ai/savePlan';
+import { buildFlashSavePlan, diffItemTags, diffOnceReminderPlans } from '../domain/ai/savePlan';
 import type {
   ChatMessage,
   FlashCardPayload,
@@ -75,6 +75,8 @@ import type {
 } from '../domain/ai/types';
 import type { Category } from '../domain/category';
 import type { ChannelPreset } from '../domain/channelPreset';
+import type { ItemWithRelations } from '../domain/relations/itemWithRelations';
+import type { Item } from '../domain/item';
 import type { OnceCivilTime, Reminder, ReminderChannel } from '../domain/reminder';
 import { reminderScheduler } from '../notifications';
 import { formatItemTime, getDeviceTzid } from './timeFormat';
@@ -893,27 +895,128 @@ export function useFlashChat() {
         console.warn('[slice-19] 默认渠道/渠道预设读取失败，使用回退值', error);
       }
       const plan = buildFlashSavePlan(current, tzid, Date.now(), defaultChannels, presets);
-      const created = await itemRepository.createItem(plan.itemInput);
-      await itemRepository.updateItemTime(created.id, plan.timePatch);
-      for (const name of plan.tagNames) {
-        await itemRepository.addTagToItem(created.id, name);
-      }
-      // 切片 32（§7.44）多计划执行链：逐条顺序 await，单条失败 warn + 披露、
-      // 不中断不回滚（条目已落库；部分提醒未创建属可披露的部分成功，与
-      // createItem 失败=整链失败的语义分开）。披露追加在 plan.reminderNotices
-      //（域层披露，含「提醒时刻已过去」等）之后一并出消息。
-      const createdReminders: Reminder[] = [];
-      const reminderFailureNotices: string[] = [];
-      for (const reminderPlan of plan.reminderPlans) {
+      // 切片 34（§7.46 / 提案 D4-a）：已保存条目对话式编辑——targetItemId 非空
+      // 时走 update 落库链。存在性 + 只读护栏先预检（外部导入项 sourceReadOnly
+      // 由 updateItem 抛错护栏，这里转为披露降级新建；预检挡在写之前——一旦
+      // updateItem/updateItemTime 已执行、后续链失败无法整链回退）。
+      let updateTargetId: string | null = null;
+      let updateBaselineTags: ReadonlyArray<{ id: string; name: string }> = [];
+      let updateDegradeNotice: string | null = null;
+      if (plan.targetItemId !== undefined) {
+        let baseline: ItemWithRelations | null = null;
         try {
-          createdReminders.push(
-            await itemRepository.createReminder({ ...reminderPlan, itemId: created.id }),
-          );
+          baseline = await itemRepository.getItemById(plan.targetItemId);
         } catch (error) {
-          console.warn('[slice-32] 提醒创建失败（不中断保存链）', error);
-          reminderFailureNotices.push(
-            `一条提醒创建失败：${error instanceof Error ? error.message : String(error)}`,
-          );
+          console.warn('[slice-34] 目标条目查询失败，降级按新建处理', error);
+        }
+        if (baseline === null) {
+          updateDegradeNotice = '目标条目不存在或已被删除，已按新建处理';
+        } else if (baseline.sourceReadOnly) {
+          updateDegradeNotice = '目标条目为外部导入只读条目，已按新建处理';
+        } else {
+          updateTargetId = plan.targetItemId;
+          updateBaselineTags = baseline.tags;
+        }
+      }
+      const cardReminders: Reminder[] = [];
+      const reminderFailureNotices: string[] = [];
+      const tagFailureNotices: string[] = [];
+      let savedItem: ItemWithRelations | Item;
+      let seedItemId: string;
+      if (updateTargetId !== null) {
+        // —— update 落库链（提案 D4-b/c/d）：全量 patch —— 卡 = 编辑后完整快照。
+        // 时间字段只走 updateItemTime（§4.24 纪律）。
+        savedItem = await itemRepository.updateItem(updateTargetId, {
+          title: plan.itemInput.title,
+          content: plan.itemInput.content,
+          type: plan.itemInput.type,
+          categoryId: plan.itemInput.categoryId,
+          priority: plan.itemInput.priority,
+        });
+        await itemRepository.updateItemTime(updateTargetId, plan.timePatch);
+        // c once 集合差异：draft.reminders 显式数组 → 全量替换（增 create/减
+        // delete/同 epoch 保留不动，渠道不漂移）；缺省 → 基线不删、本轮
+        // offset/delay/锚点产物增量创建（用户确认的备案语义）。重复提醒与
+        // 非 once 频率不参与差异（diffOnceReminderPlans 内过滤）。
+        const baselineReminders = await itemRepository.listRemindersByItem(updateTargetId);
+        const onceDiff = diffOnceReminderPlans(
+          baselineReminders,
+          plan.reminderPlans,
+          current.reminders !== undefined ? 'replace' : 'append',
+        );
+        for (const reminderPlan of onceDiff.toCreate) {
+          try {
+            cardReminders.push(
+              await itemRepository.createReminder({
+                ...reminderPlan,
+                itemId: updateTargetId,
+              }),
+            );
+          } catch (error) {
+            console.warn('[slice-34] 提醒创建失败（不中断保存链）', error);
+            reminderFailureNotices.push(
+              `一条提醒创建失败：${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        }
+        for (const stale of onceDiff.toDelete) {
+          try {
+            await itemRepository.deleteReminder(stale.id);
+          } catch (error) {
+            console.warn('[slice-34] 提醒删除失败（不中断保存链）', error);
+            reminderFailureNotices.push(
+              `一条提醒移除失败：${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        }
+        cardReminders.push(...onceDiff.toKeep);
+        // d tags 差异（normalizeTagName 归一键比较）：目标有而基线没有逐个
+        // addTagToItem；基线有而目标没有逐个 removeTagFromItem。
+        const tagDiff = diffItemTags(updateBaselineTags, plan.tagNames);
+        for (const name of tagDiff.toAdd) {
+          try {
+            await itemRepository.addTagToItem(updateTargetId, name);
+          } catch (error) {
+            console.warn('[slice-34] 标签添加失败（不中断保存链）', error);
+            tagFailureNotices.push(
+              `一个标签添加失败：${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        }
+        for (const tagId of tagDiff.toRemoveTagIds) {
+          try {
+            await itemRepository.removeTagFromItem(updateTargetId, tagId);
+          } catch (error) {
+            console.warn('[slice-34] 标签移除失败（不中断保存链）', error);
+            tagFailureNotices.push(
+              `一个标签移除失败：${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        }
+        seedItemId = updateTargetId;
+      } else {
+        // —— create 落库链（既有语义，含降级新建）。
+        const created = await itemRepository.createItem(plan.itemInput);
+        savedItem = created;
+        seedItemId = created.id;
+        await itemRepository.updateItemTime(created.id, plan.timePatch);
+        for (const name of plan.tagNames) {
+          await itemRepository.addTagToItem(created.id, name);
+        }
+        // 切片 32（§7.44）多计划执行链：逐条顺序 await，单条失败 warn + 披露、
+        // 不中断不回滚（条目已落库；部分提醒未创建属可披露的部分成功，与
+        // createItem 失败=整链失败的语义分开）。
+        for (const reminderPlan of plan.reminderPlans) {
+          try {
+            cardReminders.push(
+              await itemRepository.createReminder({ ...reminderPlan, itemId: created.id }),
+            );
+          } catch (error) {
+            console.warn('[slice-32] 提醒创建失败（不中断保存链）', error);
+            reminderFailureNotices.push(
+              `一条提醒创建失败：${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
         }
       }
       try {
@@ -931,13 +1034,20 @@ export function useFlashChat() {
       // 仅播种这一条、不携带更早对话——保持「每存一张=新对话」设计，不跨条目串味。
       // 切片 33（§7.45）：播种经 serializeDraftForHistory（tzid 与落库同源）——
       // 民用时刻 + wire 键名 start/end，消除保存后 few-shot 毫秒/旧键名同化源。
+      // 切片 34（§7.46 / 提案 D2）：播种显式传条目 id——create/degrade 传
+      // created.id（覆盖降级场景草稿里可能残留的陈旧 targetItemId，摘要块
+      // 解析 itemId 优先）、update 传基线 id（基线连续）。下一轮摘要块渲染
+      // 「关联条目 id」行，模型据此回填 wire 的 targetItemId 走 update 落库链。
       historyRef.current = [
-        { role: 'assistant', text: serializeDraftForHistory(current, tzid) },
+        { role: 'assistant', text: serializeDraftForHistory(current, tzid, seedItemId) },
       ];
-      // 切片 22 阶段 1（AGENTS.md §7.34）：保存成功后的 AI 回复改为结果卡片消息
-      //（替代原「已添加《xx》」纯文本）；提醒未自动落库的说明（reminderNotice）
-      // 仍追加一条纯文本消息，Alert 提示行为不变。
-      const message = `已添加《${created.title}》`;
+      // 切片 22 阶段 1（AGENTS.md §7.34）：保存成功后的 AI 回复改为结果卡片消息；
+      // 提醒未自动落库的说明仍追加纯文本消息，Alert 提示行为不变。
+      // 切片 34：update 措辞「已更新《title》」（提案 D4-e）。
+      const message =
+        updateTargetId !== null
+          ? `已更新《${savedItem.title}》`
+          : `已添加《${savedItem.title}》`;
       // 分类快照水合：优先用挂载时镜像；镜像为空时兜底重读（失败不阻断，回退无分类）。
       let cardCategories = categoriesRef.current;
       if (cardCategories.length === 0) {
@@ -951,12 +1061,19 @@ export function useFlashChat() {
       }
       pushCard(
         message,
-        buildFlashCardPayload(created, plan.timePatch, createdReminders, cardCategories),
+        buildFlashCardPayload(savedItem, plan.timePatch, cardReminders, cardCategories),
       );
       // 切片 32（§7.44）：提醒披露从单条改多条——域层 reminderNotices（每条
       // 一消息，顺序保留）+ 执行链创建失败披露；ConfirmSaveResult.notice 聚合
       // 供调用方 Alert（换行衔接，与消息流逐条展示并存）。
-      const notices = [...plan.reminderNotices, ...reminderFailureNotices];
+      // 切片 34：update 降级披露（目标条目不存在/只读）置首；update 路径标签
+      // 增删失败披露并入。
+      const notices = [
+        ...(updateDegradeNotice !== null ? [updateDegradeNotice] : []),
+        ...plan.reminderNotices,
+        ...reminderFailureNotices,
+        ...tagFailureNotices,
+      ];
       for (const notice of notices) {
         push('assistant', notice);
       }

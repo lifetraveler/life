@@ -281,3 +281,26 @@ describe('isParsedItemDraft：reminders 绝对时刻提醒（切片 32 §7.44）
     expect(isParsedItemDraft({ ...validDraft({}), reminders: [Number.POSITIVE_INFINITY] })).toBeNull();
   });
 });
+
+describe('isParsedItemDraft：targetItemId 编辑路由（切片 34 §7.46 / ai.md v0.25）', () => {
+  it('键缺省（旧版响应）→ 通过且 targetItemId undefined（宽容纪律与 reminders 同款）', () => {
+    const value = isParsedItemDraft(validDraft());
+    expect(value).not.toBeNull();
+    if (value === null) return;
+    expect(value.targetItemId).toBeUndefined();
+  });
+
+  it('合法非空串 → 拷贝透传', () => {
+    const value = isParsedItemDraft(validDraft({ targetItemId: 'item-001' }));
+    expect(value).not.toBeNull();
+    if (value === null) return;
+    expect(value.targetItemId).toBe('item-001');
+  });
+
+  it('值出现即从严：非串 / 空串整体拒绝', () => {
+    expect(isParsedItemDraft(validDraft({ targetItemId: 42 }))).toBeNull();
+    expect(isParsedItemDraft(validDraft({ targetItemId: '' }))).toBeNull();
+    expect(isParsedItemDraft(validDraft({ targetItemId: null }))).toBeNull();
+    expect(isParsedItemDraft(validDraft({ targetItemId: ['item-001'] }))).toBeNull();
+  });
+});

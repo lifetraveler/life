@@ -37,8 +37,14 @@ import type { CreateItemInput } from '../item';
 import { isWhitelistedReminderTz } from '../../data/reminderTzWhitelist';
 import { resolveOnceAt } from '../../data/reminderRuleMapping';
 import { resolveChannelPreset, type ChannelPreset } from '../channelPreset';
-import { getZonedParts } from '../recurrence/civilTime';
-import { isNetworkReminderChannel, type ReminderChannel } from '../reminder';
+import { getZonedParts, resolveCivilTimeToInstant } from '../recurrence/civilTime';
+import {
+  isNetworkReminderChannel,
+  type OnceCivilTime,
+  type Reminder,
+  type ReminderChannel,
+} from '../reminder';
+import { normalizeTagName } from '../tag';
 import { mapDraftToCreateInputs } from './mapper';
 import type { ReminderPlan } from './mapper';
 import type { ParsedItemDraft } from './types';
@@ -60,6 +66,12 @@ export interface FlashSavePlan {
    * 披露不合并语义）；空数组 = 全部创建成功且无边界披露。
    */
   reminderNotices: string[];
+  /**
+   * 已保存条目对话式编辑的落库路由信号（切片 34 / ai.md v0.25）：非空 = 确认
+   * 保存走 update 落库链（对该 id 全量更新）；undefined/null = 全新建条目。
+   * 直接透传 draft.targetItemId，存在性校验在落库层（useFlashChat）。
+   */
+  targetItemId?: string;
 }
 
 /**
@@ -339,5 +351,137 @@ export function buildFlashSavePlan(
     tagNames: draft.tags,
     reminderPlans: finalPlans,
     reminderNotices,
+    targetItemId: draft.targetItemId,
   };
+}
+
+/**
+ * once 提醒集合差异（切片 34 / 提案 D4-c）：已保存条目 update 落库链的
+ * 「once 集合全量替换」纯函数。基线只取 frequency='once' 且 onceAt 非 null 的
+ * 行（重复提醒与非 once 频率不参与、恒保留）；双侧触发 epoch 一律经
+ * resolveCivilTimeToInstant(各自 tzid, onceAt) 分钟分辨率换算——不能用
+ * plan.startAt / reminder.startAt 对比（delay 产物 startAt 带秒级漂移，once 的
+ * startAt 不参与触发），分钟精度规避之。不可解析 epoch（理论不可达，防御）：
+ * 基线行保留不删（宁可多一条不误删），目标计划跳过不建。
+ *
+ * mode：
+ * - 'replace'（draft.reminders 显式数组）：全量替换——目标 epoch 集合之外
+ *   的基线行删除、之内的保留（渠道等字段不漂移）、目标中新 epoch 创建。
+ * - 'append'（reminders 缺省，本轮 offset/delay/锚点仍有产出，用户确认的
+ *   备案语义）：基线不删（toDelete 恒空、toKeep 全基线）、只增量创建基线
+ *   没有的新 epoch（同 epoch 不重复建）。
+ *
+ * 同 epoch 多基线行：保留不删（replace 下 epoch ∈ 目标集合即整组保留）。
+ */
+export interface OnceReminderDiff {
+  toCreate: ReminderPlan[];
+  toDelete: Reminder[];
+  toKeep: Reminder[];
+}
+
+export function diffOnceReminderPlans(
+  baseline: readonly Reminder[],
+  targets: readonly ReminderPlan[],
+  mode: 'replace' | 'append',
+): OnceReminderDiff {
+  const resolveOnceInstant = (
+    tzid: string,
+    onceAt: OnceCivilTime,
+  ): number | null =>
+    resolveCivilTimeToInstant(
+      tzid,
+      onceAt.year,
+      onceAt.month,
+      onceAt.day,
+      onceAt.hour,
+      onceAt.minute,
+    );
+
+  const baselineOnce = baseline
+    .map((reminder, index) => ({ reminder, index }))
+    .filter(
+      (row): row is { reminder: Reminder & { onceAt: OnceCivilTime }; index: number } =>
+        row.reminder.frequency === 'once' && row.reminder.onceAt !== null,
+    );
+  const targetOnce = targets.filter(
+    (plan): plan is ReminderPlan & { onceAt: OnceCivilTime } =>
+      plan.frequency === 'once' && plan.onceAt !== null,
+  );
+
+  const baselineInstants = baselineOnce.map((row) =>
+    resolveOnceInstant(row.reminder.tzid, row.reminder.onceAt),
+  );
+  const baselineEpochs = new Set<number>(
+    baselineInstants.filter((instant): instant is number => instant !== null),
+  );
+
+  // 第一遍（目标侧）：epoch 先入 targetEpochs（含命中基线的——replace 下这些
+  // 基线行要保留），再按「基线没有的新 epoch」产出 toCreate。
+  const targetEpochs = new Set<number>();
+  const toCreate: ReminderPlan[] = [];
+  for (const plan of targetOnce) {
+    const instant = resolveOnceInstant(plan.tzid, plan.onceAt);
+    if (instant === null) {
+      continue;
+    }
+    targetEpochs.add(instant);
+    if (!baselineEpochs.has(instant)) {
+      toCreate.push(plan);
+    }
+  }
+
+  // 第二遍（基线侧）：replace 下 epoch 不在目标集合的行删除（不可解析 epoch
+  // 的行保留不删）；append 下全基线保留。非 once 行恒保留（不参与差异，
+  // toKeep 带上它们让结果卡快照完整展示重复提醒）。保持基线行序。
+  const deleteIndexes = new Set<number>();
+  const toDelete: Reminder[] = [];
+  if (mode === 'replace') {
+    baselineOnce.forEach((row, index) => {
+      const instant = baselineInstants[index];
+      if (instant !== null && !targetEpochs.has(instant)) {
+        deleteIndexes.add(row.index);
+        toDelete.push(row.reminder);
+      }
+    });
+  }
+  const toKeep = baseline.filter((_, index) => !deleteIndexes.has(index));
+  return { toCreate, toDelete, toKeep };
+}
+
+/**
+ * 条目标签差异（切片 34 / 提案 D4-d）：已保存条目 update 落库链的 tags 差异
+ * 纯函数。按 normalizeTagName dedupKey（trim + 大小写不敏感）比较现有标签与
+ * 目标标签名：目标有而现有没有 → toAdd（归一后的 name，交 addTagToItem）；
+ * 现有有而目标没有 → toRemoveTagIds（交 removeTagFromItem）。目标名 trim 后
+ * 为空跳过（Repository 会拒绝空标签名，跳过比逐条披露噪音小）；目标名去重
+ * （重复名只 add 一次）。
+ */
+export interface ItemTagDiff {
+  toAdd: string[];
+  toRemoveTagIds: string[];
+}
+
+export function diffItemTags(
+  existing: ReadonlyArray<{ id: string; name: string }>,
+  targetNames: readonly string[],
+): ItemTagDiff {
+  const targetKeys = new Set<string>();
+  const toAdd: string[] = [];
+  for (const raw of targetNames) {
+    const { name, dedupKey } = normalizeTagName(raw);
+    if (name.length === 0 || targetKeys.has(dedupKey)) {
+      continue;
+    }
+    targetKeys.add(dedupKey);
+    const exists = existing.some(
+      (tag) => normalizeTagName(tag.name).dedupKey === dedupKey,
+    );
+    if (!exists) {
+      toAdd.push(name);
+    }
+  }
+  const toRemoveTagIds = existing
+    .filter((tag) => !targetKeys.has(normalizeTagName(tag.name).dedupKey))
+    .map((tag) => tag.id);
+  return { toAdd, toRemoveTagIds };
 }
