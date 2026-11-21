@@ -260,6 +260,13 @@ export interface RemoteDraftWire {
   needsClarification?: boolean | null;
   /** needsClarification=true 时的单句反问文本；null/缺省=无。 */
   clarificationPrompt?: string | null;
+  /**
+   * 已保存条目对话式编辑的编辑基线（切片 34 / ai.md v0.25）：上一张卡片摘要块
+   * 带「关联条目 id」且本轮是对该已保存条目的修改时，原样回填该 id；全新事项
+   * 一律填 null。null/缺省=未表达（键缺省宽容，reminders v0.23 同构）；非空串
+   * 才会被草稿层保留为 targetItemId。存在性校验不在 wire 层（落库层做）。
+   */
+  targetItemId?: string | null;
 }
 
 const WIRE_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -355,6 +362,18 @@ export function isRemoteDraftWire(value: unknown): RemoteDraftWire | null {
   ) {
     return null;
   }
+  // 切片 34（§7.46 / ai.md v0.25）：编辑基线 targetItemId——键可缺省/null（宽容，
+  // reminders v0.23 同构），值出现即从严：非 string 或空串（trim 后为空）整体
+  // 拒绝；null 归一为 undefined（未表达）。仅作落库路由信号，不校验条目存在性
+  //（落库层 getItemById 校验）。
+  const targetItemId = v.targetItemId;
+  if (
+    targetItemId !== undefined &&
+    targetItemId !== null &&
+    (typeof targetItemId !== 'string' || targetItemId.length === 0)
+  ) {
+    return null;
+  }
   let reminderChannels: ReminderChannel[] | undefined;
   const reminderChannelsRaw = v.reminderChannels;
   if (reminderChannelsRaw !== undefined && reminderChannelsRaw !== null) {
@@ -395,6 +414,7 @@ export function isRemoteDraftWire(value: unknown): RemoteDraftWire | null {
     reminders,
     needsClarification: needsClarification === null ? undefined : needsClarification,
     clarificationPrompt: clarificationPrompt === null ? undefined : clarificationPrompt,
+    targetItemId: targetItemId === null ? undefined : targetItemId,
     reminderChannels,
   };
 }
@@ -478,6 +498,12 @@ export function wireToParsedItemDraft(
       wire.clarificationPrompt !== null &&
       wire.clarificationPrompt.length > 0
         ? wire.clarificationPrompt
+        : undefined,
+    // 切片 34（ai.md v0.25）：编辑基线归一透传——wire 守卫已把 null 归一为
+    // undefined，这里恒定透传（空串在守卫层整体拒绝，不可能到达）。
+    targetItemId:
+      wire.targetItemId !== undefined && wire.targetItemId !== null && wire.targetItemId.length > 0
+        ? wire.targetItemId
         : undefined,
     reminderChannels:
       wire.reminderChannels !== undefined && wire.reminderChannels !== null

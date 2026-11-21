@@ -93,5 +93,10 @@ export function mergeDraftCorrection(
     // 信号自动归位，出卡落库。
     needsClarification: next.needsClarification === true ? true : undefined,
     clarificationPrompt: next.clarificationPrompt,
+    // 编辑基线透传（切片 34 / ai.md v0.25）：targetItemId 是落库路由信号而非
+    // 内容字段，不参与 expressed 掩码合并，恒取本轮解析值（提案 §3 字面：本地
+    // 降级轮无 targetItemId → undefined → 确认保存走 create，与「本地不做编辑
+    // 意图兜底」既定边界一致）。
+    targetItemId: next.targetItemId,
   };
 }

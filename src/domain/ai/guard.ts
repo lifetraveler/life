@@ -193,6 +193,17 @@ export function isParsedItemDraft(value: unknown): ParsedItemDraft | null {
     reminders = [...remindersRaw];
   }
 
+  // 切片 34（§7.46 / ai.md v0.25）：编辑基线 targetItemId——键可缺省宽容（旧版
+  // 响应与本地降级路径均不携带），值出现即从严（非 string / 空串整体拒绝，
+  // reminders 先例）；落库路由信号，不校验条目存在性（落库层做）。
+  const targetItemId = value.targetItemId;
+  if (
+    targetItemId !== undefined &&
+    (typeof targetItemId !== 'string' || targetItemId.length === 0)
+  ) {
+    return null;
+  }
+
   return {
     title,
     content,
@@ -210,6 +221,7 @@ export function isParsedItemDraft(value: unknown): ParsedItemDraft | null {
     needsClarification,
     clarificationPrompt,
     reminderChannels,
+    targetItemId,
   };
 }
 

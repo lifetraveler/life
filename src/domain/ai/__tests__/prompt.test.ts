@@ -570,3 +570,114 @@ describe('buildHistoryBriefing 三形状（切片 33 §7.45 + 阶段 1 键名修
     expect(briefing).not.toContain(String(R1));
   });
 });
+
+describe('serializeDraftForHistory：itemId 播种键（切片 34 §7.46 / 提案 D2）', () => {
+  const TZID = 'Asia/Shanghai';
+  const START = new Date('2026-11-16T00:30:00+08:00').getTime();
+
+  function makeDraft(overrides: Partial<ParsedItemDraft> = {}): ParsedItemDraft {
+    return {
+      title: '吃药',
+      content: '',
+      type: 'task',
+      startAt: START,
+      endAt: null,
+      allDay: false,
+      categoryId: 'health',
+      tags: [],
+      priority: 0,
+      recurrence: null,
+      reminderOffsetMinutes: null,
+      reminderDelayMinutes: null,
+      ...overrides,
+    };
+  }
+
+  it('显式非空串 → 输出 JSON 追加 itemId 键', () => {
+    const out = JSON.parse(serializeDraftForHistory(makeDraft(), TZID, 'item-001')) as Record<string, unknown>;
+    expect(out.itemId).toBe('item-001');
+    // 其余民用序列化行为不回归。
+    expect(out.start).toEqual({ date: '2026-11-16', time: '00:30' });
+  });
+
+  it('不传 / null / 空串 → 不含 itemId 键（chat.ts historyAppend 缺省场景）', () => {
+    const bare = JSON.parse(serializeDraftForHistory(makeDraft(), TZID)) as Record<string, unknown>;
+    expect('itemId' in bare).toBe(false);
+    const nullArg = JSON.parse(serializeDraftForHistory(makeDraft(), TZID, null)) as Record<string, unknown>;
+    expect('itemId' in nullArg).toBe(false);
+    const emptyArg = JSON.parse(serializeDraftForHistory(makeDraft(), TZID, '')) as Record<string, unknown>;
+    expect('itemId' in emptyArg).toBe(false);
+  });
+
+  it('draft.targetItemId 仍经 rest 原样透传（wire 对齐 few-shot，提案 D1）', () => {
+    const out = JSON.parse(
+      serializeDraftForHistory(makeDraft({ targetItemId: 'item-002' }), TZID),
+    ) as Record<string, unknown>;
+    expect(out.targetItemId).toBe('item-002');
+  });
+});
+
+describe('buildHistoryBriefing：关联条目 id 行（切片 34 §7.46）', () => {
+  const TZID = 'Asia/Shanghai';
+
+  function brief(text: string): ChatMessage[] {
+    return [
+      { role: 'user', text: '明天吃药' },
+      { role: 'assistant', text },
+    ];
+  }
+
+  function briefingJson(idKey: 'itemId' | 'targetItemId', id: string): string {
+    return JSON.stringify({
+      title: '吃药',
+      content: '',
+      type: 'task',
+      allDay: false,
+      categoryId: 'health',
+      tags: [],
+      priority: 0,
+      recurrence: null,
+      reminderOffsetMinutes: null,
+      reminderDelayMinutes: null,
+      start: { date: '2026-11-16', time: '00:30' },
+      end: null,
+      [idKey]: id,
+    });
+  }
+
+  it('摘要块含「关联条目 id」行（itemId 键，保存播种产物）', () => {
+    const briefing = buildHistoryBriefing(brief(briefingJson('itemId', 'item-001')), TZID);
+    expect(briefing).not.toBeNull();
+    expect(briefing).toContain('关联条目 id：item-001');
+  });
+
+  it('targetItemId 键同样渲染（chat.ts historyAppend 草稿自带基线 id 的链洞修复）', () => {
+    const briefing = buildHistoryBriefing(brief(briefingJson('targetItemId', 'item-002')), TZID);
+    expect(briefing).not.toBeNull();
+    expect(briefing).toContain('关联条目 id：item-002');
+  });
+
+  it('无 id 键的摘要块不含该行（全新意图场景不变）', () => {
+    const json = JSON.parse(briefingJson('itemId', 'item-001')) as Record<string, unknown>;
+    delete json.itemId;
+    const briefing = buildHistoryBriefing(brief(JSON.stringify(json)), TZID);
+    expect(briefing).not.toBeNull();
+    expect(briefing).not.toContain('关联条目 id');
+  });
+});
+
+describe('AI_SYSTEM_PROMPT：targetItemId 编辑已保存条目（切片 34 §7.46 / 提案 D3）', () => {
+  const P = AI_SYSTEM_PROMPT;
+
+  it('字段定义含 targetItemId 行（必填、回填/全新意图 null/禁止编造）', () => {
+    expect(P).toContain('targetItemId');
+    expect(P).toContain('null');
+    expect(P).toContain('禁止编造');
+  });
+
+  it('多轮节含「编辑已保存条目」语义（摘要块带关联条目 id 时回填；reminders 输出编辑后完整集合）', () => {
+    expect(P).toContain('编辑已保存条目');
+    expect(P).toContain('关联条目 id');
+    expect(P).toContain('完整');
+  });
+});

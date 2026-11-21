@@ -49,6 +49,14 @@
  *   → isRemoteDraftWire 拒绝 → schema-mismatch 降级（轮 2 模型自我纠正、轮 3
  *   未纠正的实证）；tryParseBriefingDraft 三形状（start/end 键优先、startAt 键
  *   回退、legacy 毫秒），渲染侧归一入口零变化。
+ * - v0.25（切片 34，AGENTS.md §7.46 / ai.md v0.25）：已保存条目对话式编辑——
+ *   字段定义新增 targetItemId 行（摘要块「关联条目 id」→ 编辑轮回填、全新事项
+ *   null、禁止编造）；多轮节追加编辑已保存条目语义（回填 id、以摘要为基准、
+ *   reminders 输出编辑后完整绝对时刻集合）；serializeDraftForHistory 增可选
+ *   itemId 入参（保存链播种注入 created.id/基线 id），draft.targetItemId 经
+ *   rest 原样透传；摘要块解析读 itemId ?? targetItemId、渲染「关联条目 id」行
+ *  （chat.ts historyAppend 场景无 itemId 键时回退读 wire 键，多轮远端编辑链
+ *   基线不断）。
  *
  * 本文件是纯文本模板（常量 + 纯函数），不属于解析逻辑；单测只断言关键句存在，
  * 避免脆弱的全文比对。
@@ -81,6 +89,7 @@ export const AI_SYSTEM_PROMPT = [
   '- reminderChannels: ("system-notification" | "alarm" | "webhook" | "apprise")[] | null，必填。提醒渠道推荐：强提醒场景填 ["alarm"]；普通提醒或用户未提及渠道填 null（禁止自填 ["system-notification"]）；仅当用户明确要求特定渠道时才填该渠道。',
   '- needsClarification: boolean，必填。信息不完整需要反问用户才填 true（规则见下方“主动澄清”一节），其余一律 false。',
   '- clarificationPrompt: string | null，必填。needsClarification=true 时的单句反问（复用用户原词、只问缺失的信息）；false 时填 null。',
+  '- targetItemId: string | null，必填。编辑基线：上一张卡片摘要块带「关联条目 id」且本轮是对该已保存条目的修改（而非新事项）时，原样回填该 id；全新事项一律填 null（禁止编造或复用其他 id）。',
   '',
   '延迟提醒判定规则（reminderDelayMinutes，必须逐条遵守，不得自行推断）：',
   '- 换算示例：“10分钟后提醒我吃药”→10；“半小时后叫我起床”→30；“1小时后提醒我出门”→60；“一个半小时后提醒我拿外卖”→90；“两小时后提醒我拿外卖”→120（“两”按 2）。',
@@ -120,6 +129,7 @@ export const AI_SYSTEM_PROMPT = [
   '- 短纠正句判定（切片 29）：「上一张卡片草稿摘要」块存在时，用户输入是不含新事由名词的短句——没有引入摘要标题之外的新标题性名词短语或新动作主体，只有时间或属性的修正表达，常带「还是/就/吧/算了」等语气词（如「还是30分钟后吧」「就改成明天上午吧」「算了，改到周五」）——默认视为对上一张卡的编辑：以摘要为基准修正被提及的字段，其余字段照抄摘要，输出完整 JSON，禁止新建条目。无摘要块时本条不生效，按普通解析处理。',
   '- 推迟语义（切片 29）：「推迟/延后 X 分钟」＝以上一张卡（摘要块）的时间为基准平移 ±X 分钟，start 与 end（如有）同 Δ 平移、保持时长不变——摘要块时间是唯一基准，禁止以当前说话时刻平移；「X 分钟后」＝以当前说话时刻为基准：编辑语境（短纠正句）下卡片新时间＝说话时刻+X 分钟、end 如有按原时长顺延，全新意图语境下仍按 reminderDelayMinutes 延迟提醒语义（不换算成 start）。两种表达可在同一句出现，各按各的基准计算，互不覆盖。推迟/延后类修正只调整时间字段，禁止把「推迟 X 分钟」这类原文写入 title 或 content。',
   '- 反向边界（切片 25/29）：用户输入是全新意图（与上一张卡无关的新事项）时，输出一个新建条目，title 取本轮输入的主题词，禁止复用/照抄上一张卡的标题——只有修改类输入（改成/改为、补充细节、澄清续答、短纠正句）才以上一张卡草稿为基准。含新事由名词的短句（如「明天开会」「周六聚餐」）不是短纠正句，仍是全新意图照常新建，防误伤。',
+  '- 编辑已保存条目（切片 34）：摘要块带「关联条目 id」时，若本轮是对该已入库条目的修改（而非新事项），targetItemId 原样回填该 id，以摘要块为基准修改被提及的字段、其余照抄；reminders 输出编辑后的完整绝对时刻集合（在摘要块「提醒时刻」行基础上增删后的全集，不是只输出变化的条目），系统按该集合全量替换条目的一次性提醒。摘要块没有「关联条目 id」时（未保存的预览卡或全新意图）targetItemId 一律填 null。',
   '- history 中 assistant 草稿 JSON 一律是民用时间格式（start/end 为 date/time 对象、reminders 为对象数组）；民用时间一律以摘要块为准——摘要块是唯一民用时间基准（摘要块的「提醒时刻」行同样是民用时刻）；输出 JSON 严禁出现毫秒时间戳或任何非字段定义格式的日期时间；无摘要块时按“当前时间”基准正常解析。',
   '',
   '时间字段书写规则：',
@@ -180,6 +190,7 @@ export interface CivilianTimeField {
 export function serializeDraftForHistory(
   draft: ParsedItemDraft,
   tzid: string,
+  itemId?: string | null,
 ): string {
   const toCivilian = (
     epoch: number,
@@ -197,12 +208,21 @@ export function serializeDraftForHistory(
     allDay: boolean,
   ): CivilianTimeField | null => (epoch === null ? null : toCivilian(epoch, allDay));
   const { startAt, endAt, ...rest } = draft;
-  return JSON.stringify({
+  // 切片 34（ai.md v0.25）：已保存条目编辑——保存链播种由调用方显式传
+  // itemId（create 传 created.id、update 传基线 id）；draft.targetItemId 经
+  // rest 原样透传（wire 键名对齐 few-shot，同 start/end 键名纪律）。摘要块
+  // 解析读 itemId、回退 targetItemId（见 tryParseBriefingDraft），两条路都
+  // 能让下一轮摘要块渲染「关联条目 id」行。
+  const payload: Record<string, unknown> = {
     ...rest,
     start: toCivilianOrNull(startAt, draft.allDay),
     end: toCivilianOrNull(endAt, draft.allDay),
     reminders: draft.reminders?.map((epoch) => toCivilian(epoch, false)),
-  });
+  };
+  if (itemId !== undefined && itemId !== null && itemId.length > 0) {
+    payload.itemId = itemId;
+  }
+  return JSON.stringify(payload);
 }
 
 /**
@@ -227,6 +247,8 @@ interface BriefingDraftShape {
   reminderChannels: unknown;
   reminders: unknown;
   needsClarification: unknown;
+  /** 已保存条目 id（切片 34）：(itemId ?? targetItemId) 非空串才落值。 */
+  itemId?: string;
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -264,6 +286,22 @@ function isCivilianTimeFieldArray(value: unknown): value is CivilianTimeField[] 
     value.length > 0 &&
     value.every((item) => isCivilianTimeField(item))
   );
+}
+
+/** 非空串判据（切片 34）：briefing 关联条目 id 读取用。 */
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+/**
+ * 摘要块关联条目 id 读取（切片 34 / ai.md v0.25）：优先 itemId（保存链播种
+ * serializeDraftForHistory(draft, tzid, id) 显式注入的键），回退 targetItemId
+ * （chat.ts historyAppend 场景草稿自带 wire 键，远端编辑轮整卡重写不丢基线；
+ * 若两者同现——update 播种显式传参 + rest 透传——itemId 优先，两值同源恒一致）。
+ */
+function parseBriefingItemId(record: Record<string, unknown>): string | undefined {
+  const raw = record['itemId'] ?? record['targetItemId'];
+  return isNonEmptyString(raw) ? raw : undefined;
 }
 
 /**
@@ -312,6 +350,7 @@ function tryParseBriefingDraft(text: string): BriefingDraftShape | null {
     reminderChannels: record['reminderChannels'],
     reminders: record['reminders'],
     needsClarification: record['needsClarification'],
+    itemId: parseBriefingItemId(record),
   };
 }
 
@@ -363,6 +402,11 @@ function renderBriefing(draft: BriefingDraftShape, tzid: string): string {
     `- 标题：${draft.title}`,
     `- 时间：${describeBriefingTime(draft, tzid)}`,
   ];
+  // 切片 34 / ai.md v0.25：已保存条目基线行——仅当 history 草稿携带条目 id
+  //（保存链播种/远端编辑轮回填）时渲染；模型据此回填 wire 的 targetItemId。
+  if (draft.itemId !== undefined) {
+    lines.push(`- 关联条目 id：${draft.itemId}`);
+  }
   if (
     draft.recurrence !== null &&
     draft.recurrence !== undefined &&

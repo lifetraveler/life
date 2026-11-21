@@ -6,8 +6,11 @@
  * 跨来源去重、recurrence 同现全披露、渠道覆盖/预设回填循环应用。
  */
 
-import { buildFlashSavePlan } from '../savePlan';
+import { buildFlashSavePlan, diffItemTags, diffOnceReminderPlans } from '../savePlan';
 import type { ParsedItemDraft } from '../types';
+import type { OnceCivilTime, Reminder } from '../../reminder';
+import type { ReminderPlan } from '../mapper';
+import { resolveCivilTimeToInstant } from '../../recurrence/civilTime';
 
 describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
   const NOW = new Date('2026-11-10T10:00:00+08:00').getTime();
@@ -634,5 +637,164 @@ describe('buildFlashSavePlan（阶段 3 落库计划）', () => {
     expect(plan.reminderNotices).toHaveLength(2);
     expect(plan.reminderNotices[0]).toContain('Europe/Paris');
     expect(plan.reminderNotices[1]).toContain('Europe/Paris');
+  });
+});
+
+describe('diffOnceReminderPlans（切片 34 §7.46 / 提案 D4-c once 集合差异）', () => {
+  const SH = 'Asia/Shanghai';
+  const civil = (y: number, mo: number, d: number, h: number, mi: number) => ({
+    year: y,
+    month: mo,
+    day: d,
+    hour: h,
+    minute: mi,
+  });
+  const instant = (y: number, mo: number, d: number, h: number, mi: number): number => {
+    const value = resolveCivilTimeToInstant(SH, y, mo, d, h, mi);
+    if (value === null) throw new Error('测试基准时间不应落进 DST gap');
+    return value;
+  };
+
+  function baselineReminder(
+    id: string,
+    onceAt: OnceCivilTime,
+    overrides: Partial<Reminder> = {},
+  ): Reminder {
+    return {
+      id,
+      itemId: 'item-001',
+      frequency: 'once',
+      localTimeHour: 0,
+      localTimeMinute: 0,
+      weekdays: [],
+      dayOfMonth: 0,
+      onceAt,
+      tzid: SH,
+      startAt: instant(onceAt.year, onceAt.month, onceAt.day, onceAt.hour, onceAt.minute),
+      enabled: true,
+      channels: ['system-notification'],
+      channelConfigs: {},
+      lastFiredOccurrenceKey: null,
+      lastReconciledAt: null,
+      createdAt: 0,
+      updatedAt: 0,
+      ...overrides,
+    };
+  }
+
+  function targetPlan(
+    onceAt: OnceCivilTime,
+    overrides: Partial<ReminderPlan> = {},
+  ): ReminderPlan {
+    return {
+      frequency: 'once',
+      localTimeHour: 0,
+      localTimeMinute: 0,
+      weekdays: [],
+      dayOfMonth: undefined,
+      onceAt,
+      tzid: SH,
+      startAt: instant(onceAt.year, onceAt.month, onceAt.day, onceAt.hour, onceAt.minute),
+      enabled: true,
+      channels: ['system-notification'],
+      channelConfigs: {},
+      ...overrides,
+    };
+  }
+
+  const TEN = civil(2026, 11, 11, 10, 0);
+  const NOON = civil(2026, 11, 11, 12, 0);
+  const TWO = civil(2026, 11, 11, 14, 0);
+
+  it('replace 全量替换：目标新 epoch → toCreate；基线独有 epoch → toDelete；同 epoch → toKeep（基线行，渠道不漂移）', () => {
+    const diff = diffOnceReminderPlans(
+      [baselineReminder('r1', TEN), baselineReminder('r2', NOON)],
+      [targetPlan(NOON), targetPlan(TWO)],
+      'replace',
+    );
+    expect(diff.toCreate.map((p) => p.onceAt)).toEqual([TWO]);
+    expect(diff.toDelete.map((r) => r.id)).toEqual(['r1']);
+    expect(diff.toKeep.map((r) => r.id)).toEqual(['r2']);
+  });
+
+  it('append（reminders 缺省，备案语义）：toDelete 恒空、全基线保留、仅新增目标独有 epoch（同 epoch 不重复建）', () => {
+    const diff = diffOnceReminderPlans(
+      [baselineReminder('r1', TEN), baselineReminder('r2', NOON)],
+      [targetPlan(TWO)],
+      'append',
+    );
+    expect(diff.toDelete).toEqual([]);
+    expect(diff.toKeep.map((r) => r.id)).toEqual(['r1', 'r2']);
+    expect(diff.toCreate.map((p) => p.onceAt)).toEqual([TWO]);
+  });
+
+  it('append 同 epoch：目标产物与基线重合 → 不创建（offset/delay 产物照抄保留语义）', () => {
+    const diff = diffOnceReminderPlans([baselineReminder('r1', TEN)], [targetPlan(TEN)], 'append');
+    expect(diff.toCreate).toEqual([]);
+    expect(diff.toKeep.map((r) => r.id)).toEqual(['r1']);
+  });
+
+  it('不可解析 epoch 的基线行（onceAt 落 DST gap）→ 保留 toKeep，永不误删', () => {
+    const gapOnceAt = civil(2026, 3, 8, 2, 30);
+    expect(resolveCivilTimeToInstant('America/New_York', 2026, 3, 8, 2, 30)).toBeNull();
+    const gapRow = baselineReminder('r-gap', gapOnceAt, { tzid: 'America/New_York' });
+    const diff = diffOnceReminderPlans([gapRow], [targetPlan(TEN)], 'replace');
+    expect(diff.toDelete).toEqual([]);
+    expect(diff.toKeep.map((r) => r.id)).toEqual(['r-gap']);
+  });
+
+  it('重复提醒与非 once 频率基线行不参与差异（恒保留）', () => {
+    const weekly = baselineReminder('r-weekly', TEN, {
+      frequency: 'weekly',
+      onceAt: null,
+      weekdays: [3],
+      localTimeHour: 10,
+      localTimeMinute: 0,
+      startAt: instant(2026, 11, 11, 10, 0),
+    });
+    const diff = diffOnceReminderPlans([weekly], [], 'replace');
+    expect(diff.toDelete).toEqual([]);
+    expect(diff.toKeep.map((r) => r.id)).toEqual(['r-weekly']);
+  });
+
+  it('空基线 + replace：目标全部创建；空目标 + replace：基线全部删除', () => {
+    const fromEmpty = diffOnceReminderPlans([], [targetPlan(TEN), targetPlan(TWO)], 'replace');
+    expect(fromEmpty.toCreate).toHaveLength(2);
+    expect(fromEmpty.toDelete).toEqual([]);
+    expect(fromEmpty.toKeep).toEqual([]);
+
+    const toEmpty = diffOnceReminderPlans([baselineReminder('r1', TEN)], [], 'replace');
+    expect(toEmpty.toCreate).toEqual([]);
+    expect(toEmpty.toKeep).toEqual([]);
+    expect(toEmpty.toDelete.map((r) => r.id)).toEqual(['r1']);
+  });
+});
+
+describe('diffItemTags（切片 34 §7.46 / 提案 D4-d tags 差异）', () => {
+  it('目标有基线没有 → toAdd；基线有目标没有 → toRemoveTagIds（dedupKey 大小写不敏感归一）', () => {
+    const diff = diffItemTags(
+      [
+        { id: 'tag-1', name: '工作' },
+        { id: 'tag-2', name: '生活' },
+      ],
+      ['生活', '学习'],
+    );
+    expect(diff.toAdd).toEqual(['学习']);
+    expect(diff.toRemoveTagIds).toEqual(['tag-1']);
+  });
+
+  it('大小写不同的同名标签视为命中（Work vs work 不重复添加）', () => {
+    const diff = diffItemTags([{ id: 'tag-1', name: 'work' }], ['Work']);
+    expect(diff.toAdd).toEqual([]);
+    expect(diff.toRemoveTagIds).toEqual([]);
+  });
+
+  it('目标空串跳过、重复名去重；目标为空 → 基线全部移除', () => {
+    const diff = diffItemTags(
+      [{ id: 'tag-1', name: '工作' }],
+      ['', '学习', '学习', '  '],
+    );
+    expect(diff.toAdd).toEqual(['学习']);
+    expect(diff.toRemoveTagIds).toEqual(['tag-1']);
   });
 });

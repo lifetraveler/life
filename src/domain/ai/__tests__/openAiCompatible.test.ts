@@ -1212,3 +1212,46 @@ describe('OpenAICompatibleProvider.lastDebug（切片 32 §7.44 / ai.md v0.23 �
     expect(provider.lastDebug.response).toContain('boom-4'); // 1 次初始 + 3 次重试 = 第 4 次尝试
   });
 });
+
+describe('isRemoteDraftWire / wireToParsedItemDraft：targetItemId 编辑路由（切片 34 §7.46 / ai.md v0.25）', () => {
+  const validWire: Record<string, unknown> = {
+    title: '开会',
+    content: '',
+    type: 'event',
+    start: { date: '2026-11-11', time: '15:00' },
+    end: { date: '2026-11-11', time: '16:00' },
+    allDay: false,
+    categoryId: 'work',
+    tags: ['工作'],
+    priority: 2,
+    recurrence: null,
+    reminderOffsetMinutes: 10,
+    reminderDelayMinutes: null,
+  };
+  const patchWire = (patch: Record<string, unknown>): unknown => ({ ...validWire, ...patch });
+
+  it('键缺省（旧版 14 键 wire）→ 通过且 draft.targetItemId undefined；null 同样宽容并归一 undefined', () => {
+    expect(isRemoteDraftWire(validWire)).not.toBeNull();
+    const wire = isRemoteDraftWire(validWire);
+    expect(wireToParsedItemDraft(wire as NonNullable<typeof wire>, CONTEXT).targetItemId).toBeUndefined();
+
+    const nullWire = isRemoteDraftWire({ ...validWire, targetItemId: null });
+    expect(nullWire).not.toBeNull();
+    expect(
+      wireToParsedItemDraft(nullWire as NonNullable<typeof nullWire>, CONTEXT).targetItemId,
+    ).toBeUndefined();
+  });
+
+  it('合法非空串 → 透传到 draft.targetItemId（归一拷贝）', () => {
+    const wire = isRemoteDraftWire({ ...validWire, targetItemId: 'item-001' });
+    expect(wire).not.toBeNull();
+    const draft = wireToParsedItemDraft(wire as NonNullable<typeof wire>, CONTEXT);
+    expect(draft.targetItemId).toBe('item-001');
+  });
+
+  it('值出现即从严：非串 / 空串整体拒绝（schema-mismatch）', () => {
+    expect(isRemoteDraftWire({ ...validWire, targetItemId: 12345 })).toBeNull();
+    expect(isRemoteDraftWire({ ...validWire, targetItemId: '' })).toBeNull();
+    expect(isRemoteDraftWire({ ...validWire, targetItemId: ['item-001'] })).toBeNull();
+  });
+});

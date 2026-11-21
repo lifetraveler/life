@@ -1,4 +1,4 @@
-# AI 解析层契约（v0.24）
+# AI 解析层契约（v0.25）
 
 ## 接口定义
 ```typescript
@@ -22,6 +22,7 @@ export interface ParsedItemDraft {
   reminderOffsetMinutes: number | null; 
   reminderDelayMinutes: number | null; // v0.17（切片 19）：相对当前时刻“X分钟后提醒”
   reminders?: number[]; // v0.23（切片 32）：绝对时刻提醒（epoch 毫秒，升序去重）；undefined=未表达
+  targetItemId?: string; // v0.25（切片 34）：编辑落库路由信号——非空=更新该已保存条目；undefined=未表达（全新意图/本地降级轮），null 已在 wire 层归一为 undefined
 }
 
 export interface AiParser {
@@ -55,6 +56,7 @@ interface RemoteDraftWire {
   reminderOffsetMinutes: number | null;
   reminderDelayMinutes: number | null; // v0.17（切片 19）
   reminders?: RemoteDateTimeField[] | null; // v0.23（切片 32）；键可缺省，值出现即从严
+  targetItemId?: string | null; // v0.25（切片 34）；键可缺省，值出现即从严
 }
 ```
 
@@ -79,6 +81,52 @@ interface RemoteDraftWire {
 - 语义：绝对民用时刻提醒（“明天8点、10点提醒我吃药”），与 `start` 语义独立、
   可同句出现；prompt“绝对时刻提醒判定规则”一节明确禁止模型把绝对时刻换算成
   `reminderOffsetMinutes`/`reminderDelayMinutes`（F1 真机缺陷根因封堵）。
+
+### targetItemId wire 键纪律（v0.25，切片 34）
+
+- `targetItemId` 键**可缺省**（v0.23 `reminders` 同构偏离）：缺省/null = 旧版
+  模型响应，照常通过（null 归一为 undefined）；值出现即从严——必须是非空
+  字符串，空串/非串形状偏差整体拒绝（schema-mismatch）。守卫不校验条目
+  存在性（id 是否指向真实条目由落库层校验，模型无条目清单可编造）。
+- 语义：编辑落库路由信号（非内容字段，不参与 merge 掩码，恒取本轮透传）——
+  上一张卡片摘要块带「关联条目 id」且本轮是对该已保存条目的修改时回填该 id；
+  全新事项一律 null（prompt 明确禁止编造或复用其他 id）。
+
+## 已保存条目对话式编辑落库语义（v0.25，切片 34 阶段 1，AGENTS.md §7.46）
+
+`ParsedItemDraft.targetItemId` 非空且草稿确认保存时，`useFlashChat.confirmSave`
+走 update 落库链（提案 docs/proposals/slice-34-saved-item-conversational-edit.md
+D4）：
+
+- 存在性 + 只读护栏预检：`getItemById(targetItemId)` 为 null / 查询失败 /
+  `sourceReadOnly`（外部导入只读，`updateItem` 既有抛错护栏语义沿用）时降级
+  按 create 处理并披露「目标条目不存在/不可编辑，已按新建处理」——预检挡在
+  写之前（一旦 updateItem 已执行，后续链失败无法整链回退）；
+- 全量 patch：`updateItem(id, {title, content, type, categoryId, priority})`
+  + `updateItemTime(id, plan.timePatch)`（时间字段只走 updateItemTime，§4.24
+  纪律不变）——卡片即编辑后完整快照，模型输出编辑后全量草稿；
+- once 提醒集合差异（`diffOnceReminderPlans` 纯函数）：基线 =
+  `listRemindersByItem` 中 `frequency==='once'` 且 `onceAt` 非空的行，双侧
+  触发时刻经 `resolveCivilTimeToInstant`（各自 tzid）换算 epoch 比较——
+  `draft.reminders` 显式数组 = 全量替换（增 create/减 delete/同 epoch 保留
+  不动、渠道不漂移）；`reminders` 缺省 = 基线不删、本轮 offset/delay/锚点
+  产物增量创建；不可解析 epoch 的基线行保留不删；重复提醒与非 once 频率
+  不参与差异；增删逐条失败 warn + 披露不中断（'[slice-34]'）；
+- tags 差异（`diffItemTags` 纯函数，normalizeTagName 归一键比较）：目标有而
+  基线没有逐个 `addTagToItem`、基线有而目标没有逐个 `removeTagFromItem`；
+- `reminderScheduler.reconcile()` 显式一次（失败不阻断，切片 15 先例）；
+- 结果卡措辞 update =「已更新《title》」/ create =「已添加《title》」；
+- 保存后播种 `serializeDraftForHistory(current, tzid, itemId)`：create/degrade
+  传 created.id（覆盖降级场景草稿残留的陈旧 targetItemId）、update 传基线 id
+  （基线连续）；摘要块渲染「关联条目 id」行（解析 itemId 优先、回退
+  targetItemId），模型据此在下一轮回填 wire 的 targetItemId。
+
+边界：仅当前基线可编辑（更早历史卡保持切片 29 视觉区分，点击跳详情页）；
+认真模式 confirm 守卫零改动复用（update 路径 title/content 变化天然覆盖）；
+本地降级链路零改动（降级轮无 targetItemId 走 create，§7.40「本地不做编辑
+意图兜底」既定边界）；不支持重复提醒对话式增删与「删除全部 once 提醒」
+（wire 空数组仍拒绝，v0.23 纪律不动，全删场景披露走详情页）；schema 停留
+v16 零迁移；无新依赖；冻结区零改动。
 
 ## reminders 落库语义（v0.23，切片 32 阶段 1）
 
@@ -445,3 +493,34 @@ Reminder 模型中没有落库位置：data-model.md §4.1 冻结
   localFallback / lastUsage / lastDebug 副通道零改动；schema 停留 v16 零迁移；
   无新依赖；冻结区（src/notifications/、src/domain/recurrence/、
   src/domain/export.ts）零改动。
+
+## 变更记录（v0.25，切片 34 阶段 1，提案 docs/proposals/slice-34-saved-item-conversational-edit.md 已经用户确认）
+
+- wire 可选键 `targetItemId?: string | null`（编辑落库路由信号）：键可缺省
+  宽容（v0.23 reminders 同构）、值出现即从严整体拒绝（非串/空串）、null 归一
+  undefined、不校验存在性（落库层校验）；`ParsedItemDraft` 追加可选
+  `targetItemId?: string`（guard 同纪律）；`mergeDraftCorrection` return 末尾
+  直接透传（id 是落库路由信号非内容字段，不纳入编辑掩码）；AiParser.parse
+  冻结签名与返回类型不变。
+- history 播种 JSON 带条目 id（D2）：`serializeDraftForHistory(draft, tzid,
+  itemId?)` 追加第三可选参——显式非空串时输出 JSON 追加 `itemId` 键
+  （draft.targetItemId 仍经 rest 原样透传）；调用方传入：保存链播种传
+  created.id（update 传基线 id、degrade-create 传 created.id 覆盖陈旧基线）；
+  chat.ts 两处 historyAppend 不传（缺省，无 id）。摘要块渲染「关联条目 id」
+  行（renderBriefing，仅解析出 itemId 时渲染；`tryParseBriefingDraft` 判据
+  字段不变，新增 `parseBriefingItemId` 读 `itemId ?? targetItemId` 非空串——
+  比 D2 字面多兼容 targetItemId 键，修复 chat.ts 产物 JSON 无 itemId 键时
+  第二轮摘要块丢 id、模型填 null 退化新建的链洞，阶段 1 报告披露）。
+- prompt 成文（D3）：字段定义加 targetItemId 行（编辑基线回填/全新意图
+  null/禁止编造或复用其他 id）；多轮节加「编辑已保存条目」bullet——摘要块带
+  「关联条目 id」且本轮是对该条目的修改时回填该 id、以摘要块为基准其余照抄、
+  reminders 输出编辑后完整绝对时刻集合（摘要块基础上增删后的全集）。
+- update 落库链（D4）：见「已保存条目对话式编辑落库语义」节——存在性/只读
+  预检降级、全量 patch + updateItemTime、once 集合差异（replace/append 双
+  模式）、tags 差异、reconcile 显式一次、「已更新《title》」措辞、播种
+  itemId 保持基线连续。
+- 边界：本地降级链路（localFallback/fallbackTurn）零改动（降级轮无
+  targetItemId，确认保存走 create）；认真模式 confirm 守卫零改动复用；
+  RemoteDraftWire 12 必填键清单与 reminders 键纪律零改动（空数组仍拒绝）；
+  schema 停留 v16 零迁移；无新依赖；冻结区（src/notifications/、
+  src/domain/recurrence/、src/domain/export.ts）零改动。
