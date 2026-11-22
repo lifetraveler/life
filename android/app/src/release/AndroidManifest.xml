@@ -1,0 +1,4 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 切片 35：release 构建允许明文 HTTP（局域网自托管 WebDAV 测试场景；debug 构建模板自带该能力，release 需显式声明） -->
+    <application android:usesCleartextTraffic="true" />
+</manifest>
