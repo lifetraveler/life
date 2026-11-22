@@ -85,12 +85,21 @@ import {
   isReminderChannel,
   type ReminderChannel,
 } from '../domain/reminder';
+import {
+  type SyncMergeApplyResult,
+  type SyncMergeResult,
+} from '../domain/syncMerge';
+import {
+  type SyncSnapshot,
+  type SyncTombstoneKind,
+} from '../domain/syncSnapshot';
 import AppSettingsModel from '../db/models/AppSettingsModel';
 import CategoryModel from '../db/models/CategoryModel';
 import ChannelPresetModel from '../db/models/ChannelPresetModel';
 import ItemModel from '../db/models/ItemModel';
 import ItemTagModel from '../db/models/ItemTagModel';
 import ReminderModel from '../db/models/ReminderModel';
+import SyncTombstoneModel from '../db/models/SyncTombstoneModel';
 import TagModel from '../db/models/TagModel';
 import { seedPresetData } from '../db/seed';
 import { parseIcs } from '../domain/ics/parseIcs';
@@ -135,6 +144,8 @@ const CATEGORIES_TABLE = 'categories';
 const APP_SETTINGS_TABLE = 'app_settings';
 // 切片 17 阶段 1（AGENTS.md §7.27，schema v9）：渠道预设表。
 const CHANNEL_PRESETS_TABLE = 'channel_presets';
+// 切片 35 阶段 1（AGENTS.md §7.47，schema v17）：删除传播墓碑表。
+const SYNC_TOMBSTONES_TABLE = 'sync_tombstones';
 
 /** repository.md v0.8：导入超过 500 条时分批写入，每批 100 条。 */
 const IMPORT_BATCH_SIZE = 100;
@@ -1684,6 +1695,468 @@ export class WatermelonItemRepository implements ItemRepository {
     return { applied, skipped };
   }
 
+  // —— 切片 35 阶段 1：双向同步（AGENTS.md §7.47，契约外显式扩展成对 + 裁剪，先例 createDataSnapshot/applyDataSnapshot）——
+
+  /**
+   * 只读组包当前双向同步快照（deviceId 由编排层经 SyncDeviceStore 解析后传参，
+   * Repository 不触碰 SecureStore）：app_settings 整行 + categories + items 全库
+   * （listItemsWithTags ∪ listArchivedItemsWithTags）+ tags + reminders（v10 语义
+   * 列，与 createDataSnapshot 同口径）+ channelPresets + itemTags join 全量 +
+   * sync_tombstones 全量墓碑。外层 {version:1, kind:'sync', deviceId, exportedAt}。
+   * 落库零写入（组包纯读）；文件名 life-sync-<deviceId>.json 由编排层组装。
+   */
+  async createSyncSnapshot(deviceId: string): Promise<SyncSnapshot> {
+    const [appSettings, categories, activeItems, archivedItems, reminders, tags, channelPresets, joinModels, tombstoneModels] =
+      await Promise.all([
+        this.getSettings(),
+        this.getCategories(),
+        this.listItemsWithTags(),
+        this.listArchivedItemsWithTags(),
+        this.listAllReminders(),
+        this.listTags(),
+        this.listChannelPresets(),
+        this.itemTagsJoinQuery().fetch(),
+        this.db.get<SyncTombstoneModel>(SYNC_TOMBSTONES_TABLE).query().fetch(),
+      ]);
+    return {
+      version: 1,
+      kind: 'sync',
+      deviceId,
+      exportedAt: dataSnapshotExportedAt(new Date()),
+      appSettings,
+      categories: categories.map((category) => ({
+        id: category.id,
+        name: category.name,
+        color: category.color,
+        emoji: category.emoji,
+        priority: category.priority,
+      })),
+      items: [...activeItems, ...archivedItems].map((entry) => toDataSnapshotItem(entry)),
+      tags: tags.map((tag) => ({
+        id: tag.id,
+        name: tag.name,
+        color: tag.color,
+        emoji: tag.emoji,
+      })),
+      reminders: reminders.map((reminder) => ({
+        id: reminder.id,
+        itemId: reminder.itemId,
+        frequency: reminder.frequency,
+        localTimeHour: reminder.localTimeHour,
+        localTimeMinute: reminder.localTimeMinute,
+        weekdaysJson: serializeWeekdays(reminder.weekdays),
+        dayOfMonth: reminder.dayOfMonth,
+        tzid: reminder.tzid,
+        startAt: reminder.startAt,
+        enabled: reminder.enabled,
+        onceCivilJson: reminder.onceAt === null ? null : serializeOnceCivilJson(reminder.onceAt),
+        channelsJson: serializeReminderChannels(reminder.channels),
+        channelConfigsJson: serializeReminderChannelConfigs(reminder.channelConfigs),
+        // LWW 决胜判据（SyncReminderEntry，Q1 reminders 行级 LWW）：
+        createdAt: reminder.createdAt,
+        updatedAt: reminder.updatedAt,
+      })),
+      channelPresets: channelPresets.map((preset) => toDataSnapshotChannelPreset(preset)),
+      itemTags: joinModels.map((model) => ({ itemId: model.itemId, tagId: model.tagId })),
+      tombstones: tombstoneModels.map((model) => ({
+        kind: model.kind,
+        entityId: model.entityId,
+        deletedAt: model.deletedAt,
+      })),
+    };
+  }
+
+  /**
+   * 合流结果落库（mergeSyncSnapshots 纯函数产物 → 单 writer 事务，切片 31 两遍法
+   * 照抄）：单 db.write（事务内全量读八表 → operations 同步收集 → 单次 db.batch）。
+   * 逐块语义见 ItemRepository.applySyncMerge 文档注释。落库成功后的
+   * reminderScheduler.reconcile() 由调用方显式执行一次（失败不阻断仅披露）。
+   * 墓碑新增行 deleted_at 保真（远端删除时刻，裁剪判据跨设备可比）。
+   */
+  async applySyncMerge(result: SyncMergeResult): Promise<SyncMergeApplyResult> {
+    await this.ensureSeeded();
+    let applied = 0;
+    let localSkipped = 0;
+    await this.db.write(async () => {
+      // 1) 事务内全量读取本地相关表（先全读后写：读失败 = 整体不落库）。
+      const itemModels = await this.db.get<ItemModel>(ITEMS_TABLE).query().fetch();
+      const itemById = new Map(itemModels.map((model) => [model.id, model]));
+      const categoryModels = await this.db.get<CategoryModel>(CATEGORIES_TABLE).query().fetch();
+      const categoryIds = new Set(categoryModels.map((model) => model.id));
+      const tagModels = await this.db.get<TagModel>(TAGS_TABLE).query().fetch();
+      const tagByDedupKey = new Map<string, TagModel>();
+      for (const model of tagModels) {
+        const key = model.name.toLowerCase();
+        if (!tagByDedupKey.has(key)) {
+          tagByDedupKey.set(key, model);
+        }
+      }
+      const reminderModels = await this.db.get<ReminderModel>(REMINDERS_TABLE).query().fetch();
+      const reminderById = new Map(reminderModels.map((model) => [model.id, model]));
+      const presetModels = await this.db
+        .get<ChannelPresetModel>(CHANNEL_PRESETS_TABLE)
+        .query()
+        .fetch();
+      const presetById = new Map(presetModels.map((model) => [model.id, model]));
+      const joinModels = await this.db.get<ItemTagModel>(ITEM_TAGS_TABLE).query().fetch();
+      const joinKeys = new Set(joinModels.map((model) => `${model.itemId}:${model.tagId}`));
+      const tombstoneModels = await this.db
+        .get<SyncTombstoneModel>(SYNC_TOMBSTONES_TABLE)
+        .query()
+        .fetch();
+      const tombstoneKeys = new Set(
+        tombstoneModels.map((model) => `${model.kind}:${model.entityId}`),
+      );
+      const settingsModels = await this.db.get<AppSettingsModel>(APP_SETTINGS_TABLE).query().fetch();
+      const settingsModel = settingsModels[0] ?? null;
+
+      const operations: Model[] = [];
+
+      // —— 删除先行（墓碑命中行；缺行静默——合流快照与本地库时点差容忍）：
+      // reminder/preset 直删；item 删除级联其 reminders 与 item_tags（deleteItem
+      // 同语义，不再追加墓碑——这些墓碑已在对端/本地墓碑集随本轮合入）。
+      const destroyedReminderIds = new Set<string>();
+      for (const id of result.toDeleteReminderIds) {
+        const model = reminderById.get(id);
+        if (!model) continue;
+        operations.push(model.prepareDestroyPermanently());
+        destroyedReminderIds.add(id);
+      }
+      for (const id of result.toDeletePresetIds) {
+        const model = presetById.get(id);
+        if (!model) continue;
+        operations.push(model.prepareDestroyPermanently());
+      }
+      for (const id of result.toDeleteItemIds) {
+        const model = itemById.get(id);
+        if (!model) continue;
+        for (const reminder of reminderModels) {
+          if (reminder.itemId !== id || destroyedReminderIds.has(reminder.id)) continue;
+          operations.push(reminder.prepareDestroyPermanently());
+          destroyedReminderIds.add(reminder.id);
+        }
+        for (const joinModel of joinModels) {
+          if (joinModel.itemId !== id) continue;
+          operations.push(joinModel.prepareDestroyPermanently());
+          joinKeys.delete(`${joinModel.itemId}:${joinModel.tagId}`);
+        }
+        operations.push(model.prepareDestroyPermanently());
+      }
+      const deletedItemIds = new Set(result.toDeleteItemIds);
+
+      // —— items：命中覆盖（11 业务字段写穿，createdAt 不动、updatedAt 由
+      // prepareUpdate 自动刷新为合流写入时刻——LWW 锚定最终写入）/ 未命中创建
+      // （prepareCreateFromDirtyRaw id/created_at/updated_at 保真，applyDataSnapshot
+      // 同构）。合流层已保证：upsert 与 delete 不相交、categoryId 非悬挂。
+      const upsertItemIds = new Set<string>();
+      for (const entry of result.toUpsertItems) {
+        const existing = itemById.get(entry.id);
+        if (existing) {
+          operations.push(
+            existing.prepareUpdate((draft) => {
+              draft.type = entry.type;
+              draft.title = entry.title;
+              draft.content = entry.content;
+              draft.status = entry.status;
+              draft.startAt = entry.startAt;
+              draft.endAt = entry.endAt;
+              draft.allDay = entry.allDay;
+              draft.sourceType = entry.sourceType;
+              draft.sourceUid = entry.sourceUid;
+              draft.sourceReadOnly = entry.sourceReadOnly;
+              draft.categoryId = entry.categoryId;
+              draft.priority = entry.priority;
+            }),
+          );
+        } else {
+          operations.push(
+            this.db.get<ItemModel>(ITEMS_TABLE).prepareCreateFromDirtyRaw({
+              id: entry.id,
+              _status: 'created',
+              _changed: '',
+              type: entry.type,
+              title: entry.title,
+              content: entry.content,
+              status: entry.status,
+              start_at: entry.startAt,
+              end_at: entry.endAt,
+              all_day: entry.allDay,
+              source_type: entry.sourceType,
+              source_uid: entry.sourceUid,
+              source_read_only: entry.sourceReadOnly,
+              category_id: entry.categoryId,
+              priority: entry.priority,
+              created_at: entry.createdAt,
+              updated_at: entry.updatedAt,
+            }),
+          );
+        }
+        upsertItemIds.add(entry.id);
+        applied += 1;
+      }
+
+      // —— reminders：深层校验（isValidDataSnapshotReminderEntry，失败计 skipped）
+      // → 命中写穿 v10 语义列（item_id 不改、调度态两列不写）/ 未命中创建
+      // （_raw.id 保真 + deprecated 两列兜底，applyDataSnapshot 同构）。基线 item
+      // 存在性为合流层不变式，此处防御性复核（失败计 skipped，不合入）。
+      for (const entry of result.toUpsertReminders) {
+        if (!isValidDataSnapshotReminderEntry(entry)) {
+          localSkipped += 1;
+          continue;
+        }
+        const targetItemExists =
+          (itemById.has(entry.itemId) && !deletedItemIds.has(entry.itemId)) ||
+          upsertItemIds.has(entry.itemId);
+        if (!targetItemExists) {
+          localSkipped += 1;
+          continue;
+        }
+        const existing = reminderById.get(entry.id);
+        if (existing) {
+          operations.push(
+            existing.prepareUpdate((draft) => {
+              draft.frequency = entry.frequency;
+              draft.localTimeHour = entry.localTimeHour;
+              draft.localTimeMinute = entry.localTimeMinute;
+              draft.weekdaysJson = entry.weekdaysJson;
+              draft.dayOfMonth = entry.dayOfMonth;
+              draft.tzid = entry.tzid;
+              draft.startAt = entry.startAt;
+              draft.enabled = entry.enabled;
+              draft.onceCivilJson = entry.onceCivilJson;
+              draft.channelsJson = entry.channelsJson;
+              draft.channelConfigsJson = entry.channelConfigsJson;
+            }),
+          );
+        } else {
+          operations.push(
+            this.db.get<ReminderModel>(REMINDERS_TABLE).prepareCreate((record) => {
+              record._raw.id = entry.id;
+              record.itemId = entry.itemId;
+              record.frequency = entry.frequency;
+              record.localTimeHour = entry.localTimeHour;
+              record.localTimeMinute = entry.localTimeMinute;
+              record.weekdaysJson = entry.weekdaysJson;
+              record.dayOfMonth = entry.dayOfMonth;
+              record.tzid = entry.tzid;
+              record.startAt = entry.startAt;
+              record.enabled = entry.enabled;
+              record.onceCivilJson = entry.onceCivilJson;
+              record.channel = DEFAULT_REMINDER_CHANNEL;
+              record.channelConfig = null;
+              record.channelsJson = entry.channelsJson;
+              record.channelConfigsJson = entry.channelConfigsJson;
+            }),
+          );
+        }
+        applied += 1;
+      }
+
+      // —— channelPresets：union 创建（合流层保证未命中；本地已存在为防御场景计
+      // skipped）；configJson 经渠道配置守卫校验（失败计 skipped）；同 type 单 default
+      // 规范化：创建行声明 default 的 type 内 last wins（toUpsertPresets 已按远端
+      // 处理序），该 type 本地既有 default 行收敛 false；未声明 default 的 type
+      // 不动本地。
+      const lastDefaultByType = new Map<ChannelPresetType, string>();
+      for (const entry of result.toUpsertPresets) {
+        try {
+          assertValidChannelPresetConfig(entry.type, entry.configJson, 'applySyncMerge');
+        } catch {
+          localSkipped += 1;
+          continue;
+        }
+        if (presetById.has(entry.id)) {
+          localSkipped += 1;
+          continue;
+        }
+        if (entry.isDefault) {
+          lastDefaultByType.set(entry.type, entry.id);
+        }
+        operations.push(
+          this.db.get<ChannelPresetModel>(CHANNEL_PRESETS_TABLE).prepareCreate((record) => {
+            record._raw.id = entry.id;
+            record.name = entry.name;
+            record.type = entry.type;
+            record.configJson = entry.configJson;
+            record.isDefault = lastDefaultByType.get(entry.type) === entry.id;
+          }),
+        );
+        applied += 1;
+      }
+      for (const [type, defaultId] of lastDefaultByType) {
+        for (const model of presetModels) {
+          if (model.type === type && model.id !== defaultId && model.isDefault) {
+            operations.push(
+              model.prepareUpdate((draft) => {
+                draft.isDefault = false;
+              }),
+            );
+          }
+        }
+      }
+
+      // —— tags：union 创建（归一键防御复核——合流层保证未命中，本地已存在计
+      // skipped）；id 保真 _raw.id；name 写归一后值（applyDataSnapshot 同口径）。
+      // validTagIds 先于创建声明：本轮新建 tag id 供 itemTags 增补的存在性复核。
+      const validTagIds = new Set(tagModels.map((model) => model.id));
+      const createdTagDedupKeys = new Set<string>();
+      for (const tag of result.toCreateTags) {
+        const { name, dedupKey } = normalizeTagName(tag.name);
+        if (tagByDedupKey.has(dedupKey) || createdTagDedupKeys.has(dedupKey)) {
+          localSkipped += 1;
+          continue;
+        }
+        operations.push(
+          this.db.get<TagModel>(TAGS_TABLE).prepareCreate((record) => {
+            record._raw.id = tag.id;
+            record.name = name;
+            record.color = tag.color;
+            record.emoji = tag.emoji;
+          }),
+        );
+        createdTagDedupKeys.add(dedupKey);
+        validTagIds.add(tag.id);
+        applied += 1;
+      }
+
+      // —— categories：union 创建（id 防御复核；id 保真 _raw.id）。
+      for (const category of result.toCreateCategories) {
+        if (categoryIds.has(category.id)) {
+          localSkipped += 1;
+          continue;
+        }
+        operations.push(
+          this.db.get<CategoryModel>(CATEGORIES_TABLE).prepareCreate((record) => {
+            record._raw.id = category.id;
+            record.name = category.name;
+            record.color = category.color;
+            record.emoji = category.emoji;
+            record.priority = category.priority;
+          }),
+        );
+        categoryIds.add(category.id);
+        applied += 1;
+      }
+
+      // —— itemTags：并集增补（与本地既有及本轮删除/创建动态集去重；itemId/
+      // tagId 存在性为合流层不变式，此处防御性复核，失败计 skipped）。
+      for (const join of result.rebuiltItemTags) {
+        const key = `${join.itemId}:${join.tagId}`;
+        if (joinKeys.has(key)) {
+          continue;
+        }
+        const itemExists =
+          (itemById.has(join.itemId) && !deletedItemIds.has(join.itemId)) ||
+          upsertItemIds.has(join.itemId);
+        if (!itemExists || !validTagIds.has(join.tagId)) {
+          localSkipped += 1;
+          continue;
+        }
+        operations.push(
+          this.db.get<ItemTagModel>(ITEM_TAGS_TABLE).prepareCreate((record) => {
+            record.itemId = join.itemId;
+            record.tagId = join.tagId;
+          }),
+        );
+        joinKeys.add(key);
+        applied += 1;
+      }
+
+      // —— 墓碑合入：远端墓碑 deleted_at 保真；键防御去重（合流层已去重）。
+      for (const tombstone of result.tombstonesToAdd) {
+        const key = `${tombstone.kind}:${tombstone.entityId}`;
+        if (tombstoneKeys.has(key)) {
+          continue;
+        }
+        operations.push(
+          this.db.get<SyncTombstoneModel>(SYNC_TOMBSTONES_TABLE).prepareCreate((record) => {
+            record.kind = tombstone.kind;
+            record.entityId = tombstone.entityId;
+            record.deletedAt = tombstone.deletedAt;
+          }),
+        );
+        tombstoneKeys.add(key);
+      }
+
+      // —— app_settings：整行覆盖（appliedAppSettings 已由合流层
+      // normalizeSnapshotAppSettings 读层防御归一，缺列保留本地；null = 保留本地
+      // 不写）。字段映射照抄 updateSettings（chips/defaultChannels/displayCalendarIds
+      // 经各自 serialize 写列）。
+      if (result.appliedAppSettings !== null) {
+        const next = result.appliedAppSettings;
+        if (settingsModel) {
+          operations.push(
+            settingsModel.prepareUpdate((draft) => {
+              draft.tagDisplayMode = next.tagDisplayMode;
+              draft.widgetShowOverdue = next.widgetShowOverdue;
+              draft.widgetShowTodos = next.widgetShowTodos;
+              draft.widgetShowCategoryEmoji = next.widgetShowCategoryEmoji;
+              draft.widgetShowTags = next.widgetShowTags;
+              draft.chipsIncrementsJson = serializeChipsIncrements(next.chipsIncrements);
+              draft.defaultChannelsJson = serializeDefaultChannels(next.defaultChannels);
+              draft.carefulMode = next.carefulMode;
+              draft.showAiUsage = next.showAiUsage;
+              draft.displayCalendarIdsJson = serializeDisplayCalendarIds(next.displayCalendarIds);
+              draft.aiRetryMax = next.aiRetryMax;
+              draft.flashDeletedCardDisplay = next.flashDeletedCardDisplay;
+              draft.showAiRequest = next.showAiRequest;
+              draft.showAiResponse = next.showAiResponse;
+            }),
+          );
+        } else {
+          operations.push(
+            this.db.get<AppSettingsModel>(APP_SETTINGS_TABLE).prepareCreate((record) => {
+              record._raw.id = APP_SETTINGS_ROW_ID;
+              record.tagDisplayMode = next.tagDisplayMode;
+              record.widgetShowOverdue = next.widgetShowOverdue;
+              record.widgetShowTodos = next.widgetShowTodos;
+              record.widgetShowCategoryEmoji = next.widgetShowCategoryEmoji;
+              record.widgetShowTags = next.widgetShowTags;
+              record.chipsIncrementsJson = serializeChipsIncrements(next.chipsIncrements);
+              record.defaultChannelsJson = serializeDefaultChannels(next.defaultChannels);
+              record.carefulMode = next.carefulMode;
+              record.showAiUsage = next.showAiUsage;
+              record.displayCalendarIdsJson = serializeDisplayCalendarIds(next.displayCalendarIds);
+              record.aiRetryMax = next.aiRetryMax;
+              record.flashDeletedCardDisplay = next.flashDeletedCardDisplay;
+              record.showAiRequest = next.showAiRequest;
+              record.showAiResponse = next.showAiResponse;
+            }),
+          );
+        }
+        applied += 1;
+      }
+
+      await this.db.batch(...operations);
+    });
+    return {
+      applied,
+      skipped: result.counts.skipped + localSkipped,
+      conflictsResolved: result.counts.conflictsResolved,
+      tombstonesPropagation: result.counts.tombstonesPropagation,
+    };
+  }
+
+  /**
+   * 墓碑裁剪（编排层在上传合并后快照成功后调用；无对端快照不调用）：删除
+   * deleted_at 严格早于 minRemoteExportedAtMs 的墓碑（min = 全部对端快照
+   * exportedAt 最小毫秒——更早的墓碑已不可能再被任何对端需要，保留会无界增长）。
+   * 返回裁剪行数；无命中返回 0 不写库。
+   */
+  async pruneSyncTombstones(minRemoteExportedAtMs: number): Promise<number> {
+    const doomed = await this.db
+      .get<SyncTombstoneModel>(SYNC_TOMBSTONES_TABLE)
+      .query(Q.where('deleted_at', Q.lt(minRemoteExportedAtMs)))
+      .fetch();
+    if (doomed.length === 0) {
+      return 0;
+    }
+    await this.db.write(async () => {
+      await this.db.batch(...doomed.map((model) => model.prepareDestroyPermanently()));
+    });
+    return doomed.length;
+  }
+
   /**
    * 切片 6（§4.24 冻结）：只更新时间字段；updatedAt 由 prepareUpdate 自动刷新。
    * - patch 值必须为有限数字或 null（NaN/Infinity 抛错）；
@@ -1864,6 +2337,8 @@ export class WatermelonItemRepository implements ItemRepository {
   /**
    * 契约外显式扩展：删除本地副本（data-model.md v0.8「删除即从本地库移除，
    * 不影响外部来源」）。关联 reminders 与 item_tags 一并物理删除；tags 保留。
+   * 切片 35（§7.47）：同一事务内追加 item 墓碑（删除传播；级联删除的 reminders
+   * 不记墓碑——item 墓碑已表达整棵子树的删除，对端级联删其子提醒）。
    */
   async deleteItem(id: string): Promise<void> {
     await this.db.write(async () => {
@@ -1883,6 +2358,30 @@ export class WatermelonItemRepository implements ItemRepository {
         await itemTag.destroyPermanently();
       }
       await record.destroyPermanently();
+      await this.recordTombstoneInTransaction('item', id);
+    });
+  }
+
+  /**
+   * 墓碑记录（切片 35 阶段 1，§7.47）：必须在调用方的 db.write 事务内调用
+   * （三删除路径同事务副作用）。幂等：同 (kind, entity_id) 已有墓碑不重复写
+   * （首次删除时刻为准，更保守的裁剪语义）。
+   */
+  private async recordTombstoneInTransaction(
+    kind: SyncTombstoneKind,
+    entityId: string,
+  ): Promise<void> {
+    const existing = await this.db
+      .get<SyncTombstoneModel>(SYNC_TOMBSTONES_TABLE)
+      .query(Q.where('kind', kind), Q.where('entity_id', entityId))
+      .fetch();
+    if (existing.length > 0) {
+      return;
+    }
+    await this.db.get<SyncTombstoneModel>(SYNC_TOMBSTONES_TABLE).create((record) => {
+      record.kind = kind;
+      record.entityId = entityId;
+      record.deletedAt = Date.now();
     });
   }
 
@@ -2463,11 +2962,13 @@ export class WatermelonItemRepository implements ItemRepository {
   /**
    * 删除 Reminder（物理删除关联行）。
    * 已调度的系统通知不由 Repository 清理——由 ReminderScheduler.reconcile 对账取消。
+   * 切片 35（§7.47）：同一事务内追加 reminder 墓碑（删除传播）。
    */
   async deleteReminder(id: string): Promise<void> {
     await this.db.write(async () => {
       const record = await this.db.get<ReminderModel>(REMINDERS_TABLE).find(id);
       await record.destroyPermanently();
+      await this.recordTombstoneInTransaction('reminder', id);
     });
   }
 
@@ -2830,7 +3331,10 @@ export class WatermelonItemRepository implements ItemRepository {
     });
   }
 
-  /** 删除预设；不存在时抛明确错误。删除不影响已引用其 configJson 的既有提醒（复制值语义）。 */
+  /**
+   * 删除预设；不存在时抛明确错误。删除不影响已引用其 configJson 的既有提醒（复制值语义）。
+   * 切片 35（§7.47）：同一事务内追加 channel_preset 墓碑（删除传播）。
+   */
   async deleteChannelPreset(id: string): Promise<void> {
     await this.db.write(async () => {
       const models = await this.db
@@ -2842,6 +3346,7 @@ export class WatermelonItemRepository implements ItemRepository {
         throw new Error(`deleteChannelPreset: channel preset not found: ${id}`);
       }
       await model.destroyPermanently();
+      await this.recordTombstoneInTransaction('channel_preset', id);
     });
   }
 

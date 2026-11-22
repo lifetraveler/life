@@ -8,6 +8,7 @@ import CategoryModel from '../../db/models/CategoryModel';
 import AppSettingsModel from '../../db/models/AppSettingsModel';
 import TagModel from '../../db/models/TagModel';
 import ChannelPresetModel from '../../db/models/ChannelPresetModel';
+import SyncTombstoneModel from '../../db/models/SyncTombstoneModel';
 import { schema } from '../../db/schema';
 import { WatermelonItemRepository } from '../WatermelonItemRepository';
 import type { ChannelPreset } from '../../domain/channelPreset';
@@ -58,6 +59,7 @@ function makeRepository(): WatermelonItemRepository {
       CategoryModel,
       AppSettingsModel,
       ChannelPresetModel,
+      SyncTombstoneModel,
     ],
   });
   return new WatermelonItemRepository(database, () => 'UTC');

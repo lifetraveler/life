@@ -9,6 +9,7 @@ import ChannelPresetModel from './models/ChannelPresetModel';
 import ItemModel from './models/ItemModel';
 import ItemTagModel from './models/ItemTagModel';
 import ReminderModel from './models/ReminderModel';
+import SyncTombstoneModel from './models/SyncTombstoneModel';
 import TagModel from './models/TagModel';
 import { schema } from './schema';
 import migrations from './migrations';
@@ -34,6 +35,7 @@ export const database = new Database({
     CategoryModel,
     AppSettingsModel,
     ChannelPresetModel,
+    SyncTombstoneModel,
   ],
 });
 
