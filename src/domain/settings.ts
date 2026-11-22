@@ -112,6 +112,16 @@ export interface AppSettings {
    * show_ai_response 列；读层防御归一同上。
    */
   showAiResponse: boolean;
+  /**
+   * AI 日程查询/记忆检索开关（切片 36，AGENTS.md §7.48）：开启后，闪电录入
+   * 对话对查询意图输入走独立查询分支（本地预路由 → 全域检索 → 两段式远端
+   * 回答）；关闭时查询轮本地提示、不发远端。默认 true（默认开，Q4 定案）。
+   * isOptional boolean 存 ai_schedule_query_enabled 列，addColumns 回填 null
+   * ——非可选 boolean 回填 false 与「默认开」定案冲突（切片 30 ai_retry_max
+   * 回填 0 教训同构）；读层经 parseAiScheduleQueryEnabled 归一（非 boolean
+   * 一律 true），写入路径经 validateAiScheduleQueryEnabled 严格校验。
+   */
+  aiScheduleQueryEnabled: boolean;
 }
 
 /** 已删除卡显示方式枚举（切片 30，AGENTS.md §7.41） */
@@ -146,6 +156,7 @@ export const CHIPS_MAX_MINUTES = 10080;
  * 切片 26：showAiUsage 默认 false = 不显示（AGENTS.md §7.38）；
  * 切片 27：displayCalendarIds 默认 [] = 功能关闭（AGENTS.md §7.39）；
  * 切片 32：showAiRequest/showAiResponse 默认 false（AGENTS.md §7.44）；
+ * 切片 36：aiScheduleQueryEnabled 默认 true = 默认开（AGENTS.md §7.48，Q4 定案）；
  * getSettings 无记录时的兜底返回值）。
  */
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -163,6 +174,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   flashDeletedCardDisplay: 'mark',
   showAiRequest: false,
   showAiResponse: false,
+  aiScheduleQueryEnabled: true,
 };
 
 /** app_settings 单行主键（§7.22） */
@@ -386,6 +398,30 @@ export function validateAiRetryMax(value: number): number {
     throw new Error(
       `aiRetryMax 必须在 ${AI_RETRY_MIN}–${AI_RETRY_MAX_LIMIT} 之间，收到 ${String(value)}`,
     );
+  }
+  return value;
+}
+
+/**
+ * ai_schedule_query_enabled 读层防御归一（切片 36，AGENTS.md §7.48）：null/
+ * undefined（既有行 isOptional 回填）或非 boolean（防御纪律）一律回退
+ * true——默认开（Q4 定案，关闭是显式动作）；boolean 原样返回。不抛错：
+ * 读层永远返回可用 boolean（parseAiRetryMax 同风格）。
+ */
+export function parseAiScheduleQueryEnabled(raw: boolean | null | undefined): boolean {
+  if (typeof raw !== 'boolean') {
+    return true;
+  }
+  return raw;
+}
+
+/**
+ * ai_schedule_query_enabled 写路径校验（切片 36）：必须是 boolean，违反抛错
+ * （写路径严格纪律，validateAiRetryMax 同风格；提案 §「写路径严格校验」）。
+ */
+export function validateAiScheduleQueryEnabled(value: boolean): boolean {
+  if (typeof value !== 'boolean') {
+    throw new Error(`aiScheduleQueryEnabled 必须是 boolean，收到 ${String(value)}`);
   }
   return value;
 }

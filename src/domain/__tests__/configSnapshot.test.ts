@@ -166,7 +166,7 @@ describe('文件名与 exportedAt（§7.42 D5 / 提案 §4.1）', () => {
 });
 
 describe('normalizeSnapshotAppSettings（增量覆盖冻结语义逐字段，提案 §4.1）', () => {
-  it('字段存在且合法 → 快照值写穿（全 14 字段，切片 32 扩两开关）', () => {
+  it('字段存在且合法 → 快照值写穿（全 15 字段，切片 36 扩查询开关）', () => {
     const local = makeLocalSettings();
     const normalized = normalizeSnapshotAppSettings(
       {
@@ -184,6 +184,7 @@ describe('normalizeSnapshotAppSettings（增量覆盖冻结语义逐字段，提
         flashDeletedCardDisplay: 'remove',
         showAiRequest: true,
         showAiResponse: false,
+        aiScheduleQueryEnabled: false,
       },
       local,
     );
@@ -202,6 +203,7 @@ describe('normalizeSnapshotAppSettings（增量覆盖冻结语义逐字段，提
       flashDeletedCardDisplay: 'remove',
       showAiRequest: true,
       showAiResponse: false,
+      aiScheduleQueryEnabled: false,
     });
   });
 
@@ -291,5 +293,29 @@ describe('normalizeSnapshotAppSettings（增量覆盖冻结语义逐字段，提
     const local = makeLocalSettings();
     expect(normalizeSnapshotAppSettings(null, local)).toEqual(local);
     expect(normalizeSnapshotAppSettings([1, 2], local)).toEqual(local);
+  });
+
+  it('aiScheduleQueryEnabled（切片 36）：写穿 / 缺列保留本地 / 坏值回退默认 true', () => {
+    const local = makeLocalSettings(); // DEFAULT 展开 → 本地 true
+    // 合法写穿：显式 false（关闭）合法保留
+    expect(
+      normalizeSnapshotAppSettings({ aiScheduleQueryEnabled: false }, local)
+        .aiScheduleQueryEnabled,
+    ).toBe(false);
+    expect(
+      normalizeSnapshotAppSettings({ aiScheduleQueryEnabled: true }, local)
+        .aiScheduleQueryEnabled,
+    ).toBe(true);
+    // 旧快照缺列 → 保留本地（不静默丢字段）
+    expect(normalizeSnapshotAppSettings({}, local).aiScheduleQueryEnabled).toBe(true);
+    // 坏值（非 boolean）→ 回退 DEFAULT_APP_SETTINGS.aiScheduleQueryEnabled（true）
+    expect(
+      normalizeSnapshotAppSettings({ aiScheduleQueryEnabled: 'on' }, local)
+        .aiScheduleQueryEnabled,
+    ).toBe(DEFAULT_APP_SETTINGS.aiScheduleQueryEnabled);
+    expect(
+      normalizeSnapshotAppSettings({ aiScheduleQueryEnabled: null }, local)
+        .aiScheduleQueryEnabled,
+    ).toBe(DEFAULT_APP_SETTINGS.aiScheduleQueryEnabled);
   });
 });

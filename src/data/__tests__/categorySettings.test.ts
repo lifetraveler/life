@@ -91,14 +91,14 @@ describe('全局设置兜底（getSettings/updateSettings）', () => {
   it('空库 getSettings() 兜底返回 text 并静默落唯一 global 行；两次调用幂等不重复插行', async () => {
     const { db, repository } = makeContext();
     // 未经 seedPresetData 的空库：首次 getSettings 经 ensureSeeded 兜底
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], carefulMode: false, showAiUsage: false, displayCalendarIds: [], aiRetryMax: 3, flashDeletedCardDisplay: 'mark', showAiRequest: false, showAiResponse: false /* 切片 32 v16 两开关 */, defaultChannels: ['system-notification'] });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], carefulMode: false, showAiUsage: false, displayCalendarIds: [], aiRetryMax: 3, flashDeletedCardDisplay: 'mark', showAiRequest: false, showAiResponse: false /* 切片 32 v16 两开关 */, aiScheduleQueryEnabled: true /* 切片 36 v18 开关 */, defaultChannels: ['system-notification'] });
     const rows = await db.get<AppSettingsModel>('app_settings').query().fetch();
     expect(rows.length).toBe(1);
     expect(rows[0]?._raw.id).toBe(APP_SETTINGS_ROW_ID);
     expect(rows[0]?.tagDisplayMode).toBe('text');
 
     // 第二次调用：幂等，不新增行
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], carefulMode: false, showAiUsage: false, displayCalendarIds: [], aiRetryMax: 3, flashDeletedCardDisplay: 'mark', showAiRequest: false, showAiResponse: false /* 切片 32 v16 两开关 */, defaultChannels: ['system-notification'] });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], carefulMode: false, showAiUsage: false, displayCalendarIds: [], aiRetryMax: 3, flashDeletedCardDisplay: 'mark', showAiRequest: false, showAiResponse: false /* 切片 32 v16 两开关 */, aiScheduleQueryEnabled: true /* 切片 36 v18 开关 */, defaultChannels: ['system-notification'] });
     const rowsAgain = await db.get<AppSettingsModel>('app_settings').query().fetch();
     expect(rowsAgain.length).toBe(1);
   });
@@ -106,7 +106,7 @@ describe('全局设置兜底（getSettings/updateSettings）', () => {
   it('updateSettings 合法值生效并可回读', async () => {
     const { repository } = makeContext();
     await repository.updateSettings({ tagDisplayMode: 'emoji' });
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'emoji', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], carefulMode: false, showAiUsage: false, displayCalendarIds: [], aiRetryMax: 3, flashDeletedCardDisplay: 'mark', showAiRequest: false, showAiResponse: false /* 切片 32 v16 两开关 */, defaultChannels: ['system-notification'] });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'emoji', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], carefulMode: false, showAiUsage: false, displayCalendarIds: [], aiRetryMax: 3, flashDeletedCardDisplay: 'mark', showAiRequest: false, showAiResponse: false /* 切片 32 v16 两开关 */, aiScheduleQueryEnabled: true /* 切片 36 v18 开关 */, defaultChannels: ['system-notification'] });
   });
 
   it('updateSettings 非法值抛 updateSettings: invalid tagDisplayMode', async () => {
@@ -331,13 +331,13 @@ describe('阶段 3 补充：视觉更新与设置往返边角', () => {
 
   it('updateSettings 往返：text → emoji → both → text，每步 getSettings 随之变化', async () => {
     const { repository } = makeContext();
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], carefulMode: false, showAiUsage: false, displayCalendarIds: [], aiRetryMax: 3, flashDeletedCardDisplay: 'mark', showAiRequest: false, showAiResponse: false /* 切片 32 v16 两开关 */, defaultChannels: ['system-notification'] });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], carefulMode: false, showAiUsage: false, displayCalendarIds: [], aiRetryMax: 3, flashDeletedCardDisplay: 'mark', showAiRequest: false, showAiResponse: false /* 切片 32 v16 两开关 */, aiScheduleQueryEnabled: true /* 切片 36 v18 开关 */, defaultChannels: ['system-notification'] });
     await repository.updateSettings({ tagDisplayMode: 'emoji' });
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'emoji', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], carefulMode: false, showAiUsage: false, displayCalendarIds: [], aiRetryMax: 3, flashDeletedCardDisplay: 'mark', showAiRequest: false, showAiResponse: false /* 切片 32 v16 两开关 */, defaultChannels: ['system-notification'] });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'emoji', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], carefulMode: false, showAiUsage: false, displayCalendarIds: [], aiRetryMax: 3, flashDeletedCardDisplay: 'mark', showAiRequest: false, showAiResponse: false /* 切片 32 v16 两开关 */, aiScheduleQueryEnabled: true /* 切片 36 v18 开关 */, defaultChannels: ['system-notification'] });
     await repository.updateSettings({ tagDisplayMode: 'both' });
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'both', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], carefulMode: false, showAiUsage: false, displayCalendarIds: [], aiRetryMax: 3, flashDeletedCardDisplay: 'mark', showAiRequest: false, showAiResponse: false /* 切片 32 v16 两开关 */, defaultChannels: ['system-notification'] });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'both', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], carefulMode: false, showAiUsage: false, displayCalendarIds: [], aiRetryMax: 3, flashDeletedCardDisplay: 'mark', showAiRequest: false, showAiResponse: false /* 切片 32 v16 两开关 */, aiScheduleQueryEnabled: true /* 切片 36 v18 开关 */, defaultChannels: ['system-notification'] });
     await repository.updateSettings({ tagDisplayMode: 'text' });
-    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], carefulMode: false, showAiUsage: false, displayCalendarIds: [], aiRetryMax: 3, flashDeletedCardDisplay: 'mark', showAiRequest: false, showAiResponse: false /* 切片 32 v16 两开关 */, defaultChannels: ['system-notification'] });
+    expect(await repository.getSettings()).toEqual({ tagDisplayMode: 'text', widgetShowOverdue: true, widgetShowTodos: false, widgetShowCategoryEmoji: false, widgetShowTags: false, chipsIncrements: [10, 60], carefulMode: false, showAiUsage: false, displayCalendarIds: [], aiRetryMax: 3, flashDeletedCardDisplay: 'mark', showAiRequest: false, showAiResponse: false /* 切片 32 v16 两开关 */, aiScheduleQueryEnabled: true /* 切片 36 v18 开关 */, defaultChannels: ['system-notification'] });
   });
 
   it('updateCategoryVisuals 空 patch 是合法 no-op：不抛错且视觉值不变', async () => {
@@ -551,5 +551,62 @@ describe('showAiUsage 设置往返（切片 26，AGENTS.md §7.38）', () => {
       });
     });
     expect((await repository.getSettings()).showAiUsage).toBe(true);
+  });
+});
+
+describe('aiScheduleQueryEnabled 设置往返（切片 36，AGENTS.md §7.48）', () => {
+  it('默认值 true（默认开）；false/true 写读往返；updateSettings 建行路径也生效', async () => {
+    const { repository } = makeContext();
+    expect((await repository.getSettings()).aiScheduleQueryEnabled).toBe(true);
+    await repository.updateSettings({ aiScheduleQueryEnabled: false });
+    expect((await repository.getSettings()).aiScheduleQueryEnabled).toBe(false);
+    // 即时生效语义：同库内反复切换
+    await repository.updateSettings({ aiScheduleQueryEnabled: true });
+    expect((await repository.getSettings()).aiScheduleQueryEnabled).toBe(true);
+
+    // 空库直接 updateSettings：以 patch 值建行（repository.md 写层纪律）
+    const fresh = makeContext();
+    await fresh.repository.updateSettings({ aiScheduleQueryEnabled: false });
+    expect((await fresh.repository.getSettings()).aiScheduleQueryEnabled).toBe(false);
+  });
+
+  it('写路径严格校验：非 boolean 抛 validateAiScheduleQueryEnabled 错误', async () => {
+    const { repository } = makeContext();
+    await expect(
+      repository.updateSettings({ aiScheduleQueryEnabled: 'yes' as unknown as boolean }),
+    ).rejects.toThrow('aiScheduleQueryEnabled 必须是 boolean，收到 yes');
+    await expect(
+      repository.updateSettings({ aiScheduleQueryEnabled: null as unknown as boolean }),
+    ).rejects.toThrow('aiScheduleQueryEnabled 必须是 boolean，收到 null');
+  });
+
+  it('读层防御归一：手工写 null（isOptional 迁移回填）/非 boolean → 回退 true 不抛错', async () => {
+    const { repository, db } = makeContext();
+    await repository.getSettings(); // 确保 app_settings 行存在
+    const row = await db.get<AppSettingsModel>('app_settings').find(APP_SETTINGS_ROW_ID);
+
+    await db.write(async () => {
+      await row.update((draft) => {
+        // 模拟 v17→v18 迁移后存量行的 null 回填（读取层归一 → 默认开 true）
+        draft.aiScheduleQueryEnabled = null as unknown as boolean;
+      });
+    });
+    expect((await repository.getSettings()).aiScheduleQueryEnabled).toBe(true);
+
+    await db.write(async () => {
+      await row.update((draft) => {
+        // 模拟手改库写入非 boolean（列定义上不可能，防御分支兜底）
+        draft.aiScheduleQueryEnabled = 'no' as unknown as boolean;
+      });
+    });
+    expect((await repository.getSettings()).aiScheduleQueryEnabled).toBe(true);
+
+    // 恢复合法值后照常回读（显式关闭合法保留）
+    await db.write(async () => {
+      await row.update((draft) => {
+        draft.aiScheduleQueryEnabled = false;
+      });
+    });
+    expect((await repository.getSettings()).aiScheduleQueryEnabled).toBe(false);
   });
 });

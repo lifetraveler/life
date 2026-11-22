@@ -30,6 +30,8 @@ import { APP_SETTINGS_ROW_ID, DEFAULT_APP_SETTINGS } from '../domain/settings';
  * - v12：app_settings 新增 careful_mode（切片 25 阶段 1，AGENTS.md §7.37）
  * - v13：app_settings 新增 show_ai_usage（切片 26 阶段 1，AGENTS.md §7.38）
  * - v14：app_settings 新增 display_calendar_ids_json（切片 27 阶段 1，AGENTS.md §7.39）
+ * - v18：app_settings 新增 ai_schedule_query_enabled（切片 36 阶段 1，AGENTS.md §7.48
+ *        AI 日程查询/记忆检索——查询分支总开关，默认开）
  *
  * 规则（AGENTS.md §4.6）：已发布的 migration step 不得修改，只能在末尾追加；
  * 新增表必须在 migration 中显式创建，不得依赖“删库重装”。
@@ -408,6 +410,26 @@ export default schemaMigrations({
             { name: 'entity_id', type: 'string', isIndexed: true },
             { name: 'deleted_at', type: 'number' },
           ],
+        }),
+      ],
+    },
+    {
+      // 切片 36 阶段 1（AGENTS.md §7.48 AI 日程查询/记忆检索）：v18 app_settings
+      // 加列（查询分支总开关 ai_schedule_query_enabled，默认开，Q4 定案）；
+      // v2–v17 step 保持原样，不得修改。
+      // - 单条 addColumns 零 unsafeExecuteSql、零 UPDATE：isOptional boolean 列对
+      //   既有行回填 null——刻意不用非可选 boolean（会自动回填类型零值 false，
+      //   与「默认开」定案冲突，切片 30 ai_retry_max 回填 0 教训同构），读取层
+      //   归一（parseAiScheduleQueryEnabled：null/非 boolean → true），写路径校验
+      //   （validateAiScheduleQueryEnabled：非 boolean 抛错）；
+      //   与 v15 ai_retry_max 可空列先例一致——不做 SQL 回填，避免字符串拼接转义
+      //   风险，且 LokiJS 适配器（仅测试用）忽略 'sql' 步骤无法单测；
+      // - 列定义与 schema.ts 的 tableSchema 严格一致（漂移会被模式不匹配检测抛错）。
+      toVersion: 18,
+      steps: [
+        addColumns({
+          table: 'app_settings',
+          columns: [{ name: 'ai_schedule_query_enabled', type: 'boolean', isOptional: true }],
         }),
       ],
     },

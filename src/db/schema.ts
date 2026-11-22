@@ -23,8 +23,10 @@ import { appSchema, tableSchema } from '@nozbe/watermelondb';
  * （AGENTS.md §7.44 AI 调试查看器——请求/响应展示开关）。
  * v17（切片 35 阶段 1）：新增 sync_tombstones 表（AGENTS.md §7.47 双向同步
  * WebDAV——行级 LWW + 墓碑删除传播，docs/proposals/slice-35-two-way-sync-webdav.md）。
+ * v18（切片 36 阶段 1）：app_settings 新增 ai_schedule_query_enabled
+ * （AGENTS.md §7.48 AI 日程查询/记忆检索——查询分支总开关，默认开）。
  */
-export const SCHEMA_VERSION = 17;
+export const SCHEMA_VERSION = 18;
 
 export const schema = appSchema({
   version: SCHEMA_VERSION,
@@ -174,6 +176,12 @@ export const schema = appSchema({
     // AI 调试查看器的请求体/响应体展示开关（各自独立控制弹层对应节，双关 = 只看
     // 本轮解析草稿）。非可选 boolean：addColumns 对既有行自动回填类型零值 false
     //（默认关闭，careful_mode/show_ai_usage 同款先例，无需 UPDATE）。
+    // v18（切片 36 阶段 1，AGENTS.md §7.48）：ai_schedule_query_enabled——AI
+    // 日程查询/记忆检索总开关（默认开，Q4 定案）。isOptional boolean：addColumns
+    // 对既有行回填 null 而非类型零值——非可选 boolean 回填 false 与「默认开」
+    // 定案冲突（切片 30 ai_retry_max 教训同构）；读取层归一
+    //（parseAiScheduleQueryEnabled：null/非 boolean → true），写路径校验
+    //（validateAiScheduleQueryEnabled：非 boolean 抛错）。
     tableSchema({
       name: 'app_settings',
       columns: [
@@ -191,6 +199,7 @@ export const schema = appSchema({
         { name: 'flash_deleted_card_display', type: 'string', isOptional: true },
         { name: 'show_ai_request', type: 'boolean' },
         { name: 'show_ai_response', type: 'boolean' },
+        { name: 'ai_schedule_query_enabled', type: 'boolean', isOptional: true },
       ],
     }),
     // 切片 17 阶段 1（AGENTS.md §7.27 渠道配置中心，schema v9）：渠道预设表。

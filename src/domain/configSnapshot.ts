@@ -269,5 +269,15 @@ export function normalizeSnapshotAppSettings(raw: unknown, local: AppSettings): 
         : typeof raw.showAiResponse === 'boolean'
           ? raw.showAiResponse
           : DEFAULT_APP_SETTINGS.showAiResponse,
+    // 切片 36（§7.48）：查询分支总开关同 showAiUsage 增量覆盖语义——缺列保留
+    // 本地，出现则 boolean 写穿（非 boolean 回退默认 true，parse 同款纪律）。
+    // 快照 wire 无 schema 版本约束（isConfigSnapshotWire 整包拒绝 + 条目级宽容），
+    // 旧快照缺该键 → 恢复/同步保留本地值，不静默丢字段。
+    aiScheduleQueryEnabled:
+      raw.aiScheduleQueryEnabled === undefined
+        ? local.aiScheduleQueryEnabled
+        : typeof raw.aiScheduleQueryEnabled === 'boolean'
+          ? raw.aiScheduleQueryEnabled
+          : DEFAULT_APP_SETTINGS.aiScheduleQueryEnabled,
   };
 }

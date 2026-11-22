@@ -11,6 +11,8 @@
 import type { RecurrenceRule } from '../recurrence/types';
 import type { ItemType } from '../item';
 import type { OnceCivilTime, ReminderChannel, ReminderFrequency } from '../reminder';
+import type { AiUsageSnapshot } from './usage';
+import type { AiTurnDebugSnapshot } from './openAiCompatible';
 
 export type ChatRole = 'user' | 'assistant';
 
@@ -168,4 +170,29 @@ export interface ParsedItemDraft {
 /** AI 解析器接口（§7.24 冻结语义）：LocalFallbackProvider 与 OpenAICompatibleProvider 均实现它。 */
 export interface AiParser {
   parse(input: string, context: AiParseContext): Promise<ParsedItemDraft>;
+}
+
+/**
+ * 切片 36（§7.48 / 提案 D4）：查询轮结果。不走 FlashTurnResult——
+ * 无 draft/assistantNote/historyAppend（查询轮不产卡/不落库/不播种
+ * 草稿 JSON；user+assistant 纯文本消息由 UI 层 push，history 照常追加）。
+ */
+export interface ScheduleQueryTurnResult {
+  /** 第二段模型自然语言回答（降级轮为本地行式列表回答）。 */
+  answer: string;
+  /** 检索窗口展示文本（如「2026-11-23 至 2026-11-29」）。 */
+  windowText: string;
+  /** 降级轮 true（无 Key / 第二段失败——D6）。 */
+  degraded: boolean;
+  /** usage 取第二段（成功轮才有，D2 终态=第二段）；降级轮 null（D6）。 */
+  usage: AiUsageSnapshot | null;
+  /**
+   * 已批准解释落点（D2 + 真机矩阵 #2 综合）：第一段（窗口解析轮）
+   * request/response 快照，供调试弹层核验轻 JSON；无 Key 降级轮 null。
+   * 第二段会覆盖 provider.lastDebug（D8 已知行为），本快照在第一段
+   * 完成后即时捕获、不受第二段影响。
+   */
+  debug: AiTurnDebugSnapshot | null;
+  /** 降级披露文案（降级轮必有；无 Key / 摘要失败说明）。 */
+  degradedNotice?: string;
 }

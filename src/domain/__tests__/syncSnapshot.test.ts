@@ -41,6 +41,7 @@ function makeAppSettings(): AppSettings {
     flashDeletedCardDisplay: 'mark',
     showAiRequest: false,
     showAiResponse: false,
+    aiScheduleQueryEnabled: true,
   };
 }
 

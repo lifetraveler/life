@@ -15,16 +15,16 @@ import migrations from '../migrations';
 const CHANNEL_BACKFILL_SQL = 'UPDATE "reminders" SET "channel" = \'system-notification\';';
 
 describe('schema v8（切片 16 阶段 1）', () => {
-  it('SCHEMA_VERSION = 16 且 migrations 链 maxVersion = 16（切片 32 追加 v16 后例行更新）', () => {
-    expect(SCHEMA_VERSION).toBe(17);
-    expect(schema.version).toBe(17);
-    expect(migrations.maxVersion).toBe(17);
+  it('SCHEMA_VERSION = 18 且 migrations 链 maxVersion = 18（切片 36 追加 v18 后例行更新）', () => {
+    expect(SCHEMA_VERSION).toBe(18);
+    expect(schema.version).toBe(18);
+    expect(migrations.maxVersion).toBe(18);
     expect(migrations.minVersion).toBe(1); // 最早 step 是 toVersion 2，minVersion = 2 - 1 = 1
   });
 
-  it('migration 链 toVersion 从 2 连续递增到 16，无跳号（已发布 step 未回改）', () => {
+  it('migration 链 toVersion 从 2 连续递增到 18，无跳号（v2–v17 已发布 step 未回改）', () => {
     const versions = migrations.sortedMigrations.map((entry) => entry.toVersion);
-    expect(versions).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
+    expect(versions).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
   });
 
   it('v8 step：reminders addColumns 三列（once_civil_json / channel / channel_config）', () => {
