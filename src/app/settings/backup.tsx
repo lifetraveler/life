@@ -29,6 +29,16 @@ import {
   parseDataSnapshot,
   serializeDataSnapshot,
 } from '../../domain/dataSnapshot';
+import { SecureSyncDeviceStore } from '../../data/SecureSyncDeviceStore';
+import { mergeSyncSnapshots } from '../../domain/syncMerge';
+import {
+  deviceIdFromSyncFileName,
+  isSyncSnapshotFileName,
+  parseSyncSnapshot,
+  serializeSyncSnapshot,
+  syncSnapshotFileName,
+  type SyncSnapshot,
+} from '../../domain/syncSnapshot';
 import { reminderScheduler } from '../../notifications';
 import { useTheme } from '../../ui/theme';
 import type { ThemeColors } from '../../ui/theme';
@@ -45,9 +55,25 @@ import type { ThemeColors } from '../../ui/theme';
  * 快照列表一次 PROPFIND（CONFIG∪DATA 谓词）取回后按文件名正则拆分两列，
  * 滚动保留各 10 份互不挤占（SnapshotFileNameFilter 参数化）；数据恢复成功后
  * reminderScheduler.reconcile() 显式重排一次（失败不阻断，Alert 内披露）。
+ *
+ * 切片 35 阶段 2（AGENTS.md §7.47）：新增「双向同步」区块——快照交换式：
+ * ①上传本地固定名快照 → ②列对端快照（排除自己）→ ③逐个下载解析（坏快照跳过
+ * 披露）→ ④mergeSyncSnapshots 纯函数合流 → ⑤applySyncMerge 单事务落库 →
+ * ⑥上传合并后快照 → ⑦按对端 exportedAt 最小毫秒裁剪墓碑。连接配置复用
+ * webdav_backup_config_v1；appSettings LWW 基线为内存态（D3 冻结：本次会话内
+ * 比对，首次同步全部对端合格）。仅手动触发，无自动/定时/回前台同步。
  */
 
 const configStore = new SecureWebdavConfigStore();
+const syncDeviceStore = new SecureSyncDeviceStore();
+
+/**
+ * appSettings LWW 的「本地上次同步基准」（切片 35 提案 D3 冻结：内存态，
+ * 本次会话内比对）：首次同步 null = 全部对端快照合格；之后取上次合流上传
+ * 的 exportedAt，防止旧对端快照回滚本地设置。App 重启归零（重启后首轮全部
+ * 合格，多设备按合流顺序自然收敛到最新发布）。
+ */
+let lastMergedUploadExportedAt: string | null = null;
 
 type BusyAction =
   | 'save'
@@ -58,7 +84,9 @@ type BusyAction =
   // 切片 31（§7.43）：数据备份区块动作（与配置备份动作互斥共用 anyBusy）。
   | 'dataBackup'
   | 'dataRestore'
-  | 'dataDelete';
+  | 'dataDelete'
+  // 切片 35（§7.47）：双向同步动作（同 anyBusy 互斥）。
+  | 'sync';
 
 /** WebdavError → 展示文案（kind 标签 + HTTP 状态 + 详情）；其余错误取 message。 */
 function formatWebdavError(err: unknown): string {
@@ -101,6 +129,10 @@ export default function BackupSettingsPage() {
   // 切片 31：数据区块动作错误 + 两次列表共用的列表读取错误（单 PROPFIND，失败两列表同报）。
   const [dataError, setDataError] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
+  // 切片 35（§7.47）：同步区块——本设备标识展示 + 结果披露/错误。
+  const [deviceId, setDeviceId] = useState<string | null>(null);
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   const anyBusy = busy !== null;
 
@@ -144,6 +176,15 @@ export default function BackupSettingsPage() {
           setSnapshots(null);
         }
       })();
+      // 切片 35：本设备标识（SecureStore sync_device_id_v1，读出即复用）。
+      void syncDeviceStore
+        .getOrCreate()
+        .then((id) => {
+          if (active) setDeviceId(id);
+        })
+        .catch(() => {
+          if (active) setDeviceId(null);
+        });
       return () => {
         active = false;
       };
@@ -452,6 +493,95 @@ export default function BackupSettingsPage() {
     ]);
   };
 
+  /**
+   * 双向同步（切片 35 §7.47 D1 六步 + 墓碑裁剪）。任一网络/认证错误中止并披露；
+   * 对端快照解析失败仅跳过披露（不阻塞其余设备合流）。⑤落库成功但⑥上传失败时，
+   * 本地已合流而服务器仍是①的旧快照——下次同步①上传本地（已合流）状态自愈。
+   */
+  const handleSync = async (): Promise<void> => {
+    if (busy !== null) {
+      return;
+    }
+    const stored = await configStore.load();
+    if (stored === null) {
+      setSyncError('请先在上方保存连接配置');
+      return;
+    }
+    setBusy('sync');
+    setSyncError(null);
+    setSyncNotice(null);
+    try {
+      const client = new WebdavClient();
+      const ownDeviceId = await syncDeviceStore.getOrCreate();
+      const ownFileName = syncSnapshotFileName(ownDeviceId);
+
+      // ① 上传本地快照（固定名覆盖写）
+      const localSnapshot = await itemRepository.createSyncSnapshot(ownDeviceId);
+      await client.uploadSyncSnapshot(stored, ownFileName, serializeSyncSnapshot(localSnapshot));
+
+      // ② 列出对端快照（排除自己的 deviceId）
+      const remoteFiles = (await client.listSnapshots(stored, isSyncSnapshotFileName)).filter(
+        (file) => deviceIdFromSyncFileName(file.name) !== ownDeviceId,
+      );
+
+      // ③ 逐个下载解析：下载/网络错误中止；解析失败（坏快照）跳过并披露
+      let skippedPeerSnapshots = 0;
+      const remoteSnapshots: SyncSnapshot[] = [];
+      for (const file of remoteFiles) {
+        const raw = await client.downloadSnapshot(stored, file.name, isSyncSnapshotFileName);
+        try {
+          remoteSnapshots.push(parseSyncSnapshot(raw));
+        } catch {
+          skippedPeerSnapshots += 1;
+        }
+      }
+
+      // ④⑤ 合流 + 落库（applySyncMerge 单事务；appSettings 基线 = D3 内存态）
+      const mergeResult = mergeSyncSnapshots(
+        localSnapshot,
+        remoteSnapshots,
+        localSnapshot.tombstones,
+        { settingsBaselineExportedAt: lastMergedUploadExportedAt },
+      );
+      const applyResult = await itemRepository.applySyncMerge(mergeResult);
+
+      // ⑥ 上传合并后快照（重新组包：含本轮新增墓碑与合流后的行）
+      const mergedSnapshot = await itemRepository.createSyncSnapshot(ownDeviceId);
+      await client.uploadSyncSnapshot(stored, ownFileName, serializeSyncSnapshot(mergedSnapshot));
+      lastMergedUploadExportedAt = mergedSnapshot.exportedAt;
+
+      // ⑦ 墓碑裁剪：仅存在对端快照时，按对端 exportedAt 最小毫秒严格早于裁剪
+      let prunedTombstones = 0;
+      if (remoteSnapshots.length > 0) {
+        const minRemoteMs = Math.min(
+          ...remoteSnapshots.map((snapshot) => Date.parse(snapshot.exportedAt)),
+        );
+        if (Number.isFinite(minRemoteMs)) {
+          prunedTombstones = await itemRepository.pruneSyncTombstones(minRemoteMs);
+        }
+      }
+
+      // 结果披露（D6：合流/冲突/墓碑传播/跳过计数逐项列出）
+      const lines: string[] = [
+        `已与 ${remoteSnapshots.length} 台设备快照合流`,
+        `合流写入 ${applyResult.applied} 项（冲突解决 ${applyResult.conflictsResolved}）`,
+        `墓碑传播删除 ${applyResult.tombstonesPropagation} 项`,
+        `跳过 ${applyResult.skipped} 项`,
+      ];
+      if (skippedPeerSnapshots > 0) {
+        lines.push(`另有 ${skippedPeerSnapshots} 份对端快照解析失败已跳过`);
+      }
+      if (prunedTombstones > 0) {
+        lines.push(`已裁剪 ${prunedTombstones} 条过期墓碑`);
+      }
+      setSyncNotice(lines.join('；') + '。');
+    } catch (err) {
+      setSyncError(`同步失败：${formatWebdavError(err)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.container}>
       <View style={styles.section}>
@@ -581,6 +711,34 @@ export default function BackupSettingsPage() {
           )}
         </Pressable>
         {dataError !== null ? <Text style={styles.errorHint}>{dataError}</Text> : null}
+      </View>
+
+      {/* 切片 35（§7.47）：双向同步区块——快照交换式，仅手动触发。 */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>双向同步</Text>
+        <Text style={styles.hint}>
+          与同一目录下其他设备的快照合流：条目与提醒按修改时间晚者赢，删除经墓碑传播，
+          标签/分类/渠道预设并集合流，设置按最新快照覆盖。快照以固定名覆盖写（不占用
+          备份的 10 份保留）。仅手动触发，不自动同步。
+        </Text>
+        {deviceId !== null ? (
+          <Text style={styles.hint}>本设备标识：{deviceId}</Text>
+        ) : null}
+        <Pressable
+          style={[styles.primaryButton, anyBusy && styles.disabled]}
+          disabled={anyBusy}
+          onPress={() => {
+            void handleSync();
+          }}
+        >
+          {busy === 'sync' ? (
+            <ActivityIndicator color={colors.textOnPrimary} />
+          ) : (
+            <Text style={styles.primaryText}>立即同步</Text>
+          )}
+        </Pressable>
+        {syncNotice !== null ? <Text style={styles.notice}>{syncNotice}</Text> : null}
+        {syncError !== null ? <Text style={styles.errorHint}>{syncError}</Text> : null}
       </View>
 
       <View style={styles.section}>

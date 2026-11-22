@@ -307,6 +307,72 @@ describe('uploadSnapshot（MKCOL → PUT → PROPFIND → 滚动 DELETE 保留 1
   });
 });
 
+describe('uploadSyncSnapshot（切片 35 v0.39，§7.47：固定名覆盖写，无滚动裁剪）', () => {
+  it('MKCOL → PUT 即完成（无 PROPFIND、无 DELETE 裁剪）', async () => {
+    const { client, calls } = makeClient((call) => {
+      const method = methodOf(call);
+      if (method === 'MKCOL') return new Response(null, { status: 201 });
+      if (method === 'PUT') return new Response(null, { status: 201 });
+      throw new Error(`unexpected method ${method}`);
+    });
+    await client.uploadSyncSnapshot(
+      CONFIG,
+      'life-sync-11111111-2222-4333-8444-555555555555.json',
+      '{"version":1,"kind":"sync"}',
+    );
+    expect(calls.map(methodOf)).toEqual(['MKCOL', 'PUT']);
+    expect(calls[1].url).toBe(`${DIR_URL}life-sync-11111111-2222-4333-8444-555555555555.json`);
+    const putHeaders = calls[1].init?.headers as Record<string, string>;
+    expect(putHeaders['Content-Type']).toBe('application/json');
+    expect(calls[1].init?.body).toBe('{"version":1,"kind":"sync"}');
+  });
+
+  it('MKCOL 405（目录已存在）容忍，PUT 继续', async () => {
+    const { client, calls } = makeClient((call) => {
+      const method = methodOf(call);
+      if (method === 'MKCOL') return new Response(null, { status: 405 });
+      if (method === 'PUT') return new Response(null, { status: 204 });
+      throw new Error(`unexpected method ${method}`);
+    });
+    await client.uploadSyncSnapshot(
+      CONFIG,
+      'life-sync-11111111-2222-4333-8444-555555555555.json',
+      '{}',
+    );
+    expect(calls.map(methodOf)).toEqual(['MKCOL', 'PUT']);
+  });
+
+  it('MKCOL 500 → http-status，PUT 不调用；非法文件名 → invalid-response 零网络调用', async () => {
+    const { client, calls } = makeClient((call) => {
+      if (methodOf(call) === 'MKCOL') return new Response(null, { status: 500 });
+      throw new Error('unexpected method');
+    });
+    await expect(
+      client.uploadSyncSnapshot(
+        CONFIG,
+        'life-sync-11111111-2222-4333-8444-555555555555.json',
+        '{}',
+      ),
+    ).rejects.toMatchObject({ kind: 'http-status', status: 500 });
+
+    const { client: client2, calls: calls2 } = makeClient(() => {
+      throw new Error('should not be called');
+    });
+    await expect(
+      client2.uploadSyncSnapshot(CONFIG, 'life-config-20261118-090503.json', '{}'),
+    ).rejects.toMatchObject({ kind: 'invalid-response' });
+    await expect(
+      client2.uploadSyncSnapshot(
+        CONFIG,
+        'life-sync-11111111-2222-4333-8444-55555555555.json',
+        '{}',
+      ),
+    ).rejects.toMatchObject({ kind: 'invalid-response' });
+    expect(calls2).toHaveLength(0);
+    expect(calls).toHaveLength(1);
+  });
+});
+
 describe('downloadSnapshot / deleteSnapshot', () => {
   it('downloadSnapshot：200 返回文本', async () => {
     const { client, calls } = makeClient(
