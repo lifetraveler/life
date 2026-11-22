@@ -15,6 +15,8 @@ import { Alert } from 'react-native';
 import { serializeDataSnapshot, type DataSnapshot } from '../../../domain/dataSnapshot';
 import { isDataSnapshotFileName } from '../../../domain/dataSnapshot';
 import { isConfigSnapshotFileName } from '../../../domain/configSnapshot';
+import { DEFAULT_APP_SETTINGS } from '../../../domain/settings';
+import { isSyncSnapshotFileName, serializeSyncSnapshot, type SyncSnapshot } from '../../../domain/syncSnapshot';
 import BackupSettingsPage from '../backup';
 
 // —— 模块 mock（factory 内建 jest.fn，经 requireMock 取回）——
@@ -29,6 +31,9 @@ jest.mock('../../../data', () => ({
     applyConfigSnapshot: jest.fn(),
     createDataSnapshot: jest.fn(),
     applyDataSnapshot: jest.fn(),
+    createSyncSnapshot: jest.fn(),
+    applySyncMerge: jest.fn(),
+    pruneSyncTombstones: jest.fn(),
   },
 }));
 
@@ -41,6 +46,14 @@ jest.mock('../../../data/SecureWebdavConfigStore', () => {
   };
 });
 
+jest.mock('../../../data/SecureSyncDeviceStore', () => {
+  const getOrCreate = jest.fn();
+  return {
+    __deviceMocks: { getOrCreate },
+    SecureSyncDeviceStore: jest.fn().mockImplementation(() => ({ getOrCreate })),
+  };
+});
+
 jest.mock('../../../data/webdav/WebdavClient', () => {
   const instance = {
     testConnection: jest.fn(),
@@ -48,6 +61,7 @@ jest.mock('../../../data/webdav/WebdavClient', () => {
     uploadSnapshot: jest.fn(),
     downloadSnapshot: jest.fn(),
     deleteSnapshot: jest.fn(),
+    uploadSyncSnapshot: jest.fn(),
   };
   return {
     __clientMocks: instance,
@@ -73,13 +87,19 @@ const clientMocks = jest.requireMock('../../../data/webdav/WebdavClient')
   uploadSnapshot: jest.Mock;
   downloadSnapshot: jest.Mock;
   deleteSnapshot: jest.Mock;
+  uploadSyncSnapshot: jest.Mock;
 };
 const repositoryMocks = jest.requireMock('../../../data').itemRepository as {
   createConfigSnapshot: jest.Mock;
   applyConfigSnapshot: jest.Mock;
   createDataSnapshot: jest.Mock;
   applyDataSnapshot: jest.Mock;
+  createSyncSnapshot: jest.Mock;
+  applySyncMerge: jest.Mock;
+  pruneSyncTombstones: jest.Mock;
 };
+const deviceMocks = jest.requireMock('../../../data/SecureSyncDeviceStore')
+  .__deviceMocks as { getOrCreate: jest.Mock };
 const schedulerMocks = jest.requireMock('../../../notifications').reminderScheduler as {
   reconcile: jest.Mock;
 };
@@ -117,11 +137,19 @@ function makeSnapshot(overrides: Partial<DataSnapshot> = {}): DataSnapshot {
 
 function collectTexts(root: ReactTestInstance): string[] {
   const texts: string[] = [];
-  for (const node of root.findAll(() => true)) {
-    const children = node.props.children;
+  const pushChildren = (children: unknown): void => {
     if (typeof children === 'string' || typeof children === 'number') {
       texts.push(String(children));
+      return;
     }
+    if (Array.isArray(children)) {
+      for (const child of children) {
+        pushChildren(child);
+      }
+    }
+  };
+  for (const node of root.findAll(() => true)) {
+    pushChildren(node.props.children);
   }
   return texts;
 }
@@ -171,6 +199,9 @@ beforeEach(() => {
   for (const fn of Object.values(repositoryMocks)) {
     fn.mockReset();
   }
+  deviceMocks.getOrCreate.mockReset();
+  // useFocusEffect 的 deviceId 加载默认成功（未显式安排时保证 effect 可完成）。
+  deviceMocks.getOrCreate.mockResolvedValue(OWN_DEVICE);
   schedulerMocks.reconcile.mockReset();
   alertMock.mockClear();
 });
@@ -431,3 +462,178 @@ function makeSnapshotItem(): DataSnapshot['items'][number] {
 
 // 编译面：CONFIG/DATA 谓词互斥性在此处显式对齐阶段 1 参数化契约。
 void isConfigSnapshotFileName;
+
+// —— 双向同步区块（切片 35 §7.47 阶段 2）——
+
+const OWN_DEVICE = 'aaaaaaaa-1111-4111-8111-111111111111';
+const PEER_DEVICE = 'bbbbbbbb-2222-4222-8222-222222222222';
+const PEER_FILE = { name: `life-sync-${PEER_DEVICE}.json`, lastModified: new Date('2027-01-01T00:00:00Z') };
+const OWN_FILE = { name: `life-sync-${OWN_DEVICE}.json`, lastModified: new Date('2027-01-01T00:00:00Z') };
+
+function makeSyncSnapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
+  return {
+    version: 1,
+    kind: 'sync',
+    deviceId: PEER_DEVICE,
+    exportedAt: '2027-01-01T00:00:00.000+08:00',
+    appSettings: { ...DEFAULT_APP_SETTINGS },
+    categories: [],
+    items: [],
+    tags: [],
+    reminders: [],
+    channelPresets: [],
+    itemTags: [],
+    tombstones: [],
+    ...overrides,
+  };
+}
+
+describe('双向同步区块（§7.47 阶段 2）', () => {
+  it('渲染「双向同步」区块：标题/固定说明/立即同步/本设备标识', async () => {
+    storeMocks.load.mockResolvedValue(CONFIG);
+    const tree = await renderAndFocus();
+    await flush(6);
+
+    const texts = collectTexts(tree.root);
+    expect(texts).toContain('双向同步');
+    expect(texts).toContain('立即同步');
+    // <Text>本设备标识：{deviceId}</Text> 是复合 children，收集器按子项拆开断言。
+    expect(texts).toContain('本设备标识：');
+    expect(texts).toContain(OWN_DEVICE);
+  });
+
+  it('happy path：①上传本地→②排除自己→③下载解析→⑤落库→⑥上传合并→⑦裁剪；披露四行', async () => {
+    storeMocks.load.mockResolvedValue(CONFIG);
+    const localSnapshot = makeSyncSnapshot({ deviceId: OWN_DEVICE, exportedAt: '2026-06-01T00:00:00.000+08:00' });
+    const mergedSnapshot = makeSyncSnapshot({ deviceId: OWN_DEVICE, exportedAt: '2026-06-01T01:00:00.000+08:00' });
+    repositoryMocks.createSyncSnapshot
+      .mockResolvedValueOnce(localSnapshot)
+      .mockResolvedValueOnce(mergedSnapshot);
+    clientMocks.listSnapshots.mockResolvedValue([OWN_FILE, PEER_FILE]);
+    clientMocks.downloadSnapshot.mockResolvedValue(serializeSyncSnapshot(makeSyncSnapshot()));
+    repositoryMocks.applySyncMerge.mockResolvedValue({ applied: 3, skipped: 1, conflictsResolved: 1, tombstonesPropagation: 2 });
+    repositoryMocks.pruneSyncTombstones.mockResolvedValue(4);
+    const tree = await renderAndFocus();
+    await flush(2);
+
+    const syncButton = findPressableByText(tree.root, '立即同步');
+    expect(syncButton).not.toBeNull();
+    const syncPress = syncButton?.props.onPress as (() => void) | undefined;
+    expect(typeof syncPress).toBe('function');
+    await act(async () => {
+      syncPress?.();
+    });
+    await flush(10);
+
+    // ①⑥ 两次上传同固定名；① 的内容 = 序列化本地快照，⑥ = 序列化合并快照。
+    expect(clientMocks.uploadSyncSnapshot).toHaveBeenCalledTimes(2);
+    const [firstUpload, secondUpload] = clientMocks.uploadSyncSnapshot.mock.calls;
+    expect(firstUpload[1]).toBe(`life-sync-${OWN_DEVICE}.json`);
+    expect(firstUpload[2]).toBe(serializeSyncSnapshot(localSnapshot));
+    expect(secondUpload[2]).toBe(serializeSyncSnapshot(mergedSnapshot));
+    // ② 列表谓词 + 自己被排除：只下载对端文件（初次 loadSnapshots 也调 listSnapshots，取同步那次）。
+    const syncListCall = clientMocks.listSnapshots.mock.calls.at(-1) as unknown[];
+    expect(syncListCall[1]).toBe(isSyncSnapshotFileName);
+    expect(clientMocks.downloadSnapshot).toHaveBeenCalledTimes(1);
+    expect(clientMocks.downloadSnapshot.mock.calls[0][1]).toBe(PEER_FILE.name);
+    // ④ 合流基线：本地 exportedAt（首次同步 null 之后取内存态——此处单测以首次语义直证下传）。
+    expect(repositoryMocks.applySyncMerge).toHaveBeenCalledTimes(1);
+    const mergeArg = repositoryMocks.applySyncMerge.mock.calls[0][0];
+    expect(mergeArg.toUpsertItems).toEqual([]);
+    // ⑦ 裁剪：对端 exportedAt 最小毫秒。
+    expect(repositoryMocks.pruneSyncTombstones).toHaveBeenCalledTimes(1);
+    expect(repositoryMocks.pruneSyncTombstones).toHaveBeenCalledWith(Date.parse('2027-01-01T00:00:00.000+08:00'));
+
+    const texts = collectTexts(tree.root);
+    expect(texts.join(' ')).toContain('已与 1 台设备快照合流');
+    expect(texts.join(' ')).toContain('合流写入 3 项（冲突解决 1）');
+    expect(texts.join(' ')).toContain('墓碑传播删除 2 项');
+    expect(texts.join(' ')).toContain('跳过 1 项');
+    expect(texts.join(' ')).toContain('已裁剪 4 条过期墓碑');
+  });
+
+  it('对端快照解析失败：跳过披露，不调用裁剪（remoteSnapshots 为空）', async () => {
+    storeMocks.load.mockResolvedValue(CONFIG);
+    repositoryMocks.createSyncSnapshot.mockResolvedValue(makeSyncSnapshot({ deviceId: OWN_DEVICE }));
+    clientMocks.listSnapshots.mockResolvedValue([PEER_FILE]);
+    clientMocks.downloadSnapshot.mockResolvedValue('not-a-json');
+    repositoryMocks.applySyncMerge.mockResolvedValue({ applied: 0, skipped: 0, conflictsResolved: 0, tombstonesPropagation: 0 });
+    const tree = await renderAndFocus();
+    await flush(2);
+
+    const syncButton = findPressableByText(tree.root, '立即同步');
+    const syncPress = syncButton?.props.onPress as (() => void) | undefined;
+    await act(async () => {
+      syncPress?.();
+    });
+    await flush(10);
+
+    expect(repositoryMocks.applySyncMerge).toHaveBeenCalledTimes(1);
+    expect(repositoryMocks.pruneSyncTombstones).not.toHaveBeenCalled();
+    const texts = collectTexts(tree.root).join(' ');
+    expect(texts).toContain('已与 0 台设备快照合流');
+    expect(texts).toContain('1 份对端快照解析失败已跳过');
+  });
+
+  it('上传网络错误：syncError 文案，不落库不上传合并快照', async () => {
+    storeMocks.load.mockResolvedValue(CONFIG);
+    repositoryMocks.createSyncSnapshot.mockResolvedValue(makeSyncSnapshot({ deviceId: OWN_DEVICE }));
+    clientMocks.uploadSyncSnapshot.mockRejectedValue(new Error('网络错误：Network request failed'));
+    const tree = await renderAndFocus();
+    await flush(2);
+
+    const syncButton = findPressableByText(tree.root, '立即同步');
+    const syncPress = syncButton?.props.onPress as (() => void) | undefined;
+    await act(async () => {
+      syncPress?.();
+    });
+    await flush(10);
+
+    expect(clientMocks.uploadSyncSnapshot).toHaveBeenCalledTimes(1);
+    expect(repositoryMocks.applySyncMerge).not.toHaveBeenCalled();
+    expect(clientMocks.listSnapshots).toHaveBeenCalledTimes(1); // 仅 focus effect 初次列表，同步未走到列对端。
+    const texts = collectTexts(tree.root).join(' ');
+    expect(texts).toContain('同步失败：网络错误：Network request failed');
+  });
+
+  it('下载网络错误中止：已上传本地快照，但不合流不重传', async () => {
+    storeMocks.load.mockResolvedValue(CONFIG);
+    repositoryMocks.createSyncSnapshot.mockResolvedValue(makeSyncSnapshot({ deviceId: OWN_DEVICE }));
+    clientMocks.uploadSyncSnapshot.mockResolvedValue(undefined);
+    clientMocks.listSnapshots.mockResolvedValue([PEER_FILE]);
+    clientMocks.downloadSnapshot.mockRejectedValue(new Error('认证失败(401)：Bad credentials'));
+    const tree = await renderAndFocus();
+    await flush(2);
+
+    const syncButton = findPressableByText(tree.root, '立即同步');
+    const syncPress = syncButton?.props.onPress as (() => void) | undefined;
+    await act(async () => {
+      syncPress?.();
+    });
+    await flush(10);
+
+    expect(clientMocks.downloadSnapshot).toHaveBeenCalledTimes(1);
+    expect(repositoryMocks.applySyncMerge).not.toHaveBeenCalled();
+    expect(clientMocks.uploadSyncSnapshot).toHaveBeenCalledTimes(1); // 仅①。
+    expect(clientMocks.listSnapshots).toHaveBeenCalledTimes(2); // focus effect 初次列表 + 同步②列对端（③下载才中止）。
+    const texts = collectTexts(tree.root).join(' ');
+    expect(texts).toContain('同步失败：认证失败(401)：Bad credentials');
+  });
+
+  it('未保存连接配置：拦截提示，零仓库/网络调用', async () => {
+    storeMocks.load.mockResolvedValue(null);
+    const tree = await renderAndFocus();
+    await flush(2);
+
+    const syncButton = findPressableByText(tree.root, '立即同步');
+    const syncPress = syncButton?.props.onPress as (() => void) | undefined;
+    await act(async () => {
+      syncPress?.();
+    });
+    await flush(10);
+
+    expect(repositoryMocks.createSyncSnapshot).not.toHaveBeenCalled();
+    expect(clientMocks.uploadSyncSnapshot).not.toHaveBeenCalled();
+    expect(collectTexts(tree.root).join(' ')).toContain('请先在上方保存连接配置');
+  });
+});

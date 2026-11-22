@@ -14,6 +14,7 @@ import ReminderModel from '../../db/models/ReminderModel';
 import CategoryModel from '../../db/models/CategoryModel';
 import AppSettingsModel from '../../db/models/AppSettingsModel';
 import TagModel from '../../db/models/TagModel';
+import SyncTombstoneModel from '../../db/models/SyncTombstoneModel';
 import { schema } from '../../db/schema';
 import { WatermelonItemRepository } from '../WatermelonItemRepository';
 import type { CreateItemInput } from '../../domain/item';
@@ -55,6 +56,7 @@ function makeRepository(): WatermelonItemRepository {
       ReminderModel,
       CategoryModel,
       AppSettingsModel,
+    SyncTombstoneModel,
     ],
   });
   return new WatermelonItemRepository(database);

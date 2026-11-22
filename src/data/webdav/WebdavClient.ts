@@ -12,9 +12,13 @@
  * v0.35（切片 31，§7.43 D6）：快照文件名过滤方法级参数化（SnapshotFileNameFilter，
  * 缺省 isConfigSnapshotFileName 向后兼容）——数据快照 life-data-*.json 独立列表/
  * 上传/下载/删除，滚动保留 10 份与配置快照互不挤占。
+ *
+ * v0.39（切片 35，§7.47）：新增 uploadSyncSnapshot——同步快照固定名覆盖写，
+ * 不走滚动裁剪（固定名文件无时间序，倒序裁剪会误删对端设备快照）。
  */
 
 import { isConfigSnapshotFileName } from '../../domain/configSnapshot';
+import { isSyncSnapshotFileName } from '../../domain/syncSnapshot';
 import { encodeBase64Utf8 } from '../../domain/webdav/base64';
 import type { WebdavConfig } from '../../domain/webdav/config';
 import { WebdavError } from '../../domain/webdav/WebdavError';
@@ -217,6 +221,33 @@ export class WebdavClient {
       }
     }
     return { fileName, prunedCount, pruneFailedNames };
+  }
+
+  /**
+   * 上传同步快照（切片 35 v0.39，§7.47）：每设备固定名 life-sync-<deviceId>.json
+   * 覆盖写——MKCOL（405 容忍 = 目录已存在）→ PUT，**不做滚动裁剪**：固定名文件
+   * 按文件名（uuid）排序无时间语义，uploadSnapshot 的 KEEP_SNAPSHOT_COUNT 倒序
+   * 裁剪会误删对端设备的快照，故本方法不调 listSnapshots、不 DELETE。
+   */
+  async uploadSyncSnapshot(
+    config: WebdavConfig,
+    fileName: string,
+    content: string,
+  ): Promise<void> {
+    if (!isSyncSnapshotFileName(fileName)) {
+      throw new WebdavError('invalid-response', `非法同步快照文件名：${fileName}`);
+    }
+    const mkcol = await this.request(config, { method: 'MKCOL', url: buildWebdavUrl(config) });
+    if (mkcol.status !== 405) {
+      this.requireSuccess(mkcol, '创建目录');
+    }
+    const put = await this.request(config, {
+      method: 'PUT',
+      url: buildWebdavUrl(config, fileName),
+      body: content,
+      contentType: 'application/json',
+    });
+    this.requireSuccess(put, '上传同步快照');
   }
 
   /** 下载快照文本（GET）。文件名先过 fileNameFilter（缺省 CONFIG，防构造任意路径）。 */

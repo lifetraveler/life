@@ -427,3 +427,88 @@ SystemImportResult：
   谓词类型，listSnapshots/uploadSnapshot/downloadSnapshot/deleteSnapshot 方法级
   可选参数缺省 isConfigSnapshotFileName（切片 28 调用面零改动）；数据快照经
   isDataSnapshotFileName 传入，独立列表/裁剪/下载/删除，与配置快照互不挤占。
+
+## 双向同步快照接口（v0.39，切片 35 阶段 1 落地）
+
+> 依据：AGENTS.md §7.47（双向同步 WebDAV）；提案
+> docs/proposals/slice-35-two-way-sync-webdav.md（2026-11-22 三问定案：行级
+> LWW+墓碑 / 集合级 union / 仅手动）。先例为 createDataSnapshot /
+> applyDataSnapshot（切片 31，本文件 v0.35 注记节）的契约外显式扩展成对模式。
+> 既有全部冻结签名零 diff，本节为追加性注记。
+
+### ItemRepository 成对扩展（createSyncSnapshot / applySyncMerge）
+- `createSyncSnapshot(deviceId: string): Promise<SyncSnapshot>`：只读组包
+  （getSettings + getCategories + listItemsWithTags ∪ listArchivedItemsWithTags +
+  listAllReminders + listTags + listChannelPresets + item_tags 直查 +
+  sync_tombstones 全量），返回 `{version: 1, kind: 'sync', deviceId, exportedAt,
+  appSettings, categories, items, tags, reminders, channelPresets, itemTags,
+  tombstones}`。items 全字段 id 保真（含 archived/done 全库）；tags 含 id；
+  reminders 为 v10 语义列 **+ createdAt/updatedAt 两毫秒时间戳**
+  （SyncReminderEntry = DataSnapshotReminder + 两键——LWW 决胜判据；切片 31
+  DataSnapshotReminder 冻结形状不含 updated_at，故 sync wire 条目不复用其形状）；
+  tombstones 投影 `{kind, entityId, deletedAt}`；exportedAt 本地时区 ISO 8601
+  含 ±HH:MM 偏移（formatExportedAt 同款）。
+- `applySyncMerge(result: SyncMergeResult): Promise<SyncMergeApplyResult>`：
+  接收合流纯函数 mergeSyncSnapshots（src/domain/syncMerge.ts）产出的待执行集，
+  单事务落库，返回 `{applied, skipped, conflictsResolved, tombstonesPropagation}`。
+  语义冻结：
+  - **处理序（先删后建）**：toDelete*Ids 直删（缺行静默容错；item 删除级联其
+    reminders 与 joins，不新增墓碑——墓碑仅由三删除方法与 tombstonesToAdd
+    合入产生）→ items 命中 prepareUpdate 11 字段写穿（updatedAt 自动刷新，
+    prepareUpdate 语义零侵入）/ 未命中 prepareCreateFromDirtyRaw（id 与
+    created_at/updated_at 保真）→ reminders（isValidDataSnapshotReminderEntry
+    深层校验失败计 skipped；itemId 防御复核失败计 skipped；命中写穿 v10 语义列
+    且 item_id 不改、调度态两列不写 / 未命中 prepareCreate id 保真，deprecated
+    两列兜底 channel='system-notification' + channel_config=null，落库时间戳为
+    本机时刻）→ channelPresets（assertValidChannelPresetConfig 校验失败计
+    skipped；id 命中本地一律保留计 skipped——preset union 无覆盖；未命中创建 +
+    同 type 单 default 规范化 last-wins，同 applyDataSnapshot）→ tags
+    （normalizeTagName 归一键：本地命中或本轮已建一律保留计 skipped——tag union
+    无覆盖；未命中创建，id 取快照值）→ categories（id 命中保留 / 未命中创建 id
+    保真）→ itemTags（并集增补：本地已有或本轮已发静默去重；itemId/tagId
+    解析失败计 skipped；**不删除本地既有 join**）→ tombstonesToAdd（与本地
+    sync_tombstones 去重后合入，deletedAt 保真，不计 applied）→ appSettings
+    （appliedAppSettings 非 null 时整行 prepareUpdate 14 列写穿——列映射同
+    updateSettings；行缺失 prepareCreate id='global'）。
+  - **LWW 锚定最终写入**：行级冲突由合流层按 wire updatedAt 晚者胜出判定；
+    胜出行经 prepareUpdate 落库时 updated_at 自动刷新为本机合流写入时刻
+    （列 readonly 零侵入）。多设备部分拓扑下（A、B 各自只在部分轮次相遇）
+    以最终写入时刻为准可能与全局 updated_at 最大值存在偏差——已知限制，接受。
+  - **计数口径**：applied = item/reminder 实际写入（覆盖或创建）+ tag/category/
+    preset 创建 + join 创建 + app_settings 块命中计 1（墓碑合入不计 applied）；
+    skipped = 合流层计数 + 仓库层深层校验追加计数；conflictsResolved /
+    tombstonesPropagation 透传合流层计数。UI 披露「已合流 N 项，冲突解决 X 项，
+    删除传播 Y 项，跳过 M 项」。
+  - **事务原子**：单 db.write 事务，事务内全量读八表 → operations 同步收集 →
+    单次 `db.batch(...)`（两遍法）；任一失败整体不落库。
+- `pruneSyncTombstones(minRemoteExportedAtMs: number): Promise<number>`
+  （单方法契约外扩展，filterExistingItemIds 先例）：删除 deleted_at **严格早于**
+  minRemoteExportedAtMs 的墓碑，返回删除数；由调用方（同步编排层）在成功上传
+  合并快照后执行，min 值取全部对端快照 exportedAt 的最小毫秒值；无对端快照时
+  不调用。
+- **三删除方法墓碑副作用（签名与外部行为不变，仅新增注记）**：deleteItem /
+  deleteReminder / deleteChannelPreset 在各自既有的 db.write 事务内、实体销毁后
+  调用私有 helper 于 sync_tombstones 表记录 `{kind, entityId, deletedAt=now}`
+  （同 kind+entity_id 已有墓碑则幂等跳过，不刷新 deleted_at）。deleteItem 级联
+  销毁的 reminders **不**逐条记墓碑（item 墓碑表达整棵子树）。同步链路之外
+  （备份恢复 applyDataSnapshot / 数据导出 / 清库）不产生墓碑。
+- 配套域层：src/domain/syncSnapshot.ts（SyncSnapshot / SyncReminderEntry /
+  SyncTombstoneEntry 形状 + isSyncSnapshotWire 整包守卫（坏 tombstones 元素
+  整包拒绝；items/categories 条目级形状不符由合流层计 skipped）+
+  serializeSyncSnapshot/parseSyncSnapshot（无缩进）+ 文件名正则
+  `^life-sync-[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}\.json$` +
+  syncSnapshotFileName/deviceIdFromSyncFileName）；src/domain/syncMerge.ts
+  （mergeSyncSnapshots(local, remoteSnapshots, localTombstones, options) 纯函数：
+  远端快照按 (exportedAt 升序, deviceId 升序) 排序保证确定性；items/reminders
+  行级 LWW（updatedAt 最大者胜，平局远端 deviceId 字典序最大，与本地平局本地赢）；
+  tags/categories/channelPresets 集合级 union；itemTags 并集增补；appSettings
+  按 exportedAt 会话基线 LWW（SyncMergeOptions.settingsBaselineExportedAt，
+  缺列保留本地经 normalizeSnapshotAppSettings）；墓碑键 `kind:entityId`，
+  tombstonesToAdd = 远端有本地缺的全部）；src/domain/syncDevice.ts
+  （generateDeviceId uuid v4 零依赖 + SyncDeviceStore 端口）+ SecureStore 实现
+  src/data/SecureSyncDeviceStore.ts（键 `sync_device_id_v1`）。
+- WebDAV 客户端配套（切片 31 SnapshotFileNameFilter 模式延续）：同步编排层以
+  isSyncSnapshotFileName 传入 listSnapshots/downloadSnapshot，与
+  kind:'config'/'kind:'data' 快照互不相认；固定名覆盖写上传不使用
+  uploadSnapshot（其内置 10 份滚动裁剪对固定名快照不适用），由编排层专用
+  无裁剪 PUT 路径承担。

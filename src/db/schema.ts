@@ -21,8 +21,10 @@ import { appSchema, tableSchema } from '@nozbe/watermelondb';
  * （AGENTS.md §7.41 AI 重试次数与已删除卡显示配置）。
  * v16（切片 32 阶段 1）：app_settings 新增 show_ai_request / show_ai_response
  * （AGENTS.md §7.44 AI 调试查看器——请求/响应展示开关）。
+ * v17（切片 35 阶段 1）：新增 sync_tombstones 表（AGENTS.md §7.47 双向同步
+ * WebDAV——行级 LWW + 墓碑删除传播，docs/proposals/slice-35-two-way-sync-webdav.md）。
  */
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 
 export const schema = appSchema({
   version: SCHEMA_VERSION,
@@ -214,6 +216,23 @@ export const schema = appSchema({
         { name: 'config_json', type: 'string' },
         { name: 'is_default', type: 'boolean' },
         { name: 'created_at', type: 'number' },
+      ],
+    }),
+    // v17（切片 35 阶段 1，AGENTS.md §7.47）：sync_tombstones——行级 LWW + 墓碑删除传播。
+    // - deleteItem / deleteReminder / deleteChannelPreset 三处删除路径在同一事务内
+    //   追加墓碑行；墓碑随同步快照携带到对端，对方墓碑命中本地行 → 本地删。
+    // - kind 仅 'item' | 'reminder' | 'channel_preset'（Repository 写路径守卫）。
+    // - entity_id 建索引：按 (kind, entity_id) 查存在性去重（同实体多次删除只记一行）。
+    // - deleted_at 为删除时刻毫秒时间戳：同步成功收尾后按对端 exportedAt 最小值裁剪
+    //   （严格早于才删，提案 D2）。
+    // - 无 created_at / updated_at（墓碑非业务实体，无列表排序需求）；行 id 由
+    //   WatermelonDB create 自动生成。
+    tableSchema({
+      name: 'sync_tombstones',
+      columns: [
+        { name: 'kind', type: 'string' },
+        { name: 'entity_id', type: 'string', isIndexed: true },
+        { name: 'deleted_at', type: 'number' },
       ],
     }),
   ],

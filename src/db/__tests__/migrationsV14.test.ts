@@ -28,15 +28,15 @@ afterAll(() => {
 
 describe('schema v14（切片 27 阶段 1）', () => {
   it('SCHEMA_VERSION = 16 且 migrations 链 maxVersion = 16', () => {
-    expect(SCHEMA_VERSION).toBe(16);
-    expect(schema.version).toBe(16);
-    expect(migrations.maxVersion).toBe(16);
+    expect(SCHEMA_VERSION).toBe(17);
+    expect(schema.version).toBe(17);
+    expect(migrations.maxVersion).toBe(17);
     expect(migrations.minVersion).toBe(1); // 最早 step 是 toVersion 2，minVersion = 2 - 1 = 1
   });
 
   it('migration 链 toVersion 从 2 连续递增到 16，无跳号（v2–v15 已发布 step 未回改）', () => {
     const versions = migrations.sortedMigrations.map((entry) => entry.toVersion);
-    expect(versions).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+    expect(versions).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
   });
 
   it('v14 step：唯一 add_columns（app_settings.display_calendar_ids_json，isOptional string），零 unsafeExecuteSql', () => {

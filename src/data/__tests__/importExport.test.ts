@@ -8,6 +8,7 @@ import ReminderModel from '../../db/models/ReminderModel';
 import CategoryModel from '../../db/models/CategoryModel';
 import AppSettingsModel from '../../db/models/AppSettingsModel';
 import TagModel from '../../db/models/TagModel';
+import SyncTombstoneModel from '../../db/models/SyncTombstoneModel';
 import { schema } from '../../db/schema';
 import { WatermelonItemRepository } from '../WatermelonItemRepository';
 
@@ -61,6 +62,7 @@ function makeContext(): TestContext {
       // 切片 14（§7.22）：seedPresetData 需要 categories/app_settings model，未注册则 db.get 返回 null
       CategoryModel,
       AppSettingsModel,
+    SyncTombstoneModel,
     ],
   });
   return {

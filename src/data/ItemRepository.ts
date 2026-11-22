@@ -16,6 +16,11 @@ import type {
   DataSnapshot,
   DataSnapshotApplyResult,
 } from '../domain/dataSnapshot';
+import type {
+  SyncMergeApplyResult,
+  SyncMergeResult,
+} from '../domain/syncMerge';
+import type { SyncSnapshot } from '../domain/syncSnapshot';
 import type { AppSettings } from '../domain/settings';
 import type {
   CreateReminderInput,
@@ -435,4 +440,46 @@ export interface ItemRepository {
    * （失败不阻断仅披露，useFlashChat 保存先例）——本方法不触碰 src/notifications/。
    */
   applyDataSnapshot(snapshot: DataSnapshot): Promise<DataSnapshotApplyResult>;
+
+  // —— 切片 35 阶段 1：双向同步 WebDAV（repository.md v0.39 注记节；契约外显式扩展
+  //    成对 + 单方法裁剪，先例 createDataSnapshot/applyDataSnapshot/filterExistingItemIds；
+  //    AGENTS.md §7.47——设置页「同步」区块的组包（只读）/合流落库（单 writer 事务）/
+  //    墓碑裁剪落点）——
+  /**
+   * 只读组包当前双向同步快照（§7.47 D4）：deviceId 由编排层经 SyncDeviceStore 解析
+   * 后传参（Repository 不触碰 SecureStore）；appSettings 整行 + categories + items
+   * 全库 + tags + reminders（v10 语义列，createDataSnapshot 同口径）+ channelPresets
+   * + itemTags join 全量 + sync_tombstones 全量墓碑。外层 {version:1, kind:'sync',
+   * deviceId, exportedAt}（formatExportedAt 同构）。
+   */
+  createSyncSnapshot(deviceId: string): Promise<SyncSnapshot>;
+  /**
+   * 合流结果落库（§7.47 D1/D2 冻结语义）：输入为 mergeSyncSnapshots 纯函数产物
+   * （确定性、与输入顺序无关）。单 writer 事务原子完成（切片 31 两遍法——事务内
+   * 全量读八表 → operations 同步收集 → 单次 batch），中途失败整体回滚。
+   * 删除先行（墓碑命中行，缺行静默；item 删除级联其 reminders 与 item_tags，
+   * 同 deleteItem 语义，不新增墓碑）；items 命中覆盖 11 业务字段（createdAt 不动、
+   * updatedAt 由 prepareUpdate 自动刷新为合流写入时刻——LWW 锚定最终写入）/未命中
+   * 创建（prepareCreateFromDirtyRaw id/created_at/updated_at 保真）；reminders 深层
+   * 校验（isValidDataSnapshotReminderEntry，失败计 skipped）→ 命中写穿 v10 语义列
+   * （item_id 不改、调度态两列不写）/未命中创建（_raw.id 保真 + deprecated 两列
+   * 兜底）；channelPresets union 创建 + configJson 守卫校验 + 同 type 单 default
+   * 规范化（创建行内 last wins，该 type 本地既有 default 行收敛 false）；tags
+   * union 创建（id 保真、name 写归一后值）；categories union 创建（id 保真）；
+   * itemTags 并集增补（不删本地既有 join）；远端墓碑合入（deleted_at 保真，
+   * 防回流复活）；appSettings 整行覆盖（合流层 normalizeSnapshotAppSettings 已归一，
+   * 缺列保留本地，null = 保留本地）。
+   * 返回 applied（仓库层自数，settings 块命中计 1）/skipped（合流层计数 + 仓库层
+   * 深层校验与防御复核追加）/conflictsResolved（合流层透传：本地行被远端严格
+   * 覆盖次数）/tombstonesPropagation（合流层透传：墓碑命中本地行删除数）。
+   * 落库成功后的 reminderScheduler.reconcile() 由调用方显式执行一次（失败不阻断
+   * 仅披露）——本方法不触碰 src/notifications/。
+   */
+  applySyncMerge(result: SyncMergeResult): Promise<SyncMergeApplyResult>;
+  /**
+   * 墓碑裁剪（§7.47 D5）：删除 deleted_at 严格早于 minRemoteExportedAtMs 的墓碑
+   * （min = 全部对端快照 exportedAt 最小毫秒；编排层在上传合并后快照成功后调用，
+   * 无对端快照不调用）。返回裁剪行数；无命中返回 0 不写库。
+   */
+  pruneSyncTombstones(minRemoteExportedAtMs: number): Promise<number>;
 }

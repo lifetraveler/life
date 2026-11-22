@@ -29,6 +29,8 @@ import type {
   VisualPatch,
 } from '../../data/ItemRepository';
 import type { ImportedItemInput } from '../../domain/item';
+import type { SyncMergeApplyResult, SyncMergeResult } from '../../domain/syncMerge';
+import type { SyncSnapshot } from '../../domain/syncSnapshot';
 import type {
   ChannelPreset,
   CreateChannelPresetInput,
@@ -227,6 +229,19 @@ class FakeRepository implements ItemRepository {
 
   async applyDataSnapshot(_snapshot: DataSnapshot): Promise<DataSnapshotApplyResult> {
     throw new Error('FakeRepository.applyDataSnapshot: 调度器测试不触达数据备份');
+  }
+
+  // 切片 35 阶段 1（§7.47）：调度器不触达，stub 仅满足接口编译（§7.13 夹具）。
+  async createSyncSnapshot(_deviceId: string): Promise<SyncSnapshot> {
+    throw new Error('FakeRepository.createSyncSnapshot: 调度器测试不触达双向同步');
+  }
+
+  async applySyncMerge(_result: SyncMergeResult): Promise<SyncMergeApplyResult> {
+    throw new Error('FakeRepository.applySyncMerge: 调度器测试不触达双向同步');
+  }
+
+  async pruneSyncTombstones(_minRemoteExportedAtMs: number): Promise<number> {
+    throw new Error('FakeRepository.pruneSyncTombstones: 调度器测试不触达双向同步');
   }
 
   async listEnabledReminders(): Promise<Reminder[]> {

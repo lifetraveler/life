@@ -392,5 +392,24 @@ export default schemaMigrations({
         }),
       ],
     },
+    {
+      // 切片 35 阶段 1（AGENTS.md §7.47 双向同步 WebDAV）：v17 新增 sync_tombstones
+      // 表（行级 LWW + 墓碑删除传播，docs/proposals/slice-35-two-way-sync-webdav.md）；
+      // v2–v16 step 保持原样，不得修改。
+      // - 单条 createTable，零 unsafeExecuteSql、零 UPDATE：全新表无既有行回填问题；
+      // - 列定义与 schema.ts 的 tableSchema 严格一致（漂移会被模式不匹配检测抛错）；
+      //   v9 channel_presets createTable 先例。
+      toVersion: 17,
+      steps: [
+        createTable({
+          name: 'sync_tombstones',
+          columns: [
+            { name: 'kind', type: 'string' },
+            { name: 'entity_id', type: 'string', isIndexed: true },
+            { name: 'deleted_at', type: 'number' },
+          ],
+        }),
+      ],
+    },
   ],
 });
