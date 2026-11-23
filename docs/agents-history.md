@@ -1,0 +1,483 @@
+# AGENTS.md 历史条款存档（v0.40 快照）
+
+> 本文件存档 AGENTS.md v0.41 精简前的历史条款原文（§7.15–§7.47 全节与 §8 逐片明细）。
+> 精简版正文只保留冻结要点+指针；完整语义以本存档为准，实现细节另见各
+> `tasks/slice-NN-closeout.md` 与 `docs/proposals/*.md`。按节标题检索。
+
+---
+
+### 7.15 系统日历来源契约（v0.9，切片 9 冻结）
+- sourceType 扩展为 'local' | 'ics' | 'system-calendar'。
+- 系统日历导入项：sourceReadOnly=true；sourceUid 优先使用 expo-calendar 返回的 event.id；
+  若 event.id 为空或不稳定，使用 (calendarId|title|startAt|endAt) 的 SHA-256 前 16 位作为 sourceUid，
+  并在导入结果页标注“基于内容去重，系统事件修改后可能产生重复”。
+- 系统日历导入不写回系统日历，不调用任何系统日历写入 API（无 createEvent/updateEvent/deleteEvent
+  等写回调用路径）。读取权限经 expo-calendar 申请：该库 Android 读取路径（requestCalendarPermissionsAsync）
+  实现为单一系统弹窗同时请求 READ_CALENDAR 与 WRITE_CALENDAR，且要求两者均授予才放行读取
+  （expo-calendar 15.0.8 库实现所限，切片 9 方案 A 如实记录）；本应用自身不实现系统日历写入
+  功能，除该库读取 API 附带的权限请求外不请求任何日历权限。
+- allDay 归一化沿用切片 8 的 normalizeAllDayTimestamps；时区伪影（getDeviceTzid 返回 UTC）
+  不在本切片修复，接受 UTC 坐标系下自洽。
+
+### 7.17 可靠性切片闸门（v0.11）
+- 切片 11 涉及两处冻结区变更：`src/polyfill.ts` 的时区来源、`src/notifications/` 的
+  reconcile 策略。
+- 开工顺序固定：先写变更提案（docs/proposals/slice-11-reliability.md），
+  列出影响范围、回滚方案、旧数据兼容路径，用户确认后再改实现。
+- 提案未确认前，不得修改 ReminderScheduler / reconcileDiff / computeMissed /
+  polyfill 四个实现文件；可以先写测试与纯函数草案，但不得合入。
+- 两处变更必须分两次提交：先时区、后通知。不得混在一个 commit 里，便于独立回滚。
+
+### 7.18 搜索与数据导出约束（v0.12）
+- WatermelonDB 不引入 FTS5；搜索继续保持 LIKE 语义（切片 3 契约不变）。
+  搜索增强只做 UI 层与查询范围扩展，不改变匹配方式。
+- 数据导出复用切片 8 的 expo-file-system + expo-sharing 基础设施；
+  不新增原生依赖，不修改 package.json 的 native 依赖。
+- 快速记录增强不修改 quick-add 路由的 deep link 约定（`life://quick-add`），
+  只增加输入后行为（如保存后留在输入框、支持连续创建）。
+- （v0.14 阶段 5 注记，tasks/slice-14）内嵌录入框移除后，quick-add 落点改为
+  全屏新建页 `item/new`；上条「输入后行为」条款随之失效，deep link 约定不变，
+  详见 docs/contracts/ui.md「快速记录落点（v0.14，切片 14 阶段 5）」。
+
+### 7.20 鸿蒙评估切片（v0.13）
+- 切片 13 为纯文档评估，不修改任何源码、不升级 SDK、不引入鸿蒙依赖。
+- 产出报告：docs/proposals/harmony-assessment.md。
+- 评估结论将决定后续是否投入资源做鸿蒙原生适配。
+
+### 7.21 UI 视图架构与筛选（v0.14）
+- 首页支持切换视图：日程（Agenda，图3风格）、周（今日起 7 天滑动窗口）、月（富月历）、日（单日时间轴）。
+  切片 14 阶段 5b 起收敛为 4 视图，「今日」视图选项移除（/today、/week 独立页面契约不变）。
+- 视图内必须按日期分组（如“周五 6”、“周六 7”）。
+- 筛选面板支持按“分类（Category）”、“日历源（sourceType）”、“标签（Tag）”、“状态”进行多选过滤，并承载视图切换（点选即时生效）。
+- 小组件展示信息需包含：分类颜色点、具体时间。
+
+### 7.22 Item、Category、Tag 扩展字段及 schema v6（v0.14）
+schema 版本 5→6，新增/修改如下：
+1. `items` 表：
+   - 新增 `categoryId: string | null`（关联 categories 表，默认 'other'）
+   - 新增 `priority: number`（默认 0；0=无，1=低，2=中，3=高）
+   - **注意**：Item 本身不再有 color 字段，颜色统一由 Category 提供。
+2. `categories` 表（新增）：
+   - `id: string`（主键，预置：'work', 'personal', 'study', 'health', 'other'）
+   - `name: string`（分类名称）
+   - `color: string | null`（分类颜色）
+   - `emoji: string | null`（分类图标）
+   - `priority: number`（展示排序权重）
+3. `tags` 表：
+   - 新增 `color: string | null`
+   - 新增 `emoji: string | null`
+4. 新增 `app_settings` 表（单行，id 固定为 'global'）：
+   - `tagDisplayMode: 'text' | 'emoji' | 'both'`（默认 'text'）
+- 必须提供 migration v5→v6：新增表和字段，并插入预置分类数据。严禁重建表或清库。
+
+### 7.23 关系水合与模型查询（v0.14）
+- `WatermelonItemRepository` 的查询必须水合（Hydrate）关联的 Category 和 Tags。
+- 领域对象扩展为 `ItemWithRelations = Item & { tags: Tag[], category: Category | null }`。
+- 视图和 UI 层只消费 `ItemWithRelations`，不得在 UI 层自己去查 Category 或 Tag 表。
+
+### 7.24 AI 解析层与 Provider 架构（v0.15）
+- 闪电添加（AI 解析）的接口必须抽象为 `AiParser`。
+- 架构必须支持：用户自定义 API Key（兼容 OpenAI/DeepSeek 等），并为未来的官方代理服务预留 Provider。
+- 降级机制：当无 Key 或断网时，必须触发 `LocalFallbackProvider`，仅用本地正则提取基础时间（如“明天”、“下午3点”）。
+- 安全隐私：API Key 必须存储在 `expo-secure-store` 中，严禁明文写入 WatermelonDB。
+- 结构约束：AI 返回的 JSON 必须经过严格的类型守卫（如手写 `isParsedItemDraft` 或使用 Zod）校验，通过后才允许转成内部模型，严禁直接 `as` 强转。
+
+### 7.25 闪电添加 UI 交互（v0.15）
+- 路由挂载在 `src/app/(tabs)/flash.tsx`（即点击底部闪电 Tab）。
+- 交互模式：Chat UI + 结构化卡片。
+- 用户输入自然语言后，AI 返回一张“预览卡片”（展示标题、时间、分类、标签等）。
+- 用户可直接点击卡片修改字段，或在底部输入框继续对话纠正（如“改成明天”），AI 更新卡片。
+- 点击“确认保存”后，才调用 `Repository.createItem` 及 `createReminder` 落库。
+
+### 7.26 提醒能力升级（一次性 + 多渠道）（v0.16）
+- 遵循变更提案 `docs/proposals/slice-16-reminder-channels.md`。
+- **模型扩展**：Reminder 新增 `once` 频率，时间存为 `once_civil_json`（单列 JSON，存 `{year,month,day,hour,minute}`）。
+- **渠道扩展**：Reminder 新增 `channel` (system-notification / alarm / webhook / apprise) 和 `channel_config` (JSON 字符串)。
+- **冻结区解禁**：本切片经用户授权，允许修改 `src/notifications/` 实现文件，以支持渠道抽象（ReminderChannel 接口）。
+- **渠道实现约束**：
+  1. 闹钟渠道：采用 expo-notifications 的高优先级全屏通知模拟，不引入原生 Schedule Exact Alarm 模块。
+  2. Webhook/Apprise 渠道：前台直接 fetch，不引入后台常驻任务。UI 必须注明“仅 App 存活时保证推送”。
+  3. 若开启多渠道，本地系统通知和网络推送可同时触发（互不干扰）。
+
+### 7.27 提醒渠道配置中心（v0.17）
+- 允许将 Webhook/Apprise 的常用配置抽取到全局（`app_settings` 或新表 `channel_presets`），在详情页只做选择，不强迫用户每次输入长 URL。
+- Webhook 载荷适配：支持模板配置，允许适配如 Zulip、企业微信、钉钉等特定格式（在 JSON 外包装特定的 key，或支持纯文本 POST）。
+
+### 7.28 交互打磨与导入预览（v0.17）
+- **once 时间录入**：废弃手输格式，必须使用日期/时间 Picker，且提供“+10分钟/+1小时”等快捷 Chips，确保生成的 `{year,month,day,hour,minute}` 必定合法（拦截 02-30）。
+- **导入预览**：ICS 和系统日历导入时必须先进入预览页，展示解析结果，默认勾选新增项，确认后才落库。
+
+### 7.29 多渠道并行与偏好设置（v0.18）
+- **多渠道同开**：一个 Reminder 可同时配置多个通知渠道（如既发系统通知，又发 Webhook）。Reminder 模型升级为 `channels: string[]` 和 `channel_configs: Record<string, string>`（或等价结构）。需经变更提案确认。
+- **Chips 增量持久化**：onceAt 的快捷增量（默认 +10m/+1h）允许用户在 App 设置中修改，存入 `app_settings`。
+- **渠道预设默认值**：`channel_presets` 表增加 `is_default` 字段，详情页表单默认选中默认预设。
+- **Schema v10 迁移**：完成上述模型变更，旧数据平滑升级（单渠道转多渠道路径兼容）。
+
+### 7.30 延迟提醒意图与默认渠道（v0.19）
+- **延迟提醒（Delay Reminder）**：AI 解析层与本地降级层必须支持 `reminderDelayMinutes`（相对当前时刻 X 分钟后提醒）。Prompt 中必须给出该字段的明确示例与边界。落库时若存在该字段且 `recurrence` 为空，直接以 `now + delay` 为触发时刻创建 once 提醒（无需 startAt）。
+- **默认渠道偏好**：`app_settings` 新增 `default_channels_json`（JSON 数组，默认 `["system-notification"]`）。必须遵守 expo 家族互斥校验。
+- **Chip 临时编辑**：once 表单的长按快捷 Chip，允许临时修改增量值，仅本次生效，不持久化覆盖全局设置。
+- **Schema v11**：完成 `app_settings` 的 addColumns 迁移，旧数据默认回退。
+
+### 7.31 网络渠道后台可靠性（v0.20）
+- 遵循提案 `docs/proposals/slice-20-network-channel-reliability.md`。
+- **电池优化白名单**：在 Android 上，允许用户申请忽略电池优化，以保障网络渠道（Webhook/Apprise）的 `setTimeout` 定时器在后台存活。
+- **原生配置**：在 AndroidManifest 中声明 `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` 权限。
+- **UI 引导**：在“我的 -> 设置”页面增加“后台运行权限”入口，展示当前白名单状态，并提供一键跳转系统设置或直接唤起系统弹窗的能力。
+- **约束**：本切片仅解决“系统由于省电策略杀进程”的问题，不引入 WorkManager 或前台服务（Foreground Service），不改变“App 进程存活则保证送达”的核心边界。
+
+### 7.32 界面体验修补（v0.21）
+- **Safe Area**：所有通过 Tab 挂载的页面（特别是 `flash.tsx` 聊天页），顶部必须使用 `useSafeAreaInsets()` 增加 padding，避免被系统状态栏遮挡。
+- **高分屏响应**：包含横向多选项的 Chip 容器（如提醒渠道），必须使用 `flexWrap` 和自适应宽度，禁止强行使用 `flex: 1` 导致文字折行或截断。
+- **空态引导**：日程视图（Agenda）在“今天”无数据时，必须展示空态卡与“快速安排”按钮，并打通 deep link 跳转。
+  （v0.21 注记，切片 21 修补：按钮移除——右下角 FAB 已是常驻新建入口，空态卡仅保留文案提示；FAB 长按跳转闪电录入 tab，短按仍新建条目 /item/new）
+- **网络渠道防重发**：在并发补发和 reconcile 时，必须增加 in-flight 状态防重，避免同一 occurrenceKey 发生双发。
+
+### 7.33 阶段反馈总结文件惯例（v0.22 成文，v0.23 修订适用时机）
+- **定位**：阶段反馈总结文件（`tasks/slice-NN-phaseM-feedback.md`，沿 slice-14 phase1–5 / slice-16 phase1–2 / slice-17 phase1 / slice-21 phase1 惯例；无 fallback 变体命名）用于**切片不是一口气做完**的场合——在暂停点移交状态，供下一会话/下一阶段接续。按完成节奏三选一：
+  1. 切片**全部阶段一次连续完成** → **不写**阶段反馈文件，成果直接在 closeout 总结（阶段粒度内容由 closeout 交付清单/代码地图承载）；
+  2. **一次连续完成了部分阶段（两个及以上）后暂停** → 写**一份**阶段反馈文件覆盖这批阶段，头部明确记录「完成了哪几个阶段」（如 Phase 2–3 / 共 4），并逐阶段给出提交 hash 与验收结果；
+  3. **单个阶段完成后暂停等待下一阶段** → 按阶段写 phaseM-feedback。
+- 结构（多阶段合并时按阶段分小节，各小节内容对应该阶段）：
+  1. 头部：日期、阶段范围（Phase M[-K] / 共 N + 一句话）、分支（基点 main @ hash）、各阶段提交（hash + 文件数/增删行 + 一句话）、状态（完成/暂停等待下一阶段 + 遗留项）；
+  2. 成果定性表：tsc、jest（套件/用例数，含基线对照）、expo-doctor（对照预存基线失败）、真机/模拟器验收、（如已交付）APK 版本号；
+  3. 范围落点表：文件 → 修补 → 解决的问题；
+  4. 关键设计落点（后续阶段/切片的消费面）；
+  5. 真机验收清单 + 装真机核对点（如适用）；
+  6. 教训索引（指向 closeout 对应小节，不整段复制）。
+- 真机反馈修补若发生在阶段之间，在所属 UI/功能阶段的总结里记录演化（如 slice-21-phase1）。
+- 提交纪律：反馈文件必须纳入 git 提交（阶段提交，或收尾时 docs(sNN) 补充提交），不得只留在会话里；写了的反馈文件在切片收尾时在 closeout §0 交付清单引用；收尾前按适用时机核对——该写的没写要补齐，「全部阶段一口气完成」的确认 closeout 已完整承载阶段粒度内容。
+- 版本：v0.22 成文；v0.23 按 2026-11-15 用户澄清修订适用时机（一口气全完成 → closeout 即可；一次完成多个阶段 → 一份反馈文件记录完成的阶段集合；阶段反馈本质是「未做完切片」的暂停移交）。
+
+### 7.34 闪电录入结果卡片化与快捷操作（v0.24）
+- **消息类型扩展**：闪电录入的 Chat 消息列表中，成功保存后的 AI 回复不再使用纯文本，而是新增 `kind: 'card'` 类型的消息载荷。该载荷应包含展示所需的快照数据（如 Item 摘要、分类色、时间、提醒）。
+- **卡片内容**：必须展示分类色条（含 Emoji）、标题、日期行（含具体时间）、提醒行（若配置了提醒）。
+- **点击去向**：点击卡片主体，导航至该条目的详情页（`item/[id]`）。
+- **快捷延迟操作**：若条目包含具体时间（非 allDay，非无时间待办），卡片底部展示「+15分钟」和「+1小时」快捷 Chips。
+- **联动更新规则**：点击快捷推迟后，不仅更新 Item 的 `startAt`，如果该 Item 绑定了 `once` 类型的提醒，**必须同步顺延该提醒的 `onceAt`**。
+- **约束**：本切片只做 UI 状态机和数据更新，不得触碰 `src/notifications/` 底层的调度与投递逻辑；无需新增第三方 UI 依赖。
+
+### 7.35 AI 澄清与渠道智能推荐（v0.25）
+- **强提醒场景识别**：AI 解析（远端 Prompt + 本地正则）必须识别“起床、吃药、开会、抢购”等需要强提醒的场景。若用户未明确指定提前量或渠道，应自动使用 `alarm`（闹钟）渠道。普通提醒不携带渠道字段，落库渠道走全局默认渠道（§7.30 不变）。
+- **主动澄清（Clarification）**：若用户输入包含动作但缺失关键属性且无其他可推断语义（如“提醒我吃药”没有时间），AI 不应急于落库。Chat 消息需支持返回一个 `clarification` 状态，展示提示文本并允许用户直接快速回复补充。带完整时刻的叫醒类输入（如“明天上午8点叫我”）不反问：默认事由起床、直接出卡（v0.25 切片 23 修订，原「缺事由即澄清」示例废止）。
+- **远端编辑意图**：远端 AI 路径必须支持上下文编辑（如“把刚才那个改成7点半”）。Prompt 中需明确告知 AI 如何处理 `history` 中的上一张卡片状态。
+- **本地解析边界**：本地降级解析层必须补全“叫我起床 / 响铃”等关键词，并默认生成 `once` 提醒 + `alarm` 渠道。
+
+### 7.36 主题与视觉规范（v0.26）
+- **夜间模式**：新建 `src/ui/theme.ts` 定义全局颜色 Token（背景、卡片、主/次要文字、边框、危险色）。所有页面和组件必须使用 Token 或 `useColorScheme()` 适配深浅色，禁止硬编码十六进制颜色。
+- **全局 UI 一致性**：输入框、按钮、弹窗在深色模式下必须有足够的对比度。StatusBar 需跟随主题动态切换。
+- **遗留修复**：修复 FlashPreviewCard 时间行的日期重复问题；修复 AI 上下文合并时，非修改意图的新输入不应携带上一轮的 Tags。
+
+### 7.37 闪电录入认真模式（v0.27）
+- **开关与存储**：app_settings 新增 `careful_mode`（boolean，默认 false = 默认模式），
+  schema v11→v12 addColumns 迁移（旧数据回退 false，行为与切片 24 一致）。设置页
+  （profile.tsx AI 配置区块）提供开关，即时生效、重启保持。
+- **拦截范围冻结**：认真模式仅拦截「编辑意图导致 title 或 content 变化」的轮次；
+  时间/提醒/渠道/标签等字段修改与全新建卡不拦，按默认模式直接处理。
+  默认模式（careful_mode=false）行为与切片 24 完全一致。
+- **交互形态**：拦截轮不出新卡、草稿保持旧状态，Chat 追加 `kind: 'confirm'` 确认消息
+  （含拟改字段摘要与新值）+ 快捷选项（应用修改/放弃修改）；title 与 content 同轮双改
+  合并为一条确认消息。选项点击**本地处理，不发起 AI 轮次**；待确认期间任何新输入
+  取消待确认状态，按普通轮处理。
+- **实现边界**：守卫在 useFlashChat 层（对比上一张展示中卡片与本轮解析结果），
+  不修改 AiParser.parse 冻结签名，ai.md 契约零改动。
+- **域规则（切片 25 成文）**：标题保护仅适用于编辑词轮与澄清续答轮（与 inheritTags
+  同谓词）；全新意图不复用上一张卡的标题（修复切片 23/24 误留旧标题缺陷），
+  远端 prompt 同语义注记。
+
+### 7.38 AI 透明度（v0.28）
+- **提示词查看**：设置页提供只读界面展示 `AI_SYSTEM_PROMPT` 静态规则串
+  （src/domain/ai/prompt.ts）；动态拼接部分（当前时间事实、多轮上下文摘要）
+  不展示，页面需注明。只读，不提供编辑/复制/导出。
+- **用量展示**：app_settings 新增 `show_ai_usage`（boolean，默认 false = 不显示），
+  schema v12→v13 addColumns 迁移（旧数据回退 false）。开启后远端解析轮在 AI
+  回复消息尾追加一行用量摘要（输入/输出 tokens、缓存命中数、按配置单价的估算
+  费用，段缺失自动省略）；本地降级轮无 usage 不展示。
+- **usage 传输边界（冻结）**：usage 取自 chat-completions 信封（非模型 JSON），
+  经 provider 实例 `lastUsage` 副通道暴露、`FlashTurnResult` 域内字段携带到 hook；
+  **不进入 ParsedItemDraft、不进入 history JSON、不触碰 RemoteDraftWire/
+  isRemoteDraftWire**。AiParser.parse 冻结签名与返回类型不变；ai.md 仅在变更
+  记录追加非破坏性条目，契约正文零改动。
+- **单价配置**：AiProviderConfig 新增可选 `priceInputPerMillion` /
+  `priceOutputPerMillion`（正数有效，留空不估算）；估算为全价上界（不区分缓存
+  命中折扣），不做币种换算。开关与单价即时生效（每轮重读），重启保持。
+- **平台预设与峰谷分层（v0.29 注记，切片 26 阶段 2b，提案
+  docs/proposals/slice-26-ai-config-enhancement.md 已确认）**：AiProviderConfig
+  新增可选 `platform`（deepseek / volcano / bailian / xiaomi / custom，集合外
+  丢弃为 undefined 等价 custom，不整包拒绝）与 DeepSeek 峰谷分层六价字段；
+  `AI_PLATFORM_PRESETS` 预设表供设置页预填 BaseURL/Model（零新依赖 chips）。
+  platform === 'deepseek' 时估算走 `isPeakBeijing`（北京时间周一至周五
+  9:00–12:00、14:00–18:00 高峰）+ `readAiUsageSnapshotTiered`（输入段拆缓存
+  命中/未命中，逐段取价，非零段缺价只出 token 段；cached 缺省全按未命中价）；
+  其余平台维持全价上界两价。**已知限制**：法定节假日不做识别（节假日工作
+  时段按高峰计，误差方向为高估），记 backlog 待定候选。usage 行格式与
+  v0.20 传输边界冻结条款不变。
+- **每平台独立配置槽（v0.30 注记，切片 26 阶段 2c）**：AiConfig 扩展为槽
+  模型——`slots: Record<AiPlatform, AiProviderConfig | null>`（每平台独立
+  保存 BaseURL/API Key/Model/单价）+ `activePlatform`（使用中平台）；
+  `active` 恒等于 `slots[activePlatform]`（isAiConfig 归一化按槽重算）。
+  v1 旧 JSON 读取时按 platform 归槽零迁移，写回即 v2。UI 交互「保存即激活」：
+  平台 chips 点选仅切换编辑视图（空槽按预设初始化、未保存编辑丢弃不提示），
+  「保存配置」写入当前编辑平台槽并切换「使用中」徽标。闪电录入消费面
+  （config.active）不变。
+
+### 7.39 系统日历 live 直读显示（v0.31）
+- **方案与范围**：Toki 式 live 直读（方案 C，调研报告
+  docs/proposals/system-calendar-display-writeback-assessment.md）：选中系统日历的
+  事件实时合并进视图渲染，**不落库**。四视图全做（agenda/week/month/day，用户
+  2026-11-17 决策 Q1）。
+- **开关与存储**：app_settings 新增 `display_calendar_ids_json`（JSON 字符串数组，
+  isOptional，空/缺省 = 功能关闭），schema v13→v14 addColumns 迁移（旧数据回退空）。
+  日历多选入口为计划页筛选面板内「日历显示」区（按账户分组 + 色点 + 显隐开关，
+  2026-11-17 用户决策：取消独立设置页，不新建 /settings/calendar-display，profile
+  不加 navRow；权限拒绝态与固定说明文案均在面板区底）；SystemCalendarReader
+  .getCalendars 扩 color/sourceName（端口契约外显式扩展，observeItemsWithTags
+  先例）；UI 容忍 color/sourceName 为 null。
+- **数据流与边界（冻结）**：UI live hook 复用 SystemCalendarReader.getEvents +
+  filterEventsInRange（expandReaderWindow 窗口外扩沿用）；刷新 = 窗口变化防抖 +
+  AppState 回前台 + useFocusEffect，不做后台轮询。live 事件经合成视图条目在
+  「filterItems 之后、分组/布局之前」并入（筛选谓词与分组逻辑零改动），渲染带
+  日历色条 + 只读徽标 + sourceName，点击只读弹层（不提供编辑）。
+  **live 事件不落库、不参与提醒调度/搜索/筛选谓词/小组件快照/闪电录入/ICS 与
+  数据导出；不调用任何系统日历写入 API（§7.15 冻结语义不变）**。
+- **重叠去重**：live 事件隐藏 ⟺ 存在 sourceType='system-calendar' 的已导入项
+  sourceUid 相同且 startAt 相同（单事件精确命中；重复系列只命中被导入的首实例，
+  其余实例正常显示）；sourceUid 复用 resolveSystemEventSourceUid（Q2 自动去重
+  + 提示）。筛选面板日历区固定说明「已导入过的日历同时显示可能重复」（sourceUid
+  不含 calendarId，不做逐日历静态判导入状态）。
+- **写回（D1）不做**：如立项须独立变更提案修订 §7.15「不写回」与 repository.md
+  「不调用任何写入系统日历的 API」冻结语义，独立切片；weekdays 多选日重复的
+  Android 降级策略备查决策 = 跳过并在 UI 提示（用户 2026-11-17，Q4）。
+- **L10 并入复核**：重复系列导入疑缺陷（所有实例共享 event.id → 只落首实例）
+  在本切片阶段 3 真机复核定性；修复若涉去重键语义变更另立变更提案。
+
+### 7.40 闪电录入对话能力强化（v0.32）
+- **口语纠正短句（prompt 成文）**：AI_SYSTEM_PROMPT 多轮节明确——history/摘要块
+  存在时，**不含新事由名词**的短纠正句（仅时间/属性修正 + 「还是/就/吧」等语气
+  结构）默认视为对上一张卡的编辑（以摘要为基准修正被提及字段、其余照抄，禁止
+  新建）；含新事由名词的短句（如「明天开会」）仍为全新意图照常新建（反向边界
+  同步修订，防误伤）。
+- **本地兜底否决**：本地降级不做编辑意图兜底改写（「还是30分钟后吧」在本地无
+  可执行变更——无「改成」动词不进窄规则、无提醒尾缀不产 delay 槽；窄规则扩展
+  需新增相对 ±Δ 分钟解析路径），远端 prompt 为主路径；editIntent.ts 窄规则
+  不扩展，「推迟」类输入在本地按既有边界走原解析。
+- **推迟语义（prompt 成文）**：「推迟/延后 X 分钟」＝以上一张卡摘要当前时间为
+  基准平移 ±X；「X 分钟后」＝以当前说话时刻为基准（reminderDelayMinutes 语义
+  不变）；两种表达可同现，互不覆盖；推迟/延后类修正只调整时间字段，禁止把
+  「推迟 X 分钟」这类原文写入 title/content（真机缺陷加固）。
+- **保存后 history 播种（真机验收修订，用户 2026-11-17 批准）**：真机验收发现
+  handleConfirmSave 保存后 `historyRef.current = []` 清空上下文 → 下一轮无摘要
+  块、短纠正句/推迟语义条款结构性失活（验收 1/5 post-save 必失败）。修订为
+  保存时播种本次保存草稿 JSON（切片 15 assistant 条目格式）替代清空：摘要块
+  保存后仍存在、条款继续生效；仍不携带更早对话（「每存一张=新对话」设计不变）。
+- **历史结果卡视觉区分**：聊天列表**最后一条 kind:'card' 消息＝当前卡**，其余
+  card 消息降透明度 + 「历史」角标（FlashResultCard `historical` prop，Token 化，
+  深浅色两态可读）；历史卡快捷推迟 chips 保留可用（已保存条目语义仍正确）；
+  FlashConfirmCard 不参与判定，ChatMessage kind 不新增。
+- **边界**：schema 停留 v14 无迁移；ai.md 契约零改动（prompt 文本非契约面，
+  多轮节构成描述不变）；无新依赖；ai-prompt 只读展示页自动反映新文本。
+
+### 7.41 闪电录入草稿放弃、已删除卡联动与 AI 重试（v0.33，切片 30）
+- **草稿放弃（D1）**：闪电录入提供第三条本地操作「放弃」——原地置灰 +
+  「已放弃」角标（复用切片 29 历史卡视觉语言），纯本地处理不发起 AI 轮次；
+  同时清空当前草稿与待确认状态，不落库、不播种 history，下一轮按全新意图
+  处理。与切片 25 确认模式的「放弃修改」路径同层。
+- **已删除条目联动（D2）**：结果卡对应的条目在详情页被删除后，聊天中的该卡
+  标记为已删除（置灰 + 角标 + 点击禁用 + chips 隐藏，默认 'mark'）或直接从
+  对话移除（'remove'），由 app_settings `flash_deleted_card_display` 枚举
+  配置，读层回退 'mark'。存在性查询经 Repository 只读批量扩展（端口外显式
+  扩展，getCalendars color 先例），useFocusEffect 批量查询、不轮询；card
+  消息为内存态（重启清空），配置无需持久化迁移之外的持久化逻辑。
+- **AI 服务重试（D3）**：远端 provider 传输层对 fetch 包装自动重试——可重试
+  =网络错误/超时/5xx/429/响应 JSON 解析失败；不可重试=401/403/400 立即走
+  降级；固定间隔 1000ms、不做指数退避；次数由 app_settings `ai_retry_max`
+  配置（0–5 整数，UI 档 0/1/3/5，0=关闭即现状，默认 3，越界回退 3）。
+  重试提示「AI 服务异常，正在重试（n/N）…」即时展示不留历史；耗尽后披露
+  「（已重试 N 次）」（仅实际重试过才带计数）；usage 只报成功轮。
+- **边界**：schema v14→v15 addColumns 两列（ai_retry_max number isOptional、
+  flash_deleted_card_display string isOptional，读层回退默认）；AiParser.parse
+  冻结签名与返回类型不变（重试对上层透明）；ChatMessage kind 不新增；
+  ai.md 契约正文零改动；无新依赖；不做指数退避/手动取消重试/聊天持久化。
+
+### 7.42 配置备份 WebDAV（v0.34，切片 28）
+- **范围冻结**：仅配置备份——app_settings 全字段 + categories（预置 5 条
+  视觉/排序）+ tags（视觉），快照格式 `{version:1, kind:'config', exportedAt,
+  appSettings, categories, tags}`（isConfigSnapshotWire 整包拒绝、条目级宽容
+  跳过+计数披露）。数据备份（items/reminders/channel_presets）与双向同步留
+  后续切片。提案 docs/proposals/slice-28-config-backup-webdav.md（用户
+  2026-11-18 五问定案：先配置备份/增量覆盖恢复/仅手动/保留 10 份/全量明文）。
+- **连接配置存储（自引用防护）**：WebDAV 连接（baseUrl/basePath/username/
+  password）存 expo-secure-store 独立键 `webdav_backup_config_v1`
+  （SecureAiConfigStore 同构），**不入 app_settings、不入快照**——恢复会全列
+  覆盖 app_settings，连接配置若在内会被旧快照回滚。
+- **恢复语义（冻结）**：增量覆盖——appSettings 全列覆盖（快照缺列保留本地）；
+  categories 按 id 命中覆盖、未命中保留不建；tags 按 name（Repository 既有
+  trim + 大小写不敏感归一，唯一入口）命中覆盖、未命中创建、本地独有保留；
+  恢复单 writer 事务原子完成；不做恢复前本地兜底快照（误恢复可再恢复或手动改回）。
+- **Repository 扩展**：`createConfigSnapshot` / `applyConfigSnapshot` 契约外
+  显式扩展成对（filterExistingItemIds 先例）；repository.md 追加非破坏性注记
+  节，冻结签名零 diff。
+- **WebDAV 交互**：自写 fetch 客户端（PROPFIND/GET/PUT/MKCOL/DELETE，Basic
+  Auth，15s AbortController 超时，零新依赖）；快照文件 `<basePath>/
+  life-config-YYYYMMDD-HHmmss.json`，上传后保留最近 10 份滚动 DELETE（仅匹配
+  文件名正则，删除失败仅披露不重试）；仅手动触发；全量明文上传（用户定案，
+  与切片 12 导出先例一致；快照不含 API Key/channel_presets 等凭据面）。
+- **边界**：schema 停留 v15 零迁移；不做自动/定时/回前台备份、包加密、多
+  服务器配置；AI Provider 配置（SecureStore `ai_provider_config_v1`）不进快照；
+  src/domain/export.ts（切片 12 数据导出链路）不动。
+
+### 7.43 数据备份 WebDAV（v0.35，切片 31）
+- **范围冻结**：数据快照六块——items（全字段含 categoryId/priority）+ tags（含 id，
+  供 itemTags join）+ reminders（v10 语义列全量，不含调度态 last_fired_occurrence_key/
+  last_reconciled_at 与 deprecated channel/channel_config）+ channel_presets（**进快照**，
+  用户 2026-11-18 定案，config_json 明文上云知情）+ itemTags join 重建依据；格式
+  `{version:1, kind:'data', exportedAt, items, tags, reminders, channelPresets, itemTags}`
+  （isDataSnapshotWire 整包拒绝、条目级 skipped+计数披露）。提案
+  docs/proposals/slice-31-data-backup-webdav.md（六问定案：仅手动备份+恢复/
+  channel_presets 进快照/恢复与配置快照同构/独立 life-data-*.json/旧导出保留不动）。
+- **id 保真与恢复语义（冻结）**：新建行 `_raw.id` 写快照 id（app_settings `_raw.id='global'`
+  先例）、created_at/updated_at 新建行经 `_raw` 保真；items 按 id 命中覆盖/未命中创建/
+  本地独有保留（categoryId 悬挂→skipped）；tags 按 name 归一命中（normalizeTagName
+  同构）/未命中创建（带快照 id）/事务内 tagId 映射；reminders 按 id 命中覆盖（调度态
+  两列不动）/未命中创建（item_id 解析失败→skipped；channel='system-notification' 兜底）；
+  channelPresets 按 id 命中覆盖/未命中创建/事务内同 type 单 default 规范化；itemTags
+  对快照 item 删除重建 join（tagId 解析失败→skipped）。
+- **事务与调度联动**：单 db.write + prepareUpdate/prepareCreate 同步收集 + 单次 db.batch
+  （切片 28 两遍法照抄）；恢复成功后 `reminderScheduler.reconcile()` 显式一次（失败不
+  阻断仅披露，useFlashChat 保存先例）；`src/notifications/` 实现文件零改动。
+- **WebDAV 交互**：`life-data-YYYYMMDD-HHmmss.json` + DATA_SNAPSHOT_FILE_PATTERN；
+  WebdavClient listSnapshots/uploadSnapshot 文件名过滤方法级参数化（缺省 CONFIG
+  pattern 向后兼容）；数据快照独立保留最近 10 份（与配置快照互不挤占）；仅手动；
+  全量明文（切片 28 定案延续）。
+- **切片 12 导出保留不动**：单向「导出 JSON」按钮与 src/domain/export.ts 保留；
+  version=1 无 kind 文件不进恢复链路（数据恢复只认 kind:'data'）。
+- **边界**：schema 停留 v15 零迁移；不做双向同步/自动备份/包加密/多服务器/条目级
+  diff 预览；AI Provider 配置不进快照；无新依赖；repository.md 追加非破坏性注记节
+  （createDataSnapshot/applyDataSnapshot 契约外显式扩展成对）。
+
+### 7.44 闪电录入多提醒（wire reminders）与 AI 调试查看器（v0.36，切片 32）
+
+- **背景与范围**：真机缺陷 F1（「明天8点、10点提醒」→ 误报「提醒时刻已过去」且两条
+  提醒全丢）根因两处同修——wire 层无绝对时刻表达（模型把绝对时刻硬塞提前量触发
+  落库保护）与 savePlan 单计划约束（backlog 遗留 L5）；同时落地 AI 对话调试查看器
+  （F1 类缺陷排查提供输入/响应/卡片数据面）。提案
+  docs/proposals/slice-32-f1-multi-reminder-debug-viewer.md（用户 2026-11-19 确认）。
+- **wire v0.23**：`RemoteDraftWire` 新增可选键 `reminders?: RemoteDateTimeField[] | null`
+  （民用时刻数组，`time` 必须非 null）；键可缺省宽容、值出现即从严整体拒绝
+  （非数组/元素坏/超 8 条 WIRE_REMINDERS_MAX → isRemoteDraftWire 整体拒绝）；
+  `wireToParsedItemDraft` 本地换算 epoch ms 升序排序 + 同 epoch 去重，DST gap
+  条目丢弃不炸整体（全 gap → reminders undefined）。
+- **草稿层**：`ParsedItemDraft.reminders?: number[]`（guard 键可缺省、值从严有限
+  正整数数组、空数组按 reminderChannels 先例拒绝——「无提醒」由缺省表达）；
+  `merge.ts` DraftField 扩 `'reminders'`（掩码命中防御拷贝、未命中沿用、显式
+  expressed 且 undefined = 清除语义）。
+- **savePlan 多计划（F1 + L5 关闭）**：`FlashSavePlan.reminderPlan` →
+  `reminderPlans: ReminderPlan[]`、`reminderNotice` → `reminderNotices: string[]`；
+  reminders 每条 `toOncePlan`（epoch ≤ now 不落库 + 披露「提醒时刻已过去（民用），
+  未创建一次性提醒」）；offset/delay 各自独立落库（L5 关闭，删「暂不支持一次创建
+  两条提醒」文案）；强提醒锚点分支在 reminders 未表达时保持原样（reminders 已
+  表达时锚点不触发，渠道经覆盖循环带给 reminders 计划）；跨来源同 startAt 去重
+  保留先产出；recurrence 非空时 reminders/offset/delay 全披露不落一次性计划；
+  渠道覆盖/预设回填循环应用每条计划、缺预设渠道合并一句披露。
+- **执行链与卡片载荷**：`createReminder` 逐条顺序 await，单条失败 warn + 披露
+  不中断不回滚 item；reconcile 保持成功后显式一次；`FlashCardPayload.reminder` →
+  `reminders: FlashCardReminderSnapshot[]`（内存态消息无迁移负担，空数组不渲染
+  提醒行）；快捷推迟 chips 对条目全部 once 提醒联动顺延。
+- **prompt 成文（v0.23）**：字段定义加 reminders 行 + 「绝对时刻提醒判定规则」节
+  （适用语义与 start 独立、多时刻逐条展开最多 8 条超出取最早、time 必非 null、
+  **禁止把绝对时刻换算成 reminderOffsetMinutes/reminderDelayMinutes**——封堵 F1
+  根因、提前量与重复提醒不进 reminders）；buildHistoryBriefing 摘要块加
+  「提醒时刻（reminders）」行（民用时刻，前 8 条）；history 毫秒禁反算条款扩展
+  覆盖 reminders。
+- **AI 调试查看器**：schema v15→v16 两列 `show_ai_request`/`show_ai_response`
+  （非可选 boolean，addColumns 回退 false，v12/v13 先例）；provider
+  lastRequest/lastResponse 副通道（getter `lastDebug`：parse 进入清空、每轮尝试
+  覆盖、成功失败均保留、重试取最后一次；request = 实际发送请求体不含 HTTP
+  headers——Authorization 不采集；response 成功轮信封原文失败轮错误响应文本）；
+  `FlashTurnResult.debug` 域内字段（远端轮恒携带含失败降级轮，与 usage 只报
+  成功轮刻意不同；无 Key 本地轮 null）；UI 入口消息 + Modal 弹层三节
+  （request 随 show_ai_request、response/draft 随 show_ai_response），
+  settings/ai.tsx 两行 Switch。
+- **传输边界（v0.20 同款冻结）**：调试载荷不进 ParsedItemDraft、不进 history
+  JSON、不触碰 RemoteDraftWire/isRemoteDraftWire；AiParser.parse 冻结签名与
+  返回类型不变；usage.ts 快照与格式化零改动；ai.md 仅追加非破坏性条目。
+- **边界**：`src/notifications/` 零改动；`localFallback.ts` 零改动（§7.40 本地
+  兜底否决先例，reminders 仅远端路径）；ChatMessage kind 不新增；无新依赖
+  （弹层用 RN 内置 Modal）；F2（已保存条目对话式编辑防重复）不在本片；调试
+  载荷内存态不持久化/不导出/不复制。
+
+### 7.45 deepseek-flash 解析适配（v0.37，切片 33）
+
+- **捆绑修复（切片 32 真机定性）**：deepseek-flash 思维链为纯散文、无 <think> 标签，
+  直接拼进 choices[0].message.content（JSON.parse 失败 → schema-mismatch 降级，即
+  L8「返回结构异常」主因）；且 history assistant 毫秒 JSON 被 few-shot 同化，模型
+  自述「为保持一致输出 startAt 毫秒」压过 prompt 禁令——毫秒形状 wire 守卫仍拒绝，
+  仅剥离思维链不修同化，两修复必须捆绑（提案 docs/proposals/slice-33-deepseek-flash-parsing-adaptation.md）。
+- **尾部平衡 JSON 提取**：openAiCompatible.ts 导出纯函数 extractLastBalancedJson
+  （从末尾向前扫描配平 {}[]，字符串字面量与转义感知，取最靠后配平块；无配平块
+  原样返回走既有失败路径；纯 JSON 输入零回归）；解析链序 extractContent →
+  stripCodeFence → extractLastBalancedJson → JSON.parse。
+- **history assistant 序列化民用化**：prompt.ts 导出 serializeDraftForHistory(draft, tzid)
+  ——startAt/endAt epoch→{date,time}|null（allDay→time null）、reminders epoch[]→
+  [{date,time}]、其余字段照抄，**时间键名输出 wire 键名 start/end（阶段 2 键名
+  修正，真机矩阵 #3 轮 3 定性：history few-shot 若用草稿键名 startAt，模型编辑轮
+  照抄输出 startAt 民用对象与 wire 必填键 start/end 冲突 → schema-mismatch，
+  同化源从毫秒换成键名）**；chat.ts 两处 historyAppend 接线 + **useFlashChat.ts
+  两个 UI 层写入点补全接线（阶段 2 矩阵 #6 发现，用户批准 A 方案：保存后播种与
+  本地编辑成功回写原为毫秒 JSON，保存→继续编辑 few-shot 同化源残留）**；
+  tryParseBriefingDraft/renderBriefing 三形状兼容（number=legacy 毫秒换算渲染、
+  startAt 键 {date,time}=首轮发布形状、start/end 键=现产物，解析 start 优先回退
+  startAt）；prompt「history 毫秒仅供程序读取」条款改写为「history 一律民用、
+  摘要块唯一基准、严禁输出毫秒」。
+- **契约面**：ai.md v0.24 变更记录（history 格式演进 + 解析链提取）；RemoteDraftWire
+  键纪律与 12 必填键清单零改动；AiParser.parse 冻结签名不变；不消费 reasoning_content
+  字段（多渠道 reasoning 形状探测不做）。
+- **边界**：schema 停留 v16 零迁移；无新依赖；冻结区（src/notifications/、
+  src/domain/recurrence/、src/domain/export.ts）零改动；localFallback/lastDebug/
+  lastUsage 零改动；L8 定性闭环（修复后真机复验，feedback-log 注记）。
+
+### 7.46 已保存条目对话式编辑（v0.38，切片 34）
+
+- **背景与范围**：F2 真机实证（保存后继续对话修改 → 确认保存新建重复条目）同修——
+  把「最后保存的条目」挂回对话上下文并扩展编辑语义。提案
+  docs/proposals/slice-34-saved-item-conversational-edit.md（用户 2026-11-21 三问
+  定案：wire 加键显式回填 / 含提醒增删 / 仅当前基线可编辑）；切片 25 候选①②合并
+  立项；切片 33 serializeDraftForHistory/播种/回写四写入点为链路基础。
+- **wire 可选键 targetItemId（ai.md v0.25）**：RemoteDraftWire 追加可选键
+  targetItemId?: string | null——键可缺省宽容（reminders v0.23 同构）、值出现即
+  从严整体拒绝（非串/空串）、不校验存在性（落库层校验）；ParsedItemDraft 追加可选
+  targetItemId?: string（guard 同纪律）；不纳入 merge 掩码（路由信号非内容字段，
+  直接透传）；AiParser.parse 冻结签名不变。
+- **播种 JSON 带条目 id**：serializeDraftForHistory 输出追加 itemId 键（保存链播种
+  传 created.id、本地编辑回写传基线 id、chat.ts historyAppend 场景缺省）；
+  renderBriefing 摘要块加「关联条目 id」行（tryParseBriefingDraft 判据字段不变，
+  itemId 透传）；prompt 字段定义 targetItemId 行（编辑基线回填、全新意图 null、
+  禁止编造）+ 多轮节编辑已保存条目语义（reminders 输出编辑后完整绝对时刻集合）。
+- **update 落库链（handleConfirmSave 分支）**：plan.targetItemId 非空且条目存在且
+  非 sourceReadOnly（导入只读护栏沿用，拒绝转披露降级 create）→ updateItem 全量
+  patch + updateItemTime → tags 差异（add/removeTagToItem 逐个）→ once 提醒集合
+  全量替换（listRemindersByItem 按 frequency==='once' 分组按 epoch 对比：增
+  create/减 delete/同 epoch 不动；重复提醒与非 once 频率不参与；reminders 缺省=
+  不动；offset/delay 产物经摘要块照抄保留）→ reconcile 显式一次（失败不阻断）→
+  结果卡措辞「已更新《title》」→ 播种更新后草稿（itemId 保持，基线连续）。
+- **边界**：仅当前基线可编辑（播种 JSON 携带条目；更早历史卡保持切片 29 视觉区分、
+  点击跳详情页）；认真模式 confirm 守卫零改动复用（update 路径 title/content 变化
+  天然覆盖）；本地降级链路零改动（降级轮无 targetItemId 走 create，既有语义）；
+  不支持重复提醒对话式增删与「删除全部 once 提醒」（wire 空数组仍拒绝，v0.23 纪律
+  不动，全删场景披露走详情页）；schema 停留 v16 零迁移；无新依赖；冻结区零改动。
+
+### 7.47 双向同步 WebDAV（v0.39，切片 35）
+
+- **快照交换式形态（冻结）**：每设备固定名快照 `life-sync-<deviceId>.json`（覆盖写，非滚动保留）；同步 = 上传本地快照 → 列出对端快照（排除自己）→ 逐个下载合流（纯函数幂等，updated_at 全局比较与顺序无关）→ 本地落库 → 上传合并结果；支持 ≥2 台设备。仅手动触发（用户 2026-11-22 定案，Q3）。提案 docs/proposals/slice-35-two-way-sync-webdav.md。
+- **行级 LWW + 墓碑（冻结，Q1 定案）**：items/reminders 冲突按 updated_at 晚者赢（prepareUpdate 自动维护，写路径零侵入）；删除传播 = 新表 sync_tombstones（schema v17：kind 'item'|'reminder'|'channel_preset' / entity_id isIndexed / deleted_at）——deleteItem/deleteReminder/deleteChannelPreset 三处同事务记墓碑，墓碑随快照携带；对方墓碑命中本地行 → 本地删；本地墓碑命中对方行 → 不创建不更新；同步成功后按对端 exportedAt 最小值裁剪。
+- **无时间戳表 union 合流（冻结，Q2 定案）**：tags 按 name / categories、channel_presets 按 id——命中保留本地、未命中创建（_raw.id 保真）；item_tags 并集重建（悬挂 skipped）；app_settings 整行按快照 exportedAt LWW（缺列保留）。已知限制（明文披露）：无时间戳表命中行不覆盖——跨设备修改既有标签颜色/分类 Emoji/预设字段不传播到命中设备；tags/categories 删除不传播（union 复活为设计选择）。
+- **同步快照 wire**：{version:1, kind:'sync', deviceId, exportedAt, items, tags, reminders, channelPresets, itemTags, tombstones}——条目形状复用 dataSnapshot.ts 条目级守卫，顶层 isSyncSnapshotWire 整包拒绝+条目级 skipped 计数；SYNC_SNAPSHOT_FILE_PATTERN 与 kind:'config'/'data' 互不相认；落点 src/domain/syncSnapshot.ts + src/domain/syncMerge.ts（合流纯函数）+ deviceId uuid v4 域内自写 + SecureStore 键 sync_device_id_v1。
+- **落库与 Repository 扩展**：createSyncSnapshot/applySyncMerge 契约外显式扩展成对（createDataSnapshot/applyDataSnapshot 先例）——单 writer 事务（两遍法+_raw.id 保真+单次 db.batch）；reminders 孤儿（基线 item 被墓碑删）→ skipped；本地新增墓碑事务内合入（防回流复活）；reconcile 显式一次失败不阻断。repository.md 追加非破坏性注记节（三删除方法签名与外部行为不变，仅新增墓碑副作用注记）。
+- **边界**：仅手动无自动/回前台/定时；不做手动冲突选择 UI（LWW 无感合流+计数披露）；UI 落 backup.tsx「同步」区块（连接复用 webdav_backup_config_v1，busy 互斥沿 settingsSavingKey 模式）；切片 28/31 备份功能与文件保留不动；schema v17 仅新增表（v15/v16 step 不动）；无新依赖；冻结区三目录零改动；AI 域零改动；LWW 设备时钟回拨敏感披露为已知限制。
+
+## 8. 当前切片
+
+- **已完成**：切片 1–36 全部收尾合并（main @ 见 git log；schema v18，版本 0.23.0/versionCode 10）。**切片 31 数据备份 WebDAV 已完成**（2026-11-18，分支 `task/slice-31` 基点 `5edeeec`；提交链 659a9bb → 0ac3e10 → 94714b4 → 40c4897，merge `feec346`；验收终态：schema 停留 v15 零迁移 / tsc 0 错 / jest 98 套件·1365 用例（基线 95/1314 只增不减）/ expo-doctor 2 项预存无新增 / 真机矩阵 9 项 + 损坏快照负例全过，**4 项真机 pending 经用户批准移入 backlog，已于 2026-11-19 补做完成**（#4 全量还原、#10 断网/401 文案、#11 导出回归、chips 改回 [10,60]；猴王 adb 死锁事故见 closeout §四，补做结果见 closeout §四 补做结果节），见 `tasks/slice-31-closeout.md`）。**切片 32 闪电录入多提醒 + AI 调试查看器已完成**（2026-11-19，分支 `task/slice-32` 基点 `525c16f`；提交链 56dbaf3（阶段 1）→ 50f8791（阶段 2）→ 收尾提交；验收终态：schema v15→v16 addColumns 两列 boolean / tsc 0 错 / jest 98 套件·1408 用例（基线 98/1365 只增不减，+43）/ expo-doctor 2 项预存无新增 / 真机矩阵 8 项过 7.5 项（③ 远端半项阻塞于 deepseek-flash reasoning-in-content，已记 backlog 候选；F1 修复经矩阵①远端成功轮端到端验证），见 `tasks/slice-32-closeout.md`）。**切片 33 deepseek-flash 解析适配已完成**（2026-11-20，分支 `task/slice-33` 基点 `00b5ce1`；提交链 736d136（阶段 1：extractLastBalancedJson+serializeDraftForHistory+briefing 双形状+prompt 措辞）→ 2751555（阶段 2 键名修正：时间键对齐 wire start/end+三形状兼容，用户批准 B 方案）→ 822d65d（阶段 2 播种/回写接线：useFlashChat 保存播种与本地编辑回写接入序列化，用户批准 A 方案）→ 收尾提交；验收终态：schema 停留 v16 零迁移 / tsc 0 错 / jest 98 套件·1426 用例（基线 98/1408 只增不减，+18）/ expo-doctor 2 项预存无新增 / 真机矩阵 7/7 全过（含切片 32 矩阵③补验与保存→继续编辑场景，调试弹层实证民用 start/end 键名链路）；L8 关闭，见 `tasks/slice-33-closeout.md`）。**切片 34 已保存条目对话式编辑已完成**（2026-11-22，分支 `task/slice-34` 基点 `862a227`；提交链 8c010e7（阶段 1：wire targetItemId+播种 itemId+update 落库链+契约 v0.25+单测）→ 收尾提交；验收终态：schema 停留 v16 零迁移 / tsc 0 错 / jest 98 套件·1455 用例（基线 98/1426 只增不减，+29）/ expo-doctor 2 项预存无新增 / 真机矩阵 8/8 全过（调试弹层实证播种 itemId 与回填 targetItemId 全链，F2 关闭；两处披露见 closeout §五），见 `tasks/slice-34-closeout.md`）。**切片 35 双向同步 WebDAV 已完成**（2026-11-22，分支 `task/slice-35` 基点 `4286f6d`；提交链 e0e6fee（阶段 1：域+数据层+schema v17 sync_tombstones+三删除墓碑副作用+repository.md 注记节+单测矩阵）→ 2e1a85c（阶段 2：backup.tsx 同步区块+WebdavClient 无裁剪上传）→ d3fee74（页面级单测补充）→ 收尾提交；验收终态：schema v16→v17 新表（16384 升级安装存量数据 migration 真机验收通过）/ tsc 0 错 / jest 104 套件·1559 用例（基线 98/1455 只增不减，+6 套件 +104）/ expo-doctor 2 项预存无新增 / 真机矩阵 9/9 全过（MuMu 双实例收敛/LWW/墓碑传播+裁剪/presets 单 default/app_settings 两向/孤儿 skipped/断网 401 文案/三文件族回归）+ AGENTS §5 migration 升级验收；披露=两处提案缺陷（D4 键清单漏 appSettings/categories；SyncReminderEntry 形状偏差）+ appSettings「后完成同步方设置生效」+ LWW 涟漪计数放大 + release manifest cleartext（backlog §6 契约化已知限制），见 `tasks/slice-35-closeout.md`）。**切片 36 AI 日程查询/记忆检索已完成**（2026-11-23，分支 `task/slice-36` 基点 `97feeb6`；提交链 8a21db0（阶段 1：queryIntent/queryPrompt/queryGuard/retrieval/scheduleQuery 五域文件+provider completeRaw 公开副通道改造+schema v18 ai_schedule_query_enabled isOptional boolean 默认开（读层归一 null→true，切片 30 教训同构）+settings/schema/migrations/AppSettingsModel/configSnapshot 五处接线+repository 四接线点+6 新测试套件+9 历史 schema 套件例行刷新）→ 收尾提交（阶段 2：useFlashChat 查询分支（send 顶部预判→开关守卫→全域检索→runScheduleQueryTurn→纯文本消息流+取消待确认+history 纯文本追加）+flash placeholder 三态（D7 正向文案）+profile「对话式查询」开关行+useFlashChat 查询 5 用例+retrieval MM-DD 日期修复（真机矩阵 3 缺陷：行格式缺绝对日期致模型跨周推算错位）+closeout+backlog 划项）；验收终态：schema v17→v18 单列 addColumns（16384 升级安装存量数据 migration 真机验收通过）/ tsc 0 错 / jest 110 套件·1619 用例（基线 104/1559 只增不减，+6 套件 +60）/ expo-doctor 2 项预存无新增 / 真机矩阵 10/10 全过（猴王实例：升级安装/查询轮弹层轻 JSON+无卡片/窗口解析 12-05/12-06/全域检索含归档+缺陷修复复验/编辑链路不误判/录入不误伤/排除表/关开关本地提示/远端不可达降级全要素（baseUrl 方案，MuMu svc 断网不可行）/待确认取消/深浅色）；ai.md/repository.md 零 diff、冻结区零改动、无新依赖；披露=2 条提案偏离（configSnapshot 提案缺口补接线/AppSettings 必填 boolean）+ lastDebug 覆盖 D8（debug=第一段快照、usage=第二段终态）+ T1 retrieval 日期锚点教训 + T2 MuMu 断网命令连环挂死教训，见 `tasks/slice-36-closeout.md`）。各切片历史见对应 `tasks/slice-NN.md` / `tasks/slice-NN-closeout.md`。
+- **当前切片**：无（切片 36 已收尾合并，等待下一片立项；下一片候选=变更 B/切片 25 候选③④/theme_mode，见 backlog §2）。
+- **未完成项以 `tasks/backlog.md` 为准**（2026-11-16 起的惯例）：候选排序（~~切片 25 认真模式~~已完成 → ~~26 AI 透明度~~已完成，关闭于切片 26 → ~~27 系统日历 live 直读~~已完成，关闭于切片 27 → ~~29 闪电录入对话能力强化包~~已完成，关闭于切片 29 → ~~30 草稿放弃/删除联动/AI 重试~~已完成，关闭于切片 30 → ~~28 备份/同步 WebDAV~~已立项为切片 28（配置备份先行）→ ~~数据备份（items/reminders/channel_presets）~~已立项为切片 31（2026-11-18）→ ~~F1 闪电多提醒绝对时刻 once + AI 对话调试查看器~~已立项为切片 32（2026-11-19，用户选定）+ ~~双向同步~~已立项为切片 35（2026-11-22，三问定案） + 插队候选「变更 B 网络渠道后台送达」+ ~~切片 25 收尾候选①保存后上下文/②已保存条目对话式编辑~~已合并立项为切片 34（2026-11-21，F2 实证）+ 切片 25 候选③④仍待定 + 候选 29b 编号顺延（~~AI 日程查询/记忆检索~~已立项为切片 36，2026-11-23） + ~~deepseek-flash reasoning-in-content 解析适配~~已立项为切片 33（2026-11-19））、遗留 L1–L13（L5 随切片 32 关闭）、手验项 U1–U4、契约化已知限制均记录在 backlog，本节不再罗列候选清单。每切片 closeout 同步更新 backlog.md（划掉完成项并注明关闭切片号）并保持本节精简。
+
