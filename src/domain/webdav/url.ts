@@ -57,3 +57,56 @@ export function buildWebdavUrl(
 export function isInsecureHttpUrl(baseUrl: string): boolean {
   return baseUrl.trim().toLowerCase().startsWith('http://');
 }
+
+/**
+ * 附件远端目录名（切片 37，AGENTS.md §7.49 Q5）：basePath 之下的固定子目录。
+ * spark_attachments.remote_path 只存本目录内的文件名（不含目录前缀），
+ * URL 组装时拼接本常量——跨设备 basePath 迁移只需换目录名。
+ */
+export const WEBDAV_ATTACHMENTS_DIR = 'life-attachments';
+
+/**
+ * 附件远端文件名守卫（防路径穿越）：非空、不含 '/' 与 '\\'、非 '.' / '..'。
+ * remote_name 由 buildAttachmentRemoteName（domain/spark）从 sha256 生成，
+ * 此处仍做兜底守卫（PUT/GET/DELETE 前统一校验）。
+ */
+export function isWebdavAttachmentRemoteName(remoteName: string): boolean {
+  if (remoteName.length === 0) return false;
+  if (remoteName.includes('/') || remoteName.includes('\\')) return false;
+  if (remoteName === '.' || remoteName === '..') return false;
+  return true;
+}
+
+/** 附件目录集合 URL（MKCOL 用）：basePath 段 + 'life-attachments'，尾随斜杠集合语义。 */
+export function buildWebdavAttachmentDirUrl(
+  config: Pick<WebdavConfig, 'baseUrl' | 'basePath'>,
+): string {
+  const base = normalizeWebdavBaseUrl(config.baseUrl);
+  if (base.length === 0) {
+    throw new Error('buildWebdavAttachmentDirUrl: baseUrl 不能为空');
+  }
+  const segments = [...webdavBasePathSegments(config.basePath), WEBDAV_ATTACHMENTS_DIR];
+  const path = segments.map((segment) => encodeURIComponent(segment)).join('/');
+  return `${base}/${path}/`;
+}
+
+/** 附件资源 URL（PUT/GET/DELETE 用）：basePath 段 + 'life-attachments' + remoteName。 */
+export function buildWebdavAttachmentUrl(
+  config: Pick<WebdavConfig, 'baseUrl' | 'basePath'>,
+  remoteName: string,
+): string {
+  if (!isWebdavAttachmentRemoteName(remoteName)) {
+    throw new Error(`buildWebdavAttachmentUrl: 非法附件文件名：${remoteName}`);
+  }
+  const base = normalizeWebdavBaseUrl(config.baseUrl);
+  if (base.length === 0) {
+    throw new Error('buildWebdavAttachmentUrl: baseUrl 不能为空');
+  }
+  const segments = [
+    ...webdavBasePathSegments(config.basePath),
+    WEBDAV_ATTACHMENTS_DIR,
+    remoteName,
+  ];
+  const path = segments.map((segment) => encodeURIComponent(segment)).join('/');
+  return `${base}/${path}`;
+}

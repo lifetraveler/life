@@ -15,6 +15,11 @@
  *
  * v0.39（切片 35，§7.47）：新增 uploadSyncSnapshot——同步快照固定名覆盖写，
  * 不走滚动裁剪（固定名文件无时间序，倒序裁剪会误删对端设备快照）。
+ *
+ * v0.43（切片 37，§7.49 Q5 附件上云）：新增附件三方法 uploadAttachment /
+ * downloadAttachment / deleteAttachmentRemote——二进制体（Uint8Array）+ 每请求
+ * 60s 超时（录音/图片大文件放宽，提案 D4）；附件统一放 basePath 之下的
+ * life-attachments/ 子目录（WEBDAV_ATTACHMENTS_DIR），MKCOL 405 容忍先例沿用。
  */
 
 import { isConfigSnapshotFileName } from '../../domain/configSnapshot';
@@ -22,7 +27,12 @@ import { isSyncSnapshotFileName } from '../../domain/syncSnapshot';
 import { encodeBase64Utf8 } from '../../domain/webdav/base64';
 import type { WebdavConfig } from '../../domain/webdav/config';
 import { WebdavError } from '../../domain/webdav/WebdavError';
-import { buildWebdavUrl } from '../../domain/webdav/url';
+import {
+  buildWebdavAttachmentDirUrl,
+  buildWebdavAttachmentUrl,
+  buildWebdavUrl,
+  isWebdavAttachmentRemoteName,
+} from '../../domain/webdav/url';
 
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
@@ -49,6 +59,9 @@ export interface UploadSnapshotResult {
 
 /** 每请求超时（§7.42 D3：15s，openAiCompatible 先例）。 */
 const WEBDAV_TIMEOUT_MS = 15000;
+
+/** 附件请求超时（切片 37 §7.49 D4：60s，录音/图片大文件放宽）。 */
+const ATTACHMENT_TIMEOUT_MS = 60000;
 
 /** 上传后保留的最近快照份数（§7.42 D5：10 份滚动）。 */
 const KEEP_SNAPSHOT_COUNT = 10;
@@ -285,6 +298,70 @@ export class WebdavClient {
     return true;
   }
 
+  /**
+   * 上传附件二进制（切片 37 §7.49 D4，60s 超时）：MKCOL life-attachments 目录
+   * （405 容忍 = 已存在）→ PUT application/octet-stream。remoteName 先过守卫
+   * （防路径穿越）；MKCOL 其他失败视为目录创建失败抛错（与快照上传同策略）。
+   */
+  async uploadAttachment(
+    config: WebdavConfig,
+    remoteName: string,
+    bytes: Uint8Array<ArrayBuffer>,
+  ): Promise<void> {
+    if (!isWebdavAttachmentRemoteName(remoteName)) {
+      throw new WebdavError('invalid-response', `非法附件文件名：${remoteName}`);
+    }
+    const mkcol = await this.request(config, {
+      method: 'MKCOL',
+      url: buildWebdavAttachmentDirUrl(config),
+      timeoutMs: ATTACHMENT_TIMEOUT_MS,
+    });
+    if (mkcol.status !== 405) {
+      this.requireSuccess(mkcol, '创建附件目录');
+    }
+    const put = await this.request(config, {
+      method: 'PUT',
+      url: buildWebdavAttachmentUrl(config, remoteName),
+      body: bytes,
+      contentType: 'application/octet-stream',
+      timeoutMs: ATTACHMENT_TIMEOUT_MS,
+    });
+    this.requireSuccess(put, '上传附件');
+  }
+
+  /** 下载附件二进制（GET，60s 超时）。404 属异常（行内 remote_path 应存在）→ 抛错。 */
+  async downloadAttachment(config: WebdavConfig, remoteName: string): Promise<Uint8Array<ArrayBuffer>> {
+    if (!isWebdavAttachmentRemoteName(remoteName)) {
+      throw new WebdavError('invalid-response', `非法附件文件名：${remoteName}`);
+    }
+    const response = await this.request(config, {
+      method: 'GET',
+      url: buildWebdavAttachmentUrl(config, remoteName),
+      timeoutMs: ATTACHMENT_TIMEOUT_MS,
+    });
+    this.requireSuccess(response, '下载附件');
+    const buffer = await response.arrayBuffer();
+    return new Uint8Array(buffer);
+  }
+
+  /**
+   * 删除远端附件（DELETE，60s 超时）。404 = 远端已不存在 → false（调用方视为
+   * 成功披露；删除联动允许孤儿文件，提案 D4「失败仅披露」）。
+   */
+  async deleteAttachmentRemote(config: WebdavConfig, remoteName: string): Promise<boolean> {
+    if (!isWebdavAttachmentRemoteName(remoteName)) {
+      throw new WebdavError('invalid-response', `非法附件文件名：${remoteName}`);
+    }
+    const response = await this.request(config, {
+      method: 'DELETE',
+      url: buildWebdavAttachmentUrl(config, remoteName),
+      timeoutMs: ATTACHMENT_TIMEOUT_MS,
+    });
+    if (response.status === 404) return false;
+    this.requireSuccess(response, '删除远端附件');
+    return true;
+  }
+
   /** 401/403 → auth（带 status）；其余非 2xx → http-status（带 status）。 */
   private requireSuccess(response: Response, action: string): void {
     if (response.status === 401 || response.status === 403) {
@@ -301,12 +378,21 @@ export class WebdavClient {
 
   /**
    * 单请求：Basic Auth 头（username/password 均空 = 匿名不发 Authorization）+
-   * 可选 Depth/Content-Type + AbortController 超时；AbortError → timeout、
-   * 其余 fetch 拒绝 → network；finally 清定时器。
+   * 可选 Depth/Content-Type + AbortController 超时（timeoutMs 覆盖缺省 15s，
+   * 切片 37 附件 60s 用）；body 支持 string | Uint8Array<ArrayBuffer>（二进制
+   * 附件 PUT；<ArrayBuffer> 泛型满足 DOM BodyInit 的 BufferSource 分支）；
+   * AbortError → timeout、其余 fetch 拒绝 → network；finally 清定时器。
    */
   private async request(
     config: WebdavConfig,
-    options: { method: string; url: string; body?: string; contentType?: string; depth?: string },
+    options: {
+      method: string;
+      url: string;
+      body?: string | Uint8Array<ArrayBuffer>;
+      contentType?: string;
+      depth?: string;
+      timeoutMs?: number;
+    },
   ): Promise<Response> {
     const headers: Record<string, string> = {};
     if (config.username.length > 0 || config.password.length > 0) {
@@ -318,8 +404,9 @@ export class WebdavClient {
     if (options.contentType !== undefined) {
       headers['Content-Type'] = options.contentType;
     }
+    const timeoutMs = options.timeoutMs ?? this.timeoutMs;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       return await this.fetchImpl(options.url, {
         method: options.method,
@@ -329,7 +416,7 @@ export class WebdavClient {
       });
     } catch (e) {
       if (e instanceof Error && e.name === 'AbortError') {
-        throw new WebdavError('timeout', `WebDAV 请求超时（${this.timeoutMs}ms）`);
+        throw new WebdavError('timeout', `WebDAV 请求超时（${timeoutMs}ms）`);
       }
       throw new WebdavError(
         'network',

@@ -512,3 +512,89 @@ SystemImportResult：
   kind:'config'/'kind:'data' 快照互不相认；固定名覆盖写上传不使用
   uploadSnapshot（其内置 10 份滚动裁剪对固定名快照不适用），由编排层专用
   无裁剪 PUT 路径承担。
+
+## Spark 灵感火花接口（v0.43，切片 37 阶段 1 落地）
+
+> 依据：AGENTS.md §7.49（提案 docs/proposals/slice-37-spark-inspiration.md，
+> 2026-11-23 五问定案）；分层先例为 ItemRepository（src/data/ItemRepository.ts /
+> WatermelonItemRepository.ts）与数据快照契约外成对扩展（v0.34/v0.35 注记节）。
+> 既有全部冻结签名零 diff，本节为追加性注记。
+
+### SparkRepository 独立端口（schema v19 三新表）
+- 表：sparks（title/content 双 isOptional——纯录音灵感先建行后挂附件）/
+  spark_attachments（spark_id isIndexed；kind 'audio'|'image' 写路径守卫不建 CHECK；
+  remote_path 存 life-attachments 内文件名不含目录前缀——跨设备 basePath 可迁移；
+  sha256/file_size/duration_ms/width/height 可选维度）/ spark_items（spark_id/
+  item_id isIndexed join；不用 @relation，item_tags 先例）。migration 三条
+  createTable 零 unsafeExecuteSql（v17 sync_tombstones 先例，列定义与 schema.ts
+  严格一致）；item_id 存在性校验在 Repository 写路径（不建外键，categoryId 校验
+  同构）。
+- 端口 src/data/SparkRepository.ts（独立新端口文件，分层同构不并入 ItemRepository）：
+  createSpark({title?, content?}) 双缺省合法（trim 空串归 null，normalizeSparkNullableText
+  共用不变式）/updateSpark(id, patch)（只写提供字段，不存在抛错）/deleteSpark(id)
+  （级联 spark_attachments 行 + 本地文件 + 远端 DELETE，IO 失败仅 console.warn 披露
+  不阻断；不存在幂等 return）/listSparks（created_at 倒序）/getSparkById（null）/
+  listAttachments（created_at 升序）/addAttachment(sparkId, SparkAttachmentInput)
+  （kind 枚举守卫 + 每灵感 ≤ SPARK_ATTACHMENT_MAX_COUNT(20) + 灵感存在性校验）/
+  deleteAttachment(attachmentId)（行 + 本地文件 + 远端 DELETE 失败仅披露）/
+  markAttachmentUploaded(attachmentId, {remotePath, sha256})（即时上传成功回填）/
+  getAttachmentById（null）/linkSparkToItem(sparkId, itemId)（item_id 存在性校验
+  不命中抛错 `linkSparkToItem: 条目不存在（…）` + 每灵感 ≤ SPARK_ITEM_LINK_MAX(50)
+  + 同对幂等）/unlinkSparkFromItem（幂等）/listItemsForSpark(sparkId)（摘要水合
+  SparkLinkedItemSummary：itemId/title/status/startAt/allDay/categoryColor/
+  categoryEmoji/linkedAt；join created_at 升序；悬挂 join 静默跳过——deleteItem
+  级联不含 spark_items，渲染面忽略 + 快照恢复重建）。
+- 实现 src/data/WatermelonSparkRepository.ts：读路径 kind 防御（非法值抛错，
+  toDomainChannelPreset 先例）；两遍法事务纪律（prepareUpdate/prepareCreate 同步
+  收集 → 单次 db.batch）；toDomainItem 自 WatermelonItemRepository.ts 导出复用
+  （单向依赖 SparkRepo→ItemRepo）。附件/远端文件 IO 经构造器注入 SparkAttachmentIo
+  （fileExists/deleteFile/downloadToSparksDir/deleteRemoteFile/uploadFromLocalFile）：
+  生产装配 src/data/index.ts defaultSparkAttachmentIo（expo-file-system/legacy +
+  WebdavClient 60s + SecureWebdavConfigStore），单测注入 stub 不引 expo 依赖；
+  IO 失败不阻断删除主流程（孤儿文件可接受，披露口径）。UI 经模块级单例
+  sparkRepository 消费（§4.2 不变）。
+
+### 数据快照可选三块扩展（createDataSnapshot / applyDataSnapshot，§7.49 D5）
+- createDataSnapshot 追加可选三块 sparks/sparkAttachments/sparkItems（全量组包，
+  新快照恒携带键、可为空数组）；DataSnapshot version/kind 不变——isDataSnapshotWire
+  只查必需键，旧 App 读新快照忽略未知键、新 App 读旧快照缺块跳过该域（双向兼容）。
+- applyDataSnapshot 三块语义：
+  - sparks：按 id 命中覆盖 title/content（trim 空串归 null；createdAt 不动、
+    updatedAt 自动刷新）/未命中创建（id+created_at/updated_at 经 _raw 保真）/
+    本地独有保留；快照内重复 id first-wins（v0.35 同纪律）。
+  - sparkAttachments：按 id 命中覆盖 8 语义字段（spark_id 不改）/未命中创建
+    （id 保真）；fileSize 超 SPARK_ATTACHMENT_MAX_BYTES(25MB) 或 spark_id 未解析计
+    skipped（同 reminders item_id 严格语义）；形状不符计 skipped 不炸整体。
+  - sparkItems：块存在（含空数组）= 权威替换——按 join 语义（spark_id+item_id 对）
+    upsert：声明对已存在的本地 join 幂等保留不重建（lesson：同批 destroy+create
+    同 id 在 LokiJS 适配器 batch 下先插后删撞 Duplicate key——SQLite 虽保序，
+    语义仍以 pair 幂等为准、适配器无关）/ resolved spark 的本地 join 中 pair 未
+    声明的删除 / 声明 pair 不存在的按快照 id 保真创建；item_id 未解析、重复声明
+    first-wins、id 撞本地不同 pair join（病理冲突）计 skipped；本地独有 spark 的
+    join 不动。删除不计 applied、新建 join 各计 1（命中保留不计——applied 为
+    实际写入口径）。
+  - 附件文件补链：主事务外逐个执行（仅快照携带任一 Spark 键——含空数组，新格式
+    快照恒携带——且构造器注入 IO 时）：
+    remotePath 缺失跳过 → 本地文件已存在（同机恢复）跳过 → 否则经 IO 下载到
+    sparks/ 并独立事务回写行 uri；失败仅计数（行保留快照 uri，详情页可后补）。
+    结果记 DataSnapshotApplyResult.sparkAttachmentFiles?: {restored, failed}——
+    未注入 IO 恒 {restored: 0, failed: 0}；旧格式快照该字段缺省。
+- 边界（冻结）：Spark 域不进 sync 快照（§7.47 快照形状零改动）/ ICS 导出 /
+  小组件 / 闪电录入 / AI 查询检索域 / 切片 12 导出。
+
+### WebDAV 客户端附件三方法（WebdavClient 契约外扩展）
+- uploadAttachment(config, remoteName, bytes: Uint8Array)（MKCOL 附件目录（仅 405
+  已存在容忍）→ PUT octet-stream）/ downloadAttachment(config, remoteName):
+  Promise<Uint8Array>（404 抛 http-status，无 false 语义）/ deleteAttachmentRemote(
+  config, remoteName): Promise<boolean>（404 → false；失败由调用方披露，孤儿文件
+  可接受）。
+- 远端命名：`<basePath>/life-attachments/<sha256 前 16 位>-<原名>`（域纯函数
+  buildAttachmentRemoteName，src/domain/spark.ts）；remoteName 守卫
+  isWebdavAttachmentRemoteName（禁 '/'、'\'、'.'、'..'）不过抛 invalid-response。
+- 附件请求固定 60s 超时（ATTACHMENT_TIMEOUT_MS；request options timeoutMs 覆盖
+  机制，缺省 15s 快照语义不变）；request body 扩 Uint8Array（二进制 PUT）。
+- URL 组装独立分段（buildWebdavAttachmentDirUrl / buildWebdavAttachmentUrl，
+  src/domain/webdav/url.ts）——buildWebdavUrl 整段 encodeURIComponent 会把
+  'dir/name' 编成 %2F，附件 URL 必须分段拼装（lesson）。
+- 配套 base64 字节级编解码：src/domain/webdav/base64.ts encodeBytesToBase64 /
+  decodeBase64ToBytes（附件文件经字符串通道读写；encodeBase64Utf8 文本编码不变）。

@@ -1,11 +1,13 @@
 /**
  * 切片 31 阶段 1（AGENTS.md §7.43）：数据备份快照的领域类型、守卫与序列化。
  *
- * 快照格式（§7.43 D1 冻结）：{version:1, kind:'data', exportedAt, items, tags,
- * reminders, channelPresets, itemTags}。整包守卫 isDataSnapshotWire 不过 =
+ * 快照格式（§7.43 D1 冻结六块 + §7.49 D5 可选三块）：{version:1, kind:'data',
+ * exportedAt, items, tags, reminders, channelPresets, itemTags, sparks?,
+ * sparkAttachments?, sparkItems?}。整包守卫 isDataSnapshotWire 不过 =
  * 整包拒绝；条目级宽容（形状不符跳过 + 计数披露）在 Repository.applyDataSnapshot
  * 落地（本文件导出条目有效性谓词供其使用，深层的 JSON 列/tzid/悬挂引用校验
  * 在仓库层——reminderRuleMapping 解析器与白名单都在 data/ 层，domain 不反向依赖）。
+ * 可选三块（切片 37）：缺块=恢复跳过该域；旧 App 读新快照忽略未知键，双向兼容。
  *
  * 与切片 12 导出（src/domain/export.ts version=1 无 kind）完全独立：旧导出文件
  * 不进恢复链路（恢复只认 kind:'data'）；src/domain/export.ts 冻结不动。
@@ -18,6 +20,8 @@ import type { Reminder, ReminderFrequency } from './reminder';
 import type { Tag } from './tag';
 import type { ChannelPreset, ChannelPresetType } from './channelPreset';
 import { CHANNEL_PRESET_TYPES } from './channelPreset';
+import type { Spark, SparkAttachment, SparkAttachmentKind, SparkItemLink } from './spark';
+import { SPARK_ATTACHMENT_KINDS } from './spark';
 import { formatExportedAt } from './configSnapshot';
 
 /** 快照内单条条目（items 六块之一，§7.43 D1：全字段 + id 保真）。 */
@@ -95,7 +99,48 @@ export interface DataSnapshotItemTag {
   tagId: string;
 }
 
-/** 数据备份快照（§7.43 D1 六块）。 */
+/**
+ * 快照内单条灵感（切片 37 §7.49 D5 可选三块之一，id 保真）。
+ * title/content 双可空（纯录音灵感合法）；条目守卫只做形状校验，
+ * trim 空串归 null 的写路径归一在 Repository 层（normalizeSparkNullableText）。
+ */
+export interface DataSnapshotSpark {
+  id: string;
+  title: string | null;
+  content: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** 快照内单条灵感附件（id 保真；uri 为源设备本地路径，恢复时经附件补链重下载）。 */
+export interface DataSnapshotSparkAttachment {
+  id: string;
+  sparkId: string;
+  kind: SparkAttachmentKind;
+  uri: string;
+  /** life-attachments 内远端文件名（不含目录前缀）；未上云为 null。 */
+  remotePath: string | null;
+  sha256: string | null;
+  fileSize: number;
+  durationMs: number | null;
+  width: number | null;
+  height: number | null;
+  createdAt: number;
+}
+
+/** 快照内单条灵感↔计划关联（id 保真，权威替换重建依据）。 */
+export interface DataSnapshotSparkItem {
+  id: string;
+  sparkId: string;
+  itemId: string;
+  createdAt: number;
+}
+
+/**
+ * 数据备份快照（§7.43 D1 六块 + §7.49 D5 可选三块）。
+ * sparks/sparkAttachments/sparkItems 为切片 37 追加的可选块：缺块=恢复时跳过该域
+ * （旧 App 读新快照忽略未知键，isDataSnapshotWire 只查必需键，双向兼容）。
+ */
 export interface DataSnapshot {
   version: 1;
   kind: 'data';
@@ -106,20 +151,31 @@ export interface DataSnapshot {
   reminders: DataSnapshotReminder[];
   channelPresets: DataSnapshotChannelPreset[];
   itemTags: DataSnapshotItemTag[];
+  sparks?: DataSnapshotSpark[];
+  sparkAttachments?: DataSnapshotSparkAttachment[];
+  sparkItems?: DataSnapshotSparkItem[];
 }
 
 /** 恢复结果计数（ConfigSnapshotApplyResult 同构形状）。 */
 export interface DataSnapshotApplyResult {
   /**
    * 已应用条目数：items/tags/reminders/channelPresets 每个实际写入（覆盖或创建）
-   * 条目计 1；itemTags 每个新建 join 计 1（删除的旧 join 不计）。
+   * 条目计 1；itemTags 每个新建 join 计 1（删除的旧 join 不计）；切片 37 可选三块
+   * 同口径（sparkAttachments/sparkItems 每个实际写入或重建行计 1）。
    */
   applied: number;
   /**
    * 被跳过条目数：形状不符（条目谓词 / 仓库层深层校验）+ 悬挂引用（categoryId /
-   * item_id / tagId 解析失败）+ 快照内重复 id/重名 first-wins 丢弃的后续条目。
+   * item_id / tagId / spark_id 解析失败）+ 快照内重复 id/重名 first-wins 丢弃的后续条目。
    */
   skipped: number;
+  /**
+   * 切片 37：附件文件补链结果（applyDataSnapshot 事务外逐个执行，§7.49 D5）。
+   * restored=成功下载并回写行 uri 的附件数；failed=下载失败计数（行已恢复、
+   * 详情页可重试）。仅在快照携带任一 Spark 可选块时返回（旧格式快照该字段缺省，
+   * 调用方按 0/0 理解）；未注入附件 IO 时恒 {restored:0, failed:0}。
+   */
+  sparkAttachmentFiles?: { restored: number; failed: number };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -251,6 +307,56 @@ export function isDataSnapshotItemTagEntry(value: unknown): value is DataSnapsho
 }
 
 /**
+ * 条目有效性——sparks（切片 37 §7.49 D5）：id 非空串 + title/content string|null
+ * （trim 空串归 null 的归一在仓库层）+ createdAt/updatedAt 有限数。
+ */
+export function isDataSnapshotSparkEntry(value: unknown): value is DataSnapshotSpark {
+  if (!isRecord(value)) return false;
+  if (!isNonEmptyString(value.id)) return false;
+  if (!isNullableString(value.title)) return false;
+  if (!isNullableString(value.content)) return false;
+  if (!isFiniteNumber(value.createdAt)) return false;
+  if (!isFiniteNumber(value.updatedAt)) return false;
+  return true;
+}
+
+/**
+ * 条目有效性——sparkAttachments：id/sparkId/uri 非空串 + kind 枚举 +
+ * remotePath/sha256 string|null + fileSize 有限数（25MB 上限校验在仓库层，
+ * 与写路径同口径拒绝超限附件）+ durationMs/width/height 有限数|null + createdAt 有限数。
+ */
+export function isDataSnapshotSparkAttachmentEntry(
+  value: unknown,
+): value is DataSnapshotSparkAttachment {
+  if (!isRecord(value)) return false;
+  if (!isNonEmptyString(value.id)) return false;
+  if (!isNonEmptyString(value.sparkId)) return false;
+  if (!SPARK_ATTACHMENT_KINDS.includes(value.kind as SparkAttachmentKind)) return false;
+  if (!isNonEmptyString(value.uri)) return false;
+  if (!isNullableString(value.remotePath)) return false;
+  if (!isNullableString(value.sha256)) return false;
+  if (!isFiniteNumber(value.fileSize) || value.fileSize < 0) return false;
+  if (!isFiniteNumberOrNull(value.durationMs)) return false;
+  if (!isFiniteNumberOrNull(value.width)) return false;
+  if (!isFiniteNumberOrNull(value.height)) return false;
+  if (!isFiniteNumber(value.createdAt)) return false;
+  return true;
+}
+
+/**
+ * 条目有效性——sparkItems：id/sparkId/itemId 非空串 + createdAt 有限数
+ * （悬挂引用解析在仓库层计 skipped）。
+ */
+export function isDataSnapshotSparkItemEntry(value: unknown): value is DataSnapshotSparkItem {
+  if (!isRecord(value)) return false;
+  if (!isNonEmptyString(value.id)) return false;
+  if (!isNonEmptyString(value.sparkId)) return false;
+  if (!isNonEmptyString(value.itemId)) return false;
+  if (!isFiniteNumber(value.createdAt)) return false;
+  return true;
+}
+
+/**
  * 快照 → 存储 JSON（无缩进，提案 §7 体积优先：数据快照 items 多时体积大，
  * 与配置快照的 2 空格缩进口径刻意不同——快照非人读，15s 超时兜底披露）。
  */
@@ -362,6 +468,44 @@ export function toDataSnapshotChannelPreset(
     type: preset.type,
     configJson: preset.configJson,
     isDefault: preset.isDefault,
+  };
+}
+
+/** 灵感 → 快照条目组装（切片 37，§7.49 D5；Repository.createDataSnapshot 消费）。 */
+export function toDataSnapshotSpark(spark: Spark): DataSnapshotSpark {
+  return {
+    id: spark.id,
+    title: spark.title,
+    content: spark.content,
+    createdAt: spark.createdAt,
+    updatedAt: spark.updatedAt,
+  };
+}
+
+export function toDataSnapshotSparkAttachment(
+  attachment: SparkAttachment,
+): DataSnapshotSparkAttachment {
+  return {
+    id: attachment.id,
+    sparkId: attachment.sparkId,
+    kind: attachment.kind,
+    uri: attachment.uri,
+    remotePath: attachment.remotePath,
+    sha256: attachment.sha256,
+    fileSize: attachment.fileSize,
+    durationMs: attachment.durationMs,
+    width: attachment.width,
+    height: attachment.height,
+    createdAt: attachment.createdAt,
+  };
+}
+
+export function toDataSnapshotSparkItem(link: SparkItemLink & { id: string }): DataSnapshotSparkItem {
+  return {
+    id: link.id,
+    sparkId: link.sparkId,
+    itemId: link.itemId,
+    createdAt: link.createdAt,
   };
 }
 

@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.42（v0.40 历史条款精简为冻结要点+指针，原文存档 docs/agents-history.md）
+版本：v0.43（v0.40 历史条款精简为冻结要点+指针，原文存档 docs/agents-history.md）
 
 ## 1. 项目概览
 
@@ -456,6 +456,15 @@ AGENTS.md       本文件
   被查询轮覆盖为已知行为；schema v18 仅一列（v15–v17 step 不动）；无新依赖；冻结区三目录零改动；
   候选①剩余「保存后提示语轻改法」随本片顺带处置为正向文案（切片 34 已使保存后输入=编辑已保存条目）。
 
+### 7.49 Spark 灵感火花（v0.43，切片 37）
+
+- **范围（冻结，五问定案 2026-11-23）**：事项 Tab 占位页（L1）改造为灵感页——Tab 改名「灵感」+ bulb 图标（路由 items→sparks，唯一引用 _layout.tsx）；文字/录音/拍照+相册 capture；灵感↔计划一对多关联（spark_items 表）；提案 docs/proposals/slice-37-spark-inspiration.md。capture=Tab 页内速记条+流式列表（Keep 式，Q1）；录音仅存文件+回放不做 AI 转写（Q2）；转化=详情页「转计划」→item/new 预填→保存后关联，AI 拆解留二期（Q3）；新依赖 expo-audio + expo-image-picker（Q4，用户明确允许，dev client 重建）；附件 v1 即上云 WebDAV（Q5）。
+- **schema v19 三新表**：sparks（title/content 双可空——纯录音灵感/created_at/updated_at）、spark_attachments（spark_id isIndexed/kind 'audio'|'image'/uri/remote_path?/sha256?/file_size/duration_ms?/width?/height?/created_at）、spark_items（spark_id/item_id isIndexed/created_at）；deleteSpark 级联删附件与关联行。
+- **SparkRepository 端口**：src/data/SparkRepository.ts + WatermelonSparkRepository.ts（ItemRepository 分层同构）；CRUD/listSparks 倒序/附件/linkSparkToItem（item_id 存在性校验）/listItemsForSpark；repository.md 注记节（冻结签名零 diff）。
+- **附件存储与上云（Q5）**：本地 documentDirectory/sparks/<uuid>.<ext>；远端 <basePath>/life-attachments/<sha256前16>-<名>；即时上传（录入后立即 PUT，附件专用 60s 超时；失败「未备份」徽标+详情页重传）；删除联动远端 DELETE（失败仅披露）；上限每灵感 20 附件/单文件 25MB。
+- **数据快照扩展（向后兼容）**：kind:'data' version 1 不变+可选三块 sparks/sparkAttachments/sparkItems（缺块跳过；旧 App 读新快照忽略未知键恢复六块——isDataSnapshotWire 只查必需键已核对）；恢复同构（_raw.id 保真/悬挂 skipped）；附件文件下载在事务外逐个执行（失败披露可后补）。**Spark 不进 sync 快照/ICS 导出/小组件/闪电录入/AI 查询检索域/切片 12 导出**（多设备灵感同步留候选）。
+- **边界**：AI 转写与 AI 拆解留二期候选；灵感归档/计划侧反查/灵感搜索不做；冻结区三目录零改动；app_settings 零迁移；无新设置开关；APK bump 0.37.0/versionCode 37（§5 版本号策略）。
+
 ## 8. 当前切片
 
 - **已完成**：切片 1–36 全部收尾合并（main @ 见 git log；schema v18，版本 0.23.0/versionCode 10）。
@@ -464,8 +473,7 @@ AGENTS.md       本文件
   对话式编辑（8c010e7，jest 98/1455）；切片 35 双向同步 WebDAV（e0e6fee→2e1a85c→d3fee74，
   schema v17，jest 104/1559）；切片 36 AI 日程查询/记忆检索（8a21db0→8ce958b，merge a630447，
   schema v18，jest 110/1619，真机矩阵 10/10）。
-- **当前切片**：无（等待下一片立项；下一片候选=变更 B/切片 25 候选③④/theme_mode，见
-  `tasks/backlog.md`）。
+- **当前切片**：切片 37 Spark 灵感火花已立项（2026-11-23，用户选定路线+五问定案：Tab 页内速记条+流式列表 / 仅存录音+回放 / 手动转化为主 / 允许 expo-audio + expo-image-picker / v1 附件上云；提案 `docs/proposals/slice-37-spark-inspiration.md`；分支 `task/slice-37` 从 main `edc55fb` 切出；提案+卡+AGENTS v0.43 随阶段 1 提交；要点=schema v19 三新表（sparks/spark_attachments/spark_items）+ SparkRepository 新端口 + 数据快照 kind:data 追加可选三块（双向兼容）+ 附件即时上云（life-attachments/ hash 命名+60s 超时）+ 转计划 item/new 预填关联 + L1 占位页随本片消化 + 新依赖两包 dev client 重建；APK bump 0.37.0/v37；下一片候选=闪电对话持久化 F4/时间解析消歧 F5/系统日历写回/变更 B/theme_mode/F3 闹钟可见性，见 `tasks/backlog.md`）。
 - **未完成项以 `tasks/backlog.md` 为准**（2026-11-16 起的惯例）：候选排序、遗留 L1–L13（L5 已随
   切片 32 关闭）、手验项 U1–U4、契约化已知限制均记录在 backlog，本节不再罗列候选清单。每切片
   closeout 同步更新 backlog.md（划掉完成项并注明关闭切片号）并保持本节精简。

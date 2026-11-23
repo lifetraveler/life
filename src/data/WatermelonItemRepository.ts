@@ -71,16 +71,24 @@ import {
   isDataSnapshotItemEntry,
   isDataSnapshotItemTagEntry,
   isDataSnapshotReminderEntry,
+  isDataSnapshotSparkAttachmentEntry,
+  isDataSnapshotSparkEntry,
+  isDataSnapshotSparkItemEntry,
   isDataSnapshotTagEntry,
   isDataSnapshotWire,
   toDataSnapshotChannelPreset,
   toDataSnapshotItem,
+  toDataSnapshotSpark,
+  toDataSnapshotSparkAttachment,
+  toDataSnapshotSparkItem,
   type DataSnapshot,
   type DataSnapshotApplyResult,
   type DataSnapshotChannelPreset,
   type DataSnapshotReminder,
   type DataSnapshotTag,
 } from '../domain/dataSnapshot';
+import { normalizeSparkNullableText, SPARK_ATTACHMENT_MAX_BYTES } from '../domain/spark';
+import type { SparkAttachmentIo } from './SparkRepository';
 import {
   DEFAULT_REMINDER_CHANNEL,
   isExpoReminderChannel,
@@ -103,6 +111,9 @@ import ItemTagModel from '../db/models/ItemTagModel';
 import ReminderModel from '../db/models/ReminderModel';
 import SyncTombstoneModel from '../db/models/SyncTombstoneModel';
 import TagModel from '../db/models/TagModel';
+import SparkAttachmentModel from '../db/models/SparkAttachmentModel';
+import SparkItemModel from '../db/models/SparkItemModel';
+import SparkModel from '../db/models/SparkModel';
 import { seedPresetData } from '../db/seed';
 import { parseIcs } from '../domain/ics/parseIcs';
 import { parseAppriseChannelConfig } from '../notifications/channels/appriseConfig';
@@ -148,6 +159,10 @@ const APP_SETTINGS_TABLE = 'app_settings';
 const CHANNEL_PRESETS_TABLE = 'channel_presets';
 // 切片 35 阶段 1（AGENTS.md §7.47，schema v17）：删除传播墓碑表。
 const SYNC_TOMBSTONES_TABLE = 'sync_tombstones';
+// 切片 37 阶段 1（AGENTS.md §7.49，schema v19）：灵感三表。
+const SPARKS_TABLE = 'sparks';
+const SPARK_ATTACHMENTS_TABLE = 'spark_attachments';
+const SPARK_ITEMS_TABLE = 'spark_items';
 
 /** repository.md v0.8：导入超过 500 条时分批写入，每批 100 条。 */
 const IMPORT_BATCH_SIZE = 100;
@@ -197,7 +212,8 @@ interface Subscribable<T> {
   subscribe(next: (value: T) => void): { unsubscribe(): void };
 }
 
-function toDomainItem(model: ItemModel): Item {
+/** 切片 37（§7.49）：导出供 WatermelonSparkRepository 复用（防重复实现，单向依赖）。 */
+export function toDomainItem(model: ItemModel): Item {
   return {
     id: model.id,
     type: model.type,
@@ -672,14 +688,25 @@ export class WatermelonItemRepository implements ItemRepository {
    */
   private readonly systemCalendar: SystemCalendarDeps;
 
+  /**
+   * 切片 37（AGENTS.md §7.49 D5，第四参，可选）：数据快照恢复的灵感附件文件
+   * 补链 IO（下载到本地 sparks/ 目录）。null=不做文件补链（附件元数据照常落库，
+   * 详情页可后补）；生产装配在 src/data/index.ts 注入 defaultSparkAttachmentIo()，
+   * 测试不注入（expo-file-system 在 Jest 不可用）。attachmentIo 文件级操作与
+   * WatermelonSparkRepository 共用同一端口（SparkAttachmentIo）。
+   */
+  private readonly sparkAttachmentIo: SparkAttachmentIo | null;
+
   constructor(
     db: Database,
     deviceTzid: () => string = getDeviceTzid,
     systemCalendar: SystemCalendarDeps = defaultSystemCalendarDeps(),
+    sparkAttachmentIo: SparkAttachmentIo | null = null,
   ) {
     this.db = db;
     this.deviceTzid = deviceTzid;
     this.systemCalendar = systemCalendar;
+    this.sparkAttachmentIo = sparkAttachmentIo;
   }
 
   async createItem(input: CreateItemInput): Promise<Item> {
@@ -1274,10 +1301,12 @@ export class WatermelonItemRepository implements ItemRepository {
    * createConfigSnapshot）：items 全库（listItemsWithTags ∪ listArchivedItemsWithTags，
    * 含 archived/done）全字段 id 保真 + tags（含 id 供 join）+ reminders（v10 语义
    * 列全量；调度态两列与 deprecated 两列不进快照）+ channelPresets + itemTags join
-   * 全量（item_tags 直查，不经领域层）。外层 {version:1, kind:'data', exportedAt}。
+   * 全量（item_tags 直查，不经领域层）+ 切片 37 可选三块（§7.49 D5：sparks/
+   * sparkAttachments/sparkItems 全量，version/kind 不变）。外层
+   * {version:1, kind:'data', exportedAt}。
    */
   async createDataSnapshot(): Promise<DataSnapshot> {
-    const [activeItems, archivedItems, reminders, tags, channelPresets, joinModels] =
+    const [activeItems, archivedItems, reminders, tags, channelPresets, joinModels, sparkModels, sparkAttachmentModels, sparkJoinModels] =
       await Promise.all([
         this.listItemsWithTags(),
         this.listArchivedItemsWithTags(),
@@ -1285,6 +1314,9 @@ export class WatermelonItemRepository implements ItemRepository {
         this.listTags(),
         this.listChannelPresets(),
         this.itemTagsJoinQuery().fetch(),
+        this.db.get<SparkModel>(SPARKS_TABLE).query().fetch(),
+        this.db.get<SparkAttachmentModel>(SPARK_ATTACHMENTS_TABLE).query().fetch(),
+        this.db.get<SparkItemModel>(SPARK_ITEMS_TABLE).query().fetch(),
       ]);
     return {
       version: 1,
@@ -1314,6 +1346,39 @@ export class WatermelonItemRepository implements ItemRepository {
       })),
       channelPresets: channelPresets.map((preset) => toDataSnapshotChannelPreset(preset)),
       itemTags: joinModels.map((model) => ({ itemId: model.itemId, tagId: model.tagId })),
+      // —— 切片 37：可选三块全量组包（新快照恒携带键，可为空数组）——
+      sparks: sparkModels.map((model) =>
+        toDataSnapshotSpark({
+          id: model.id,
+          title: model.title,
+          content: model.content,
+          createdAt: model.createdAt.getTime(),
+          updatedAt: model.updatedAt.getTime(),
+        }),
+      ),
+      sparkAttachments: sparkAttachmentModels.map((model) =>
+        toDataSnapshotSparkAttachment({
+          id: model.id,
+          sparkId: model.sparkId,
+          kind: model.kind,
+          uri: model.uri,
+          remotePath: model.remotePath,
+          sha256: model.sha256,
+          fileSize: model.fileSize,
+          durationMs: model.durationMs,
+          width: model.width,
+          height: model.height,
+          createdAt: model.createdAt.getTime(),
+        }),
+      ),
+      sparkItems: sparkJoinModels.map((model) =>
+        toDataSnapshotSparkItem({
+          id: model.id,
+          sparkId: model.sparkId,
+          itemId: model.itemId,
+          createdAt: model.createdAt.getTime(),
+        }),
+      ),
     };
   }
 
@@ -1332,6 +1397,9 @@ export class WatermelonItemRepository implements ItemRepository {
     await this.ensureSeeded();
     let applied = 0;
     let skipped = 0;
+    // 切片 37：本轮已应用的附件行（事务外文件补链的输入：id + 快照 uri + remote_path），
+    // 闭包写入、db.write 返回后在事务外消费。
+    const appliedSparkAttachments: Array<{ id: string; uri: string; remotePath: string | null }> = [];
     await this.db.write(async () => {
       // 1) 事务内全量读取本地相关表（先全读后写：读失败 = 整体不落库）。
       const itemModels = await this.db.get<ItemModel>(ITEMS_TABLE).query().fetch();
@@ -1354,6 +1422,15 @@ export class WatermelonItemRepository implements ItemRepository {
         .fetch();
       const presetById = new Map(presetModels.map((model) => [model.id, model]));
       const joinModels = await this.db.get<ItemTagModel>(ITEM_TAGS_TABLE).query().fetch();
+      // 切片 37：灵感三表全量读（三块均为可选；表通常为空，读取成本可忽略）。
+      const sparkModels = await this.db.get<SparkModel>(SPARKS_TABLE).query().fetch();
+      const sparkById = new Map(sparkModels.map((model) => [model.id, model]));
+      const sparkAttachmentModels = await this.db
+        .get<SparkAttachmentModel>(SPARK_ATTACHMENTS_TABLE)
+        .query()
+        .fetch();
+      const sparkAttachmentById = new Map(sparkAttachmentModels.map((model) => [model.id, model]));
+      const sparkJoinModels = await this.db.get<SparkItemModel>(SPARK_ITEMS_TABLE).query().fetch();
 
       const operations: Model[] = [];
 
@@ -1697,9 +1774,254 @@ export class WatermelonItemRepository implements ItemRepository {
         }
       }
 
+      // —— 切片 37 可选三块（§7.49 D5；缺块=跳过该域，旧快照双向兼容）——
+
+      // sparks：按 id 命中覆盖 title/content（写路径同款 trim 空串归 null，命中行
+      // createdAt 不动、updatedAt 由 prepareUpdate 自动刷新）/未命中创建
+      //（prepareCreateFromDirtyRaw 保 id+created_at/updated_at）；快照内重复 id
+      // first-wins；形状不符计 skipped。
+      const resolvedSparkIds = new Set<string>();
+      if (Array.isArray(snapshot.sparks)) {
+        const seenSparkIds = new Set<string>();
+        for (const entry of snapshot.sparks) {
+          if (!isDataSnapshotSparkEntry(entry)) {
+            skipped += 1;
+            continue;
+          }
+          if (seenSparkIds.has(entry.id)) {
+            skipped += 1;
+            continue;
+          }
+          seenSparkIds.add(entry.id);
+          const existing = sparkById.get(entry.id);
+          if (existing) {
+            operations.push(
+              existing.prepareUpdate((draft) => {
+                draft.title = normalizeSparkNullableText(entry.title);
+                draft.content = normalizeSparkNullableText(entry.content);
+              }),
+            );
+          } else {
+            operations.push(
+              this.db.get<SparkModel>(SPARKS_TABLE).prepareCreateFromDirtyRaw({
+                id: entry.id,
+                _status: 'created',
+                _changed: '',
+                title: normalizeSparkNullableText(entry.title),
+                content: normalizeSparkNullableText(entry.content),
+                created_at: entry.createdAt,
+                updated_at: entry.updatedAt,
+              }),
+            );
+          }
+          resolvedSparkIds.add(entry.id);
+          applied += 1;
+        }
+      }
+
+      // sparkAttachments：按 id 命中覆盖元数据写穿 / 未命中创建（id 保真）；
+      // spark_id 悬挂（不在本轮已解析 sparks，同 reminders item_id 语义）计 skipped；
+      // 25MB 上限与写路径同口径拒绝（超限计 skipped）；uri 暂写快照值（源设备路径），
+      // 事务外按 remote_path 补链下载后回写本地 uri。
+      if (Array.isArray(snapshot.sparkAttachments)) {
+        const seenAttachmentIds = new Set<string>();
+        for (const entry of snapshot.sparkAttachments) {
+          if (!isDataSnapshotSparkAttachmentEntry(entry)) {
+            skipped += 1;
+            continue;
+          }
+          if (seenAttachmentIds.has(entry.id)) {
+            skipped += 1;
+            continue;
+          }
+          seenAttachmentIds.add(entry.id);
+          if (entry.fileSize > SPARK_ATTACHMENT_MAX_BYTES) {
+            skipped += 1;
+            continue;
+          }
+          if (!resolvedSparkIds.has(entry.sparkId)) {
+            skipped += 1;
+            continue;
+          }
+          const existing = sparkAttachmentById.get(entry.id);
+          if (existing) {
+            operations.push(
+              existing.prepareUpdate((draft) => {
+                draft.kind = entry.kind;
+                draft.uri = entry.uri;
+                draft.remotePath = entry.remotePath;
+                draft.sha256 = entry.sha256;
+                draft.fileSize = entry.fileSize;
+                draft.durationMs = entry.durationMs;
+                draft.width = entry.width;
+                draft.height = entry.height;
+              }),
+            );
+          } else {
+            operations.push(
+              this.db.get<SparkAttachmentModel>(SPARK_ATTACHMENTS_TABLE).prepareCreateFromDirtyRaw({
+                id: entry.id,
+                _status: 'created',
+                _changed: '',
+                spark_id: entry.sparkId,
+                kind: entry.kind,
+                uri: entry.uri,
+                remote_path: entry.remotePath,
+                sha256: entry.sha256,
+                file_size: entry.fileSize,
+                duration_ms: entry.durationMs,
+                width: entry.width,
+                height: entry.height,
+                created_at: entry.createdAt,
+              }),
+            );
+          }
+          appliedSparkAttachments.push({ id: entry.id, uri: entry.uri, remotePath: entry.remotePath });
+          applied += 1;
+        }
+      }
+
+      // sparkItems：块存在（含空数组）=权威替换——对每个已解析 spark 删除本地现有
+      // join（含悬挂 item）后按快照重建（prepareCreateFromDirtyRaw 保 id+created_at）；
+      // item_id 悬挂 / 快照内重复 id / 重复 join（同 spark+item）first-wins 计 skipped；
+      // 未在快照中的本地灵感 join 不动。
+      if (Array.isArray(snapshot.sparkItems)) {
+        const seenSparkItemIds = new Set<string>();
+        const declaredSparkItems: Array<{
+          id: string;
+          sparkId: string;
+          itemId: string;
+          createdAt: number;
+        }> = [];
+        const declaredPairs = new Set<string>();
+        for (const entry of snapshot.sparkItems) {
+          if (!isDataSnapshotSparkItemEntry(entry)) {
+            skipped += 1;
+            continue;
+          }
+          if (seenSparkItemIds.has(entry.id)) {
+            skipped += 1;
+            continue;
+          }
+          seenSparkItemIds.add(entry.id);
+          if (!resolvedSparkIds.has(entry.sparkId)) {
+            skipped += 1;
+            continue;
+          }
+          if (!resolvedItemIds.has(entry.itemId)) {
+            skipped += 1;
+            continue;
+          }
+          const pairKey = `${entry.sparkId}\u0000${entry.itemId}`;
+          if (declaredPairs.has(pairKey)) {
+            skipped += 1;
+            continue;
+          }
+          declaredPairs.add(pairKey);
+          declaredSparkItems.push({
+            id: entry.id,
+            sparkId: entry.sparkId,
+            itemId: entry.itemId,
+            createdAt: entry.createdAt,
+          });
+        }
+        // 权威替换按 join 语义（spark_id+item_id 对）upsert：声明对已存在的本地 join
+        // 幂等保留不重建（同批 destroy+create 同 id 在 LokiJS 适配器下先插后删会撞
+        // Duplicate key，SQLite 虽保序但语义仍以 pair 幂等为准）；resolved spark 的
+        // 本地 join 中 pair 未声明的删除；声明 pair 不存在的按快照 id 保真创建；
+        // id 撞本地不同 pair join（病理冲突）计 skipped 不动本地行。
+        const joinsById = new Map<string, SparkItemModel>();
+        const governedPairs = new Set<string>();
+        for (const model of sparkJoinModels) {
+          joinsById.set(model.id, model);
+          if (resolvedSparkIds.has(model.sparkId)) {
+            governedPairs.add(`${model.sparkId}\u0000${model.itemId}`);
+          }
+        }
+        for (const model of sparkJoinModels) {
+          if (!resolvedSparkIds.has(model.sparkId)) {
+            continue;
+          }
+          if (!declaredPairs.has(`${model.sparkId}\u0000${model.itemId}`)) {
+            operations.push(model.prepareDestroyPermanently());
+          }
+        }
+        for (const entry of declaredSparkItems) {
+          if (governedPairs.has(`${entry.sparkId}\u0000${entry.itemId}`)) {
+            continue;
+          }
+          if (joinsById.has(entry.id)) {
+            skipped += 1;
+            continue;
+          }
+          operations.push(
+            this.db.get<SparkItemModel>(SPARK_ITEMS_TABLE).prepareCreateFromDirtyRaw({
+              id: entry.id,
+              _status: 'created',
+              _changed: '',
+              spark_id: entry.sparkId,
+              item_id: entry.itemId,
+              created_at: entry.createdAt,
+            }),
+          );
+          applied += 1;
+        }
+      }
+
       await this.db.batch(...operations);
     });
-    return { applied, skipped };
+
+    // 切片 37：附件文件补链（§7.49 D5，事务外逐个执行不阻塞主恢复事务）。
+    const result: DataSnapshotApplyResult = { applied, skipped };
+    if (
+      Array.isArray(snapshot.sparks) ||
+      Array.isArray(snapshot.sparkAttachments) ||
+      Array.isArray(snapshot.sparkItems)
+    ) {
+      result.sparkAttachmentFiles = await this.restoreSparkAttachmentFiles(appliedSparkAttachments);
+    }
+    return result;
+  }
+
+  /**
+   * 切片 37：附件文件补链（§7.49 D5）。仅处理本轮已应用且带 remote_path 的附件行：
+   * 本地文件已存在（同机恢复）跳过；否则经 SparkAttachmentIo.downloadToSparksDir
+   * 下载到本地 sparks/ 目录并回写行 uri。单件失败（离线/远端缺失/IO 错误）仅计数
+   * 披露——行已恢复、详情页可重试下载，不阻断整体恢复结果。未注入 IO（sparkIo=null）
+   * 时恒 {restored:0, failed:0}。
+   */
+  private async restoreSparkAttachmentFiles(
+    appliedRows: ReadonlyArray<{ id: string; uri: string; remotePath: string | null }>,
+  ): Promise<{ restored: number; failed: number }> {
+    const io = this.sparkAttachmentIo;
+    if (!io || appliedRows.length === 0) {
+      return { restored: 0, failed: 0 };
+    }
+    let restored = 0;
+    let failed = 0;
+    for (const row of appliedRows) {
+      if (row.remotePath === null) {
+        continue;
+      }
+      try {
+        if (await io.fileExists(row.uri)) {
+          continue;
+        }
+        const newUri = await io.downloadToSparksDir(row.remotePath);
+        const model = await this.db.get<SparkAttachmentModel>(SPARK_ATTACHMENTS_TABLE).find(row.id);
+        await this.db.write(async () => {
+          await this.db.batch(
+            model.prepareUpdate((draft) => {
+              draft.uri = newUri;
+            }),
+          );
+        });
+        restored += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    return { restored, failed };
   }
 
   // —— 切片 35 阶段 1：双向同步（AGENTS.md §7.47，契约外显式扩展成对 + 裁剪，先例 createDataSnapshot/applyDataSnapshot）——
