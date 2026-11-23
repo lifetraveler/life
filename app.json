@@ -2,7 +2,7 @@
   "expo": {
     "name": "life",
     "slug": "life",
-    "version": "0.36.0",
+    "version": "0.37.0",
     "scheme": "life",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
@@ -62,7 +62,21 @@
       ],
       "expo-localization",
       "expo-font",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "允许 $(PRODUCT_NAME) 使用麦克风录制灵感语音"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "允许 $(PRODUCT_NAME) 使用相机拍摄灵感照片",
+          "photosPermission": "允许 $(PRODUCT_NAME) 访问你的相册以添加灵感图片"
+        }
+      ],
+      "expo-asset"
     ]
   }
 }

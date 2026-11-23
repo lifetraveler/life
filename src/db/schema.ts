@@ -25,8 +25,10 @@ import { appSchema, tableSchema } from '@nozbe/watermelondb';
  * WebDAV——行级 LWW + 墓碑删除传播，docs/proposals/slice-35-two-way-sync-webdav.md）。
  * v18（切片 36 阶段 1）：app_settings 新增 ai_schedule_query_enabled
  * （AGENTS.md §7.48 AI 日程查询/记忆检索——查询分支总开关，默认开）。
+ * v19（切片 37 阶段 1）：新增 sparks / spark_attachments / spark_items 三表
+ * （AGENTS.md §7.49 Spark 灵感火花，docs/proposals/slice-37-spark-inspiration.md D2）。
  */
-export const SCHEMA_VERSION = 18;
+export const SCHEMA_VERSION = 19;
 
 export const schema = appSchema({
   version: SCHEMA_VERSION,
@@ -242,6 +244,63 @@ export const schema = appSchema({
         { name: 'kind', type: 'string' },
         { name: 'entity_id', type: 'string', isIndexed: true },
         { name: 'deleted_at', type: 'number' },
+      ],
+    }),
+    // v19（切片 37 阶段 1，AGENTS.md §7.49，docs/proposals/slice-37-spark-inspiration.md D2）：
+    // sparks——灵感本体表。
+    // - title / content 双 isOptional：纯录音灵感（Q2 仅存+回放，无转写）先建行后挂附件，
+    //   两列可能同时为 null（录音流程合法状态，提案 D3 createSpark 允许双空）；
+    // - created_at 供灵感流倒序展示（listSparks created_at 降序）；updated_at 供数据快照
+    //   恢复命中覆盖语义（items 先例：命中覆盖由 prepareUpdate 自动刷新）。
+    // - 不建 SQLite 唯一约束；无归档/搜索列（提案 D8 明确不做）。
+    tableSchema({
+      name: 'sparks',
+      columns: [
+        { name: 'title', type: 'string', isOptional: true },
+        { name: 'content', type: 'string', isOptional: true },
+        { name: 'created_at', type: 'number' },
+        { name: 'updated_at', type: 'number' },
+      ],
+    }),
+    // v19（切片 37 阶段 1）：spark_attachments——灵感附件元数据表。
+    // - spark_id isIndexed：按灵感批量查附件（详情页/列表徽标）+ deleteSpark 级联删行；
+    // - kind 仅 'audio' | 'image'（写路径守卫，枚举外抛错；schema 层不建 CHECK，
+    //   与 reminders.frequency 等 Repository 层守卫先例一致）；
+    // - uri 为本地文件绝对路径（documentDirectory/sparks/<uuid>.<ext>，提案 D4）；
+    // - remote_path 存 life-attachments 内的远端文件名（不含目录前缀）：
+    //   构建远端 URL 时拼接 WEBDAV_ATTACHMENTS_DIR，跨设备 basePath 可迁移（即改名即可）；
+    //   即时上传失败时为 null（「未备份」徽标 + 详情页重传，提案 D4）；
+    // - sha256 为上传时计算的文件摘要（hex 小写），供 hash 命名与重复上传对账；
+    // - file_size 非可选（写路径必带，上限 25MB 守卫）；duration_ms 仅录音附件、
+    //   width/height 仅图片附件，均为 isOptional number；
+    // - created_at 供附件列表稳定排序（asc，同 item_tags join 先例）。
+    tableSchema({
+      name: 'spark_attachments',
+      columns: [
+        { name: 'spark_id', type: 'string', isIndexed: true },
+        { name: 'kind', type: 'string' },
+        { name: 'uri', type: 'string' },
+        { name: 'remote_path', type: 'string', isOptional: true },
+        { name: 'sha256', type: 'string', isOptional: true },
+        { name: 'file_size', type: 'number' },
+        { name: 'duration_ms', type: 'number', isOptional: true },
+        { name: 'width', type: 'number', isOptional: true },
+        { name: 'height', type: 'number', isOptional: true },
+        { name: 'created_at', type: 'number' },
+      ],
+    }),
+    // v19（切片 37 阶段 1）：spark_items——灵感↔计划一对多关联 join 表（提案 D3）。
+    // - 一对多：一个灵感可关联多个计划；不做计划侧反查入口（提案 D8 明确不做）。
+    // - spark_id / item_id 均 isIndexed：双向按 id 批量查 + deleteSpark 级联删行 +
+    //   数据快照恢复按 resolved spark 删除重建（itemTags join 先例同构）。
+    // - item_id 存在性校验在 Repository 写路径（link 前 getItemById 命中检查，
+    //   不命中抛错——updateItem categoryId 校验同构），不建外键约束。
+    tableSchema({
+      name: 'spark_items',
+      columns: [
+        { name: 'spark_id', type: 'string', isIndexed: true },
+        { name: 'item_id', type: 'string', isIndexed: true },
+        { name: 'created_at', type: 'number' },
       ],
     }),
   ],

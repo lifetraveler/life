@@ -18,12 +18,19 @@ import {
   isDataSnapshotWire,
   parseDataSnapshot,
   serializeDataSnapshot,
+  isDataSnapshotSparkAttachmentEntry,
+  isDataSnapshotSparkEntry,
+  isDataSnapshotSparkItemEntry,
   toDataSnapshotChannelPreset,
   toDataSnapshotItem,
   toDataSnapshotReminder,
+  toDataSnapshotSpark,
+  toDataSnapshotSparkAttachment,
+  toDataSnapshotSparkItem,
   toDataSnapshotTag,
   type DataSnapshot,
 } from '../dataSnapshot';
+import type { Spark, SparkAttachment, SparkItemLink } from '../spark';
 import type { Item } from '../item';
 import type { Reminder } from '../reminder';
 import type { ChannelPreset } from '../channelPreset';
@@ -357,5 +364,61 @@ describe('组包映射（领域对象 → 快照条目）', () => {
     expect(
       toDataSnapshotTag({ id: 'tag-1', name: '灵感', color: '#00ff00', emoji: '💡' }),
     ).toEqual({ id: 'tag-1', name: '灵感', color: '#00ff00', emoji: '💡' });
+  });
+});
+
+describe('Spark 可选三块（切片 37 §7.49 D5）：条目有效性谓词', () => {
+  function makeSpark(): Spark {
+    return { id: 'spark-1', title: null, content: '一条灵感', createdAt: 1699999999000, updatedAt: 1700000001000 };
+  }
+  function makeAttachment(): SparkAttachment {
+    return {
+      id: 'att-1', sparkId: 'spark-1', kind: 'audio', uri: '/sparks/a.m4a',
+      remotePath: 'abc123def4567890-rec.m4a', sha256: 'abc123def4567890', fileSize: 1024,
+      durationMs: 3000, width: null, height: null, createdAt: 1699999999000,
+    };
+  }
+  function makeLink(): SparkItemLink & { id: string } {
+    return { id: 'link-1', sparkId: 'spark-1', itemId: 'item-1', createdAt: 1699999999000 };
+  }
+  it('spark：id 非空 + title/content string|null + 时间戳有限', () => {
+    expect(isDataSnapshotSparkEntry(toDataSnapshotSpark(makeSpark()))).toBe(true);
+    expect(isDataSnapshotSparkEntry({ id: '', title: null, content: null, createdAt: 1, updatedAt: 1 })).toBe(false);
+    expect(isDataSnapshotSparkEntry({ id: 's', title: 1, content: null, createdAt: 1, updatedAt: 1 })).toBe(false);
+    expect(isDataSnapshotSparkEntry({ id: 's', title: null, content: null, createdAt: 'x', updatedAt: 1 })).toBe(false);
+    expect(isDataSnapshotSparkEntry(null)).toBe(false);
+  });
+  it('sparkAttachment：kind 枚举 + uri 非空 + fileSize 有限 + 可空维度字段', () => {
+    expect(isDataSnapshotSparkAttachmentEntry(toDataSnapshotSparkAttachment(makeAttachment()))).toBe(true);
+    const badKind = { ...makeAttachment(), kind: 'video' };
+    expect(isDataSnapshotSparkAttachmentEntry(badKind)).toBe(false);
+    expect(isDataSnapshotSparkAttachmentEntry({ ...makeAttachment(), uri: '' })).toBe(false);
+    expect(isDataSnapshotSparkAttachmentEntry({ ...makeAttachment(), fileSize: 'x' })).toBe(false);
+    expect(isDataSnapshotSparkAttachmentEntry({ ...makeAttachment(), durationMs: null, width: 100, height: 50 })).toBe(true);
+    expect(isDataSnapshotSparkAttachmentEntry({ ...makeAttachment(), remotePath: null, sha256: null })).toBe(true);
+  });
+  it('sparkItem：id/sparkId/itemId 非空串 + createdAt 有限', () => {
+    expect(isDataSnapshotSparkItemEntry(toDataSnapshotSparkItem(makeLink()))).toBe(true);
+    expect(isDataSnapshotSparkItemEntry({ id: 'l', sparkId: 's', itemId: '', createdAt: 1 })).toBe(false);
+    expect(isDataSnapshotSparkItemEntry({ id: 'l', sparkId: 's', itemId: 'i', createdAt: null })).toBe(false);
+  });
+});
+
+describe('Spark 可选三块：组包映射（领域对象 → 快照条目）', () => {
+  it('toDataSnapshotSpark：双可空投影 + 时间戳保真', () => {
+    const spark: Spark = { id: 's1', title: '标题', content: null, createdAt: 111, updatedAt: 222 };
+    expect(toDataSnapshotSpark(spark)).toEqual({ id: 's1', title: '标题', content: null, createdAt: 111, updatedAt: 222 });
+  });
+  it('toDataSnapshotSparkAttachment：全字段投影（remotePath/sha256 保真）', () => {
+    const att: SparkAttachment = {
+      id: 'a1', sparkId: 's1', kind: 'image', uri: '/sparks/a.jpg', remotePath: null, sha256: null,
+      fileSize: 2048, durationMs: null, width: 800, height: 600, createdAt: 333,
+    };
+    expect(toDataSnapshotSparkAttachment(att)).toEqual(att);
+  });
+  it('toDataSnapshotSparkItem：id + sparkId/itemId + createdAt 投影', () => {
+    expect(toDataSnapshotSparkItem({ id: 'l1', sparkId: 's1', itemId: 'i1', createdAt: 444 })).toEqual({
+      id: 'l1', sparkId: 's1', itemId: 'i1', createdAt: 444,
+    });
   });
 });

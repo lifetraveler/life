@@ -433,5 +433,49 @@ export default schemaMigrations({
         }),
       ],
     },
+    {
+      // 切片 37 阶段 1（AGENTS.md §7.49 Spark 灵感火花，
+      // docs/proposals/slice-37-spark-inspiration.md D2）：v19 新增 sparks /
+      // spark_attachments / spark_items 三表；v2–v18 step 保持原样，不得修改。
+      // - 三条 createTable，零 unsafeExecuteSql、零 UPDATE：全新表无既有行回填问题
+      //   （v17 sync_tombstones createTable 先例）；
+      // - 列定义与 schema.ts 的 tableSchema 严格一致（漂移会被模式不匹配检测抛错）；
+      // - title/content 等可空列无存量数据概念，无需回填。
+      toVersion: 19,
+      steps: [
+        createTable({
+          name: 'sparks',
+          columns: [
+            { name: 'title', type: 'string', isOptional: true },
+            { name: 'content', type: 'string', isOptional: true },
+            { name: 'created_at', type: 'number' },
+            { name: 'updated_at', type: 'number' },
+          ],
+        }),
+        createTable({
+          name: 'spark_attachments',
+          columns: [
+            { name: 'spark_id', type: 'string', isIndexed: true },
+            { name: 'kind', type: 'string' },
+            { name: 'uri', type: 'string' },
+            { name: 'remote_path', type: 'string', isOptional: true },
+            { name: 'sha256', type: 'string', isOptional: true },
+            { name: 'file_size', type: 'number' },
+            { name: 'duration_ms', type: 'number', isOptional: true },
+            { name: 'width', type: 'number', isOptional: true },
+            { name: 'height', type: 'number', isOptional: true },
+            { name: 'created_at', type: 'number' },
+          ],
+        }),
+        createTable({
+          name: 'spark_items',
+          columns: [
+            { name: 'spark_id', type: 'string', isIndexed: true },
+            { name: 'item_id', type: 'string', isIndexed: true },
+            { name: 'created_at', type: 'number' },
+          ],
+        }),
+      ],
+    },
   ],
 });

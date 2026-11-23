@@ -412,6 +412,9 @@ export interface ItemRepository {
    * 两列）+ channelPresets（configJson 明文，用户定案）+ itemTags join 全量
    * （item_tags 直查）。外层 {version:1, kind:'data', exportedAt}（formatExportedAt
    * 同构）。
+   * 切片 37（v0.43，§7.49 D5）：追加可选三块 sparks/sparkAttachments/sparkItems
+   * （全量组包，新快照恒携带键可空数组）；version/kind 不变，旧 App 读新快照忽略
+   * 未知键（isDataSnapshotWire 只查必需键）双向兼容。
    */
   createDataSnapshot(): Promise<DataSnapshot>;
   /**
@@ -430,6 +433,22 @@ export interface ItemRepository {
    * item 删除现有全部 join + 按快照重建（tagId 解析失败计 skipped；重复 join 声明
    * first-wins）。快照内重复 id 统一 first-wins 计 skipped（防同模型二次
    * prepareUpdate on pending）。
+   * 切片 37（v0.43，§7.49 D5）三可选块：缺块=该域跳过（旧格式快照兼容）。
+   * sparks 按 id 命中覆盖 title/content（trim 空串归 null，createdAt 不动、
+   * updatedAt 自动刷新）/未命中创建（id+时间戳经 _raw 保真）/本地独有保留；
+   * sparkAttachments 按 id 命中覆盖 8 语义字段（spark_id 不改）/未命中创建（id
+   * 保真）/fileSize 超 SPARK_ATTACHMENT_MAX_BYTES 或 spark_id 未解析计 skipped；
+   * sparkItems 块存在（含空数组）=权威替换——按 join 语义（spark_id+item_id 对）
+   * upsert：声明对已存在的本地 join 幂等保留（不重建，同批 destroy+create 同 id
+   * 在 LokiJS 下先插后删撞 Duplicate key，SQLite 虽保序仍以 pair 幂等为准）/
+   * resolved spark 的本地 join 中 pair 未声明的删除/声明 pair 不存在的按快照 id
+   * 保真创建（item_id 未解析、重复声明、id 撞本地不同 pair join 计 skipped）；
+   * 本地独有 spark 的 join 不动。附件文件补链在主事务外逐个执行（仅快照携带任一
+   * Spark 键——含空数组，新格式快照恒携带——且注入 IO 时）：remotePath 缺失跳过、
+   * 本地文件已存在（同机恢复）跳过、否则经 IO 下载到 sparks/ 并独立事务回写行
+   * uri——结果记入 DataSnapshotApplyResult.sparkAttachmentFiles {restored, failed}
+   * （失败仅计数，行保留快照 uri 可后补）；未注入 IO 恒 {restored:0, failed:0}，
+   * 旧格式快照（三键删除）该字段缺省。
    * 返回 applied（items/tags/reminders/channelPresets 每个实际写入条目计 1 +
    * 每个新建 join 计 1，删除不计）/skipped（形状不符 + 深层校验失败（weekdaysJson/
    * onceCivilJson 可解析、channelsJson 非空合法渠道数组且 expo≤1、channelConfigsJson

@@ -9,6 +9,9 @@ import ChannelPresetModel from './models/ChannelPresetModel';
 import ItemModel from './models/ItemModel';
 import ItemTagModel from './models/ItemTagModel';
 import ReminderModel from './models/ReminderModel';
+import SparkAttachmentModel from './models/SparkAttachmentModel';
+import SparkItemModel from './models/SparkItemModel';
+import SparkModel from './models/SparkModel';
 import SyncTombstoneModel from './models/SyncTombstoneModel';
 import TagModel from './models/TagModel';
 import { schema } from './schema';
@@ -36,6 +39,10 @@ export const database = new Database({
     AppSettingsModel,
     ChannelPresetModel,
     SyncTombstoneModel,
+    // 切片 37（AGENTS.md §7.49）：灵感火花三表 model 注册（schema v19）。
+    SparkModel,
+    SparkAttachmentModel,
+    SparkItemModel,
   ],
 });
 

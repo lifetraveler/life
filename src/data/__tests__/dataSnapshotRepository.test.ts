@@ -22,6 +22,9 @@ import CategoryModel from '../../db/models/CategoryModel';
 import AppSettingsModel from '../../db/models/AppSettingsModel';
 import TagModel from '../../db/models/TagModel';
 import ChannelPresetModel from '../../db/models/ChannelPresetModel';
+import SparkModel from '../../db/models/SparkModel';
+import SparkAttachmentModel from '../../db/models/SparkAttachmentModel';
+import SparkItemModel from '../../db/models/SparkItemModel';
 import { schema } from '../../db/schema';
 import { WatermelonItemRepository } from '../WatermelonItemRepository';
 import type { ItemRepository } from '../ItemRepository';
@@ -80,6 +83,9 @@ function makeRepository(): {
       CategoryModel,
       AppSettingsModel,
       ChannelPresetModel,
+      SparkModel,
+      SparkAttachmentModel,
+      SparkItemModel,
     ],
   });
   return { repo: new WatermelonItemRepository(database, () => 'UTC'), adapter };
@@ -309,8 +315,14 @@ describe('applyDataSnapshot（增量覆盖恢复，repository.md v0.35 冻结语
 
     const { repo: freshRepo } = makeRepository();
     const result = await freshRepo.applyDataSnapshot(snapshot);
-    // item 1 + tag 1 + reminder 1 + preset 1 + join 1。
-    expect(result).toEqual({ applied: 5, skipped: 0 });
+    // item 1 + tag 1 + reminder 1 + preset 1 + join 1；切片 37 起新格式快照恒携带
+    // Spark 三键（本例为空数组）→ sparkAttachmentFiles 恒返回 {0,0}（未注入 IO）；
+    // 旧格式（三键删除）该字段缺省。
+    expect(result).toEqual({
+      applied: 5,
+      skipped: 0,
+      sparkAttachmentFiles: { restored: 0, failed: 0 },
+    });
 
     const items = await freshRepo.listItemsWithTags();
     expect(items).toHaveLength(1);
