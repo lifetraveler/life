@@ -56,6 +56,12 @@ function makeStubIo(overrides: Partial<SparkAttachmentIo> = {}): StubIo {
   const calls: string[] = [];
   return {
     calls,
+    copyIntoSparksDir:
+      overrides.copyIntoSparksDir ??
+      (async (sourceUri: string, extension: string) => ({
+        uri: `/tmp/sparks/copied.${extension}`,
+        fileSize: 123,
+      })),
     fileExists: overrides.fileExists ?? (async () => false),
     deleteFile: overrides.deleteFile ?? (async () => undefined),
     downloadToSparksDir:
@@ -65,7 +71,12 @@ function makeStubIo(overrides: Partial<SparkAttachmentIo> = {}): StubIo {
         return `/sparks/restored-${remoteName}`;
       }),
     deleteRemoteFile: overrides.deleteRemoteFile ?? (async () => undefined),
-    uploadFromLocalFile: overrides.uploadFromLocalFile ?? (async () => undefined),
+    uploadSparkFile:
+      overrides.uploadSparkFile ??
+      (async (localUri: string, originalFileName: string) => ({
+        remotePath: `stub0123456789ab-${originalFileName}`,
+        sha256: 'stub0123456789abcdef0123456789abcdef0123',
+      })),
   };
 }
 

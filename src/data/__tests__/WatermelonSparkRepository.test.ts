@@ -53,6 +53,10 @@ function makeStubIo(overrides: Partial<SparkAttachmentIo> = {}): SparkAttachment
   const calls: string[] = [];
   return {
     calls,
+    copyIntoSparksDir: async (sourceUri, extension) => {
+      calls.push(`copy:${sourceUri}:${extension}`);
+      return { uri: `/tmp/sparks/copied.${extension}`, fileSize: 123 };
+    },
     fileExists: async (uri) => {
       calls.push(`exists:${uri}`);
       return true;
@@ -67,8 +71,9 @@ function makeStubIo(overrides: Partial<SparkAttachmentIo> = {}): SparkAttachment
     deleteRemoteFile: async (remoteName) => {
       calls.push(`rdrm:${remoteName}`);
     },
-    uploadFromLocalFile: async (remoteName, localUri) => {
-      calls.push(`up:${remoteName}:${localUri}`);
+    uploadSparkFile: async (localUri, originalFileName) => {
+      calls.push(`up:${localUri}:${originalFileName}`);
+      return { remotePath: `stub0123456789ab-${originalFileName}`, sha256: 'stub0123456789abcdef0123456789abcdef0123' };
     },
     ...overrides,
   };

@@ -11,16 +11,17 @@ type IoniconName = ComponentProps<typeof Ionicons>['name'];
  * 底部 Tab 图标表（阶段 5 代码检查：图标一律 @expo/vector-icons，禁用 emoji 图标）。
  * 选中用实心字形、未选中用线性字形（-outline 后缀）。
  */
-const TAB_ICONS: Record<'flash' | 'items' | 'plan' | 'profile', { selected: IoniconName; outline: IoniconName }> = {
+const TAB_ICONS: Record<'flash' | 'sparks' | 'plan' | 'profile', { selected: IoniconName; outline: IoniconName }> = {
   flash: { selected: 'flash', outline: 'flash-outline' },
-  items: { selected: 'checkbox', outline: 'checkbox-outline' },
+  // 切片 37（§7.49）：事项占位页升级为灵感火花页，图标 checkbox → bulb。
+  sparks: { selected: 'bulb', outline: 'bulb-outline' },
   plan: { selected: 'calendar', outline: 'calendar-outline' },
   profile: { selected: 'person', outline: 'person-outline' },
 };
 
 /**
  * 底部 Tab 导航布局（切片 14 阶段 5，tasks/toki_1.webp 图1）：
- * - 4 个入口：闪电（占位，闪电添加留给切片 15）/ 事项（占位）/
+ * - 4 个入口：闪电 / 灵感（切片 37 Spark 灵感火花）/ 计划（主视图）/ 我的；
  *   计划（主视图，原 index.tsx 移入）/ 我的（原设置页移入）；
  * - initialRouteName="plan"：启动落在计划页；
  * - index（阶段 5c 补）：重导出 plan，使根 URL life:// 可匹配（桌面图标 /
@@ -60,12 +61,12 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="items"
+        name="sparks"
         options={{
-          title: '事项',
+          title: '灵感',
           tabBarIcon: ({ color, size, focused }) => (
             <Ionicons
-              name={focused ? TAB_ICONS.items.selected : TAB_ICONS.items.outline}
+              name={focused ? TAB_ICONS.sparks.selected : TAB_ICONS.sparks.outline}
               size={size}
               color={color}
             />

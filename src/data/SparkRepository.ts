@@ -36,20 +36,38 @@ export interface SparkAttachmentUploadPatch {
   sha256: string;
 }
 
+/** 上传结果（uploadSparkFile 内部计算 hash 命名，回填 markAttachmentUploaded 用）。 */
+export interface SparkUploadResult {
+  /** 远端文件名（life-attachments 内，不含目录前缀——buildAttachmentRemoteName 产物）。 */
+  remotePath: string;
+  /** 文件字节 SHA-256 HEX（expo-crypto digest）。 */
+  sha256: string;
+}
+
+/** 复制结果（copyIntoSparksDir：文件落 sparks/ 后回报 uri 与文件大小）。 */
+export interface SparkCopiedFile {
+  uri: string;
+  fileSize: number;
+}
+
 /**
  * 附件文件与远端 IO 端口（切片 37）：Repository 数据行与文件系统/WebDAV 解耦。
+ * - copyIntoSparksDir：录音/拍照/相册产物复制进 sparks/<uuid>.<ext> 并回报
+ *   文件大小（capture 编排用；copy 失败抛错）；
  * - deleteFile：文件不存在视为成功（幂等）；
  * - deleteRemoteFile：远端 404 视为成功（幂等）；其余失败抛错由调用方披露；
- * - uploadFromLocalFile：缺 WebDAV 配置抛错（调用方转「未备份」披露）；
+ * - uploadSparkFile：读本地文件 → 字节 SHA-256 → buildAttachmentRemoteName hash 命名
+ *   → PUT（60s 超时）；单次文件读取；缺 WebDAV 配置抛错（调用方转「未备份」披露）；
  * - downloadToSparksDir：下载远端附件写入 sparks/ 本地目录并返回新 uri
  *   （数据恢复附件文件补链路，事务外执行）。
  */
 export interface SparkAttachmentIo {
+  copyIntoSparksDir(sourceUri: string, extension: string): Promise<SparkCopiedFile>;
   fileExists(uri: string): Promise<boolean>;
   deleteFile(uri: string): Promise<void>;
   downloadToSparksDir(remoteName: string): Promise<string>;
   deleteRemoteFile(remoteName: string): Promise<void>;
-  uploadFromLocalFile(remoteName: string, localUri: string): Promise<void>;
+  uploadSparkFile(localUri: string, originalFileName: string): Promise<SparkUploadResult>;
 }
 
 export interface SparkRepository {

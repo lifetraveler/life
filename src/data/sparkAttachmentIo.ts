@@ -3,8 +3,8 @@
  *
  * - 本地：documentDirectory/sparks/<uuid>.<ext>（uuid v4 复用 generateDeviceId
  *   生成器，syncDevice.ts 先例——仅承担唯一文件名语义，非安全凭证）；
- * - 远端：life-attachments/<sha256 前16>-<名>（URL 组装在 domain/webdav/url.ts，
- *   文件名由 buildAttachmentRemoteName 生成后传入本层）；
+ * - 远端：life-attachments/<sha256 前16>-<名>（buildAttachmentRemoteName 在本层
+ *   uploadSparkFile 内生成——hash 由文件字节经 expo-crypto digest 计算）；
  * - WebDAV：WebdavClient 附件三方法（每请求 60s 超时）+ SecureWebdavConfigStore
  *   （webdav_backup_config_v1，backup.tsx 页面级装配同款键）；
  * - expo-file-system 走 legacy 子路径（SDK 54 主入口为 New API，
@@ -17,18 +17,29 @@
  * - remoteName 一律先过 isWebdavAttachmentRemoteName 守卫（防路径穿越）。
  */
 
+import * as Crypto from 'expo-crypto';
 import * as FileSystem from 'expo-file-system/legacy';
 
+import { buildAttachmentRemoteName } from '../domain/spark';
 import { generateDeviceId } from '../domain/syncDevice';
 import { decodeBase64ToBytes, encodeBytesToBase64 } from '../domain/webdav/base64';
 import type { WebdavConfig } from '../domain/webdav/config';
 import { isWebdavAttachmentRemoteName } from '../domain/webdav/url';
 import { SecureWebdavConfigStore } from './SecureWebdavConfigStore';
-import type { SparkAttachmentIo } from './SparkRepository';
+import type { SparkAttachmentIo, SparkCopiedFile, SparkUploadResult } from './SparkRepository';
 import { WebdavClient } from './webdav/WebdavClient';
 
 const client = new WebdavClient();
 const configStore = new SecureWebdavConfigStore();
+
+/** 字节 → 小写 HEX（SHA-256 摘要展示形态，remoteName 命名输入）。 */
+function bytesToHex(bytes: Uint8Array): string {
+  let out = '';
+  for (const byte of bytes) {
+    out += byte.toString(16).padStart(2, '0');
+  }
+  return out;
+}
 
 /** sparks 本地附件目录（documentDirectory/sparks/，提案 D4）。 */
 async function ensureSparksDir(): Promise<string> {
@@ -63,6 +74,18 @@ async function loadConfigOrThrow(action: string): Promise<WebdavConfig> {
 /** 组装默认 IO（src/data/index.ts 装配单例时传入 WatermelonSparkRepository）。 */
 export function defaultSparkAttachmentIo(): SparkAttachmentIo {
   return {
+    async copyIntoSparksDir(sourceUri: string, extension: string): Promise<SparkCopiedFile> {
+      const ext = /^[a-z0-9]{1,8}$/.test(extension) ? extension : 'bin';
+      const dir = await ensureSparksDir();
+      const target = `${dir}${generateDeviceId()}.${ext}`;
+      await FileSystem.copyAsync({ from: sourceUri, to: target });
+      const info = await FileSystem.getInfoAsync(target);
+      if (!info.exists || typeof info.size !== 'number') {
+        throw new Error('copyIntoSparksDir: 复制后文件大小不可知');
+      }
+      return { uri: target, fileSize: info.size };
+    },
+
     async fileExists(uri: string): Promise<boolean> {
       const info = await FileSystem.getInfoAsync(uri);
       return info.exists;
@@ -99,16 +122,19 @@ export function defaultSparkAttachmentIo(): SparkAttachmentIo {
       await client.deleteAttachmentRemote(config, remoteName);
     },
 
-    async uploadFromLocalFile(remoteName: string, localUri: string): Promise<void> {
-      if (!isWebdavAttachmentRemoteName(remoteName)) {
-        throw new Error(`uploadFromLocalFile: 非法附件文件名（${remoteName}）`);
-      }
+    async uploadSparkFile(localUri: string, originalFileName: string): Promise<SparkUploadResult> {
+      // 单次读取：base64 → 字节 → SHA-256 → hash 命名 → PUT（uploadAttachment
+      // 内部再过 isWebdavAttachmentRemoteName 守卫，双保险防路径穿越）。
       const config = await loadConfigOrThrow('上传附件');
       const base64 = await FileSystem.readAsStringAsync(localUri, {
         encoding: FileSystem.EncodingType.Base64,
       });
       const bytes = decodeBase64ToBytes(base64);
-      await client.uploadAttachment(config, remoteName, bytes);
+      const digest = await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, bytes);
+      const sha256 = bytesToHex(new Uint8Array(digest));
+      const remotePath = buildAttachmentRemoteName(sha256, originalFileName);
+      await client.uploadAttachment(config, remotePath, bytes);
+      return { remotePath, sha256 };
     },
   };
 }

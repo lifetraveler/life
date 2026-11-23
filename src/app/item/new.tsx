@@ -8,9 +8,9 @@ import {
   Text,
   View,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 
-import { itemRepository } from '../../data';
+import { itemRepository, sparkRepository } from '../../data';
 import type { Category } from '../../domain/category';
 import type { Tag } from '../../domain/tag';
 import { reminderScheduler } from '../../notifications';
@@ -29,7 +29,10 @@ import type { ThemeColors } from '../../ui/theme';
  *   列表由计划页响应式订阅自动刷新（验收 17）；
  * - life://item/new 深链与计划页 FAB push 同一路由；quick-add（life://quick-add）
  *   也落在本页（ui.md「快速记录落点 v0.14」）；
- * - 未保存草稿由「放弃新建」确认弹窗保护（替代原主页返回键草稿判定）。
+ * - 未保存草稿由「放弃新建」确认弹窗保护（替代原主页返回键草稿判定）；
+ * - 切片 37（§7.49 D7）灵感转计划：params.fromSpark 存在时按 title/content 预填
+ *   表单，保存成功后 linkSparkToItem 建立关联（失败仅披露，不回滚条目），
+ *   成功返回灵感详情页。
  */
 
 /** 新建页待绑定标签：尚无 Tag 记录，以占位 id 构造 Chip 渲染用对象，保存时取 name 落库 */
@@ -43,12 +46,29 @@ export default function ItemNewPage() {
   const styles = useMemo(() => makeStyles(colors), [colors]);
 
   const router = useRouter();
+  const params = useLocalSearchParams<{ fromSpark?: string; title?: string; content?: string }>();
+  // 切片 37：仅 fromSpark 存在时进入转计划预填模式（无该参数的入口零改动）。
+  const fromSparkId = typeof params.fromSpark === 'string' && params.fromSpark.length > 0 ? params.fromSpark : null;
   const form = useItemForm();
+  const [prefilled, setPrefilled] = useState(false);
   const [categories, setCategories] = useState<Category[]>([]);
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const deviceTzid = getDeviceTzid();
+
+  // 灵感转计划预填（一次性；useItemForm 无初始值入口，挂载后 set 一次）。
+  useEffect(() => {
+    if (prefilled || fromSparkId === null) return;
+    if (typeof params.title === 'string' && params.title.length > 0) {
+      form.setTitle(params.title);
+    }
+    if (typeof params.content === 'string' && params.content.length > 0) {
+      form.setContent(params.content);
+    }
+    setPrefilled(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromSparkId, params.title, params.content, prefilled]);
 
   useEffect(() => {
     itemRepository
@@ -136,6 +156,15 @@ export default function ItemNewPage() {
         await reminderScheduler.reconcile();
       } catch (error) {
         console.warn('[slice-14] 新建保存后 reconcile 失败', error);
+      }
+      // 切片 37：灵感转计划——保存成功后建立关联（失败仅披露，不回滚条目）。
+      if (fromSparkId !== null) {
+        try {
+          await sparkRepository.linkSparkToItem(fromSparkId, created.id);
+        } catch (error) {
+          console.warn('[slice-37] 灵感关联计划失败（条目已保存）', error);
+          Alert.alert('已保存', '灵感关联失败，可在灵感详情页手动关联。');
+        }
       }
       router.back();
     } catch (error) {
