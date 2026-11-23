@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.41（v0.40 历史条款精简为冻结要点+指针，原文存档 docs/agents-history.md）
+版本：v0.42（v0.40 历史条款精简为冻结要点+指针，原文存档 docs/agents-history.md）
 
 ## 1. 项目概览
 
@@ -60,6 +60,11 @@ AGENTS.md       本文件
 - 如配置确实无法构建，AI 应输出错误日志与最小变更提案，而不是自行重写构建配置。
 - WatermelonDB 的 @relation / @children 装饰器与 Babel decorators 配置强相关；AI 修改 model 时必须保持装饰器写法，不得改写为普通字段或运行时报错后再“简化”。
 - 新增表后必须运行 `npx expo-doctor` 与真机重启验收，确认 migration 实际执行。
+- 版本号策略（v0.42 注记，用户 2026-11-23 定案）：android `versionCode` = 切片号、
+  `versionName` = `0.<切片号>.0`，随切片真机出包 bump；`app.json` 的 `version` 与
+  build.gradle `versionName` 保持一致。溯源：切片 23 曾 bump 至 v10，切片 24–36 期间
+  仅 `adb install -r` 覆盖安装未 bump（跨 13 片停在同一版本号，closeout 曾披露），
+  自切片 36 出包 0.36.0/v36 起恢复随片对齐。
 
 ## 6. 验证命令（每次切片结束必须执行）
 
