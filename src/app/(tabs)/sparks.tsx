@@ -65,8 +65,11 @@ export default function SparksScreen() {
   const [recording, setRecording] = useState(false);
   const [recordMs, setRecordMs] = useState(0);
 
-  // 录音时长以 recorder.currentTime 为准（秒），计时器仅驱动重渲染。
+  // 录音计时与 durationMs 用本地 wall-clock 累计（Date.now 起点）：expo-audio 1.1.1 的
+  // Property("currentTime") 在 Android 上返回 recorder.startTime（epoch ms，库缺陷
+  // expo/expo#39646，修复 PR #40239 未进 SDK 54 补丁线），不读该属性。
   const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recordStartRef = useRef<number | null>(null);
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -160,10 +163,12 @@ export default function SparksScreen() {
       });
       await recorder.prepareToRecordAsync();
       recorder.record();
+      recordStartRef.current = Date.now();
       setRecordMs(0);
       setRecording(true);
       recordTimerRef.current = setInterval(() => {
-        setRecordMs(Math.round(recorder.currentTime * 1000));
+        const startedAt = recordStartRef.current;
+        setRecordMs(startedAt === null ? 0 : Date.now() - startedAt);
       }, 250);
     } catch (error) {
       console.warn('[slice-37] 录音启动失败', error);
@@ -176,8 +181,11 @@ export default function SparksScreen() {
       stopRecordTimer();
       setRecording(false);
       setRecordMs(0);
+      // wall-clock 时长在重置前捕获；startAt 缺失（理论不可达）归 0。
+      const startedAt = recordStartRef.current;
+      const durationMs = startedAt === null ? 0 : Date.now() - startedAt;
+      recordStartRef.current = null;
       try {
-        const durationMs = Math.round(recorder.currentTime * 1000);
         await recorder.stop();
         await setAudioModeAsync({ allowsRecording: false });
         const uri = recorder.uri;
