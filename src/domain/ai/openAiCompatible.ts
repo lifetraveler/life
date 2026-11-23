@@ -657,11 +657,24 @@ export class OpenAICompatibleProvider implements AiParser {
     // 重试前回调 onRetry；耗尽时抛出的错误消息追加「（已重试 N 次）」
     // （仅实际重试过才带计数），供 chat.ts 降级注记透出；不可重试错误
     // （401/403/400/schema-mismatch/empty-input）立即原样抛出。
+    // 切片 36：循环体抽为 withRetry 共用（completeRaw 同纪律，行为零 diff）。
+    return await this.withRetry(() => this.requestParse(messages, context));
+  }
+
+  /**
+   * 切片 36：重试循环共用体（parse 与 completeRaw 同纪律）——maxRetries
+   * 来自 retryMax（经 parseAiRetryMax 归一：缺省/越界/非整数 → 默认 3；
+   * 0=关闭即现状）；可重试错误按固定间隔 RETRY_DELAY_MS 重发（不做指数
+   * 退避），每次实际重试前回调 onRetry；耗尽时抛出的错误消息追加
+   * 「（已重试 N 次）」（仅实际重试过才带计数）；不可重试错误
+   * （401/403/400/schema-mismatch/empty-input）立即原样抛出。
+   */
+  private async withRetry<T>(attempt: () => Promise<T>): Promise<T> {
     const maxRetries = parseAiRetryMax(this.config.retryMax);
     let retriesDone = 0;
     for (;;) {
       try {
-        return await this.requestParse(messages, context);
+        return await attempt();
       } catch (e) {
         if (!(e instanceof AiParseError) || !isRetryableParseError(e)) {
           throw e;
@@ -678,11 +691,55 @@ export class OpenAICompatibleProvider implements AiParser {
     }
   }
 
-  /** 单次尝试（切片 30 重构抽出）：超时 AbortController / fetch / 解析管线。 */
+  /** 单次尝试（切片 30 重构抽出）：解析管线。传输原语见 requestChatCompletion（切片 36 抽出共用）。 */
   private async requestParse(
     messages: Array<{ role: string; content: string }>,
     context: AiParseContext,
   ): Promise<ParsedItemDraft> {
+    const { content, usage: usageSnapshot } = await this.requestChatCompletion(messages);
+    const candidateText = stripCodeFence(content);
+    // 切片 33（§7.45 / ai.md v0.24）：尾部平衡 JSON 提取——思维链散文拼进
+    // content 时剥出最终输出块；无配平块原样返回，行为与不提取时一致。
+    const balancedText = extractLastBalancedJson(candidateText);
+    let candidate: unknown;
+    try {
+      candidate = JSON.parse(balancedText);
+    } catch {
+      throw new AiParseError('invalid-json', 'AI 返回内容不是合法 JSON（已拦截，不做补救）');
+    }
+
+    const wire = isRemoteDraftWire(candidate);
+    if (wire === null) {
+      throw new AiParseError('schema-mismatch', 'AI 返回 JSON 未通过 isRemoteDraftWire 校验（已拦截）');
+    }
+    const draft = wireToParsedItemDraft(wire, context);
+    // 切片 26（§7.38）：成功路径返回前赋值（两个 return 点都在其后——
+    // recurrence 分支与普通分支观察等价；wire 守卫失败时 usage 保持
+    // null，与原实现一致）。
+    this.lastUsageSnapshot = usageSnapshot;
+    // 重复项的下一次发生完全由 (rule, now, tzid) 决定，模型给的时刻不携带
+    // 额外信息——一律本地确定性重算，与 LocalFallbackProvider 语义对齐。
+    if (draft.recurrence !== null) {
+      const parts = getZonedParts(context.now, context.tzid);
+      const today = { year: parts.year, month: parts.month, day: parts.day };
+      const local = nextOccurrenceInstant(draft.recurrence, context.now, context.tzid, today);
+      if (local !== null) {
+        return { ...draft, startAt: local };
+      }
+    }
+    return draft;
+  }
+
+  /**
+   * 切片 36：单次传输原语（parse 与 completeRaw 共用）——超时
+   * AbortController / fetch / HTTP 状态 / 信封 JSON / usage 提取 /
+   * content 提取。lastRequestBody / lastResponseBody 写点保留（调试
+   * 副通道与实际发送字节一致的纪律不变）；usage 只随返回值上交，由
+   * 调用方在成功路径赋值（重试期间保持 null 的纪律不变）。
+   */
+  private async requestChatCompletion(
+    messages: Array<{ role: string; content: string }>,
+  ): Promise<{ content: string; usage: AiUsageSnapshot | null }> {
     const timeoutMs = this.config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const url = `${this.config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
     const controller = new AbortController();
@@ -759,39 +816,29 @@ export class OpenAICompatibleProvider implements AiParser {
               output: positivePriceOrNull(this.config.priceOutputPerMillion),
             });
 
-      const content = extractContent(envelope);
-      const candidateText = stripCodeFence(content);
-      // 切片 33（§7.45 / ai.md v0.24）：尾部平衡 JSON 提取——思维链散文拼进
-      // content 时剥出最终输出块；无配平块原样返回，行为与不提取时一致。
-      const balancedText = extractLastBalancedJson(candidateText);
-      let candidate: unknown;
-      try {
-        candidate = JSON.parse(balancedText);
-      } catch {
-        throw new AiParseError('invalid-json', 'AI 返回内容不是合法 JSON（已拦截，不做补救）');
-      }
-
-      const wire = isRemoteDraftWire(candidate);
-      if (wire === null) {
-        throw new AiParseError('schema-mismatch', 'AI 返回 JSON 未通过 isRemoteDraftWire 校验（已拦截）');
-      }
-      const draft = wireToParsedItemDraft(wire, context);
-      // 切片 26（§7.38）：成功路径返回前赋值（两个 return 点都在其后——
-      // recurrence 分支与普通分支观察等价）。
-      this.lastUsageSnapshot = usageSnapshot;
-      // 重复项的下一次发生完全由 (rule, now, tzid) 决定，模型给的时刻不携带
-      // 额外信息——一律本地确定性重算，与 LocalFallbackProvider 语义对齐。
-      if (draft.recurrence !== null) {
-        const parts = getZonedParts(context.now, context.tzid);
-        const today = { year: parts.year, month: parts.month, day: parts.day };
-        const local = nextOccurrenceInstant(draft.recurrence, context.now, context.tzid, today);
-        if (local !== null) {
-          return { ...draft, startAt: local };
-        }
-      }
-      return draft;
+      return { content: extractContent(envelope), usage: usageSnapshot };
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /**
+   * 切片 36（§7.48 / 提案 D2）：raw 补全方法（查询轮两段式专用）。
+   * 复用传输层与重试纪律（withRetry / requestChatCompletion），返回
+   * content 原文——不剥围栏、不做 wire 守卫（查询轮自己解析与守卫，
+   * ai.md 契约零改动，解析链零 diff）。进入即清空副通道（parse 同款）；
+   * usage 成功路径返回前赋值（重试期间 null，§7.41 纪律不变）；两段各自
+   * 调用本方法，lastDebug/lastUsage 终态=第二段（D2/D8 披露为已知行为）。
+   */
+  async completeRaw(messages: Array<{ role: string; content: string }>): Promise<string> {
+    this.lastUsageSnapshot = null;
+    this.lastRequestBody = null;
+    this.lastResponseBody = null;
+    if (messages.length === 0) {
+      throw new AiParseError('empty-input', 'AI 查询输入为空');
+    }
+    const { content, usage } = await this.withRetry(() => this.requestChatCompletion(messages));
+    this.lastUsageSnapshot = usage;
+    return content;
   }
 }

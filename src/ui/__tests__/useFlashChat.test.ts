@@ -61,6 +61,9 @@ jest.mock('../../data', () => ({
     updateItem: jest.fn(),
     deleteReminder: jest.fn(),
     removeTagFromItem: jest.fn(),
+    // 切片 36（§7.48）：查询分支全域检索两读取。
+    listItemsWithTags: jest.fn(),
+    listArchivedItemsWithTags: jest.fn(),
   },
 }));
 
@@ -297,6 +300,9 @@ beforeEach(() => {
   }));
   repo.deleteReminder.mockResolvedValue(undefined);
   repo.removeTagFromItem.mockResolvedValue(undefined);
+  // 切片 36（§7.48）：查询分支全域检索默认空库（远端用例覆写）。
+  repo.listItemsWithTags.mockResolvedValue([]);
+  repo.listArchivedItemsWithTags.mockResolvedValue([]);
   SecureStoreClass.mockImplementation(() => ({
     load: jest.fn(async () => null),
   }));
@@ -1216,5 +1222,164 @@ describe('useFlashChat：已保存条目对话式编辑（切片 34，§7.46 / �
     expect(repo.createItem).toHaveBeenCalledTimes(1);
     const cards = hook().messages.filter((message) => message.kind === 'card');
     expect(cards[0]?.text).toBe('已添加《项目周会》');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 切片 36（AGENTS.md §7.48 / 提案 D1-D7）：对话式查询分支（send 顶部预路由）。
+// ---------------------------------------------------------------------------
+
+/** 查询轮 fetch mock：按调用序返回两段 content（第一段窗口 JSON、第二段回答文本）。
+ * 段次用局部计数器判断——fetchBodies 是跨用例累积的模块级数组，不能当段次依据。 */
+function installQueryFetchMock(stage1Content: string, stage2Content: string): void {
+  let queryCalls = 0;
+  globalScope.fetch = jest.fn(async (_url: string, init?: RequestInit) => {
+    const body = JSON.parse(
+      typeof init?.body === 'string' ? init.body : '{}',
+    ) as CapturedRequest;
+    fetchBodies.push(body);
+    queryCalls += 1;
+    const content = queryCalls === 1 ? stage1Content : stage2Content;
+    // 第二段信封带 usage（走 readAiUsageSnapshot → pushUsageLine）。
+    const envelope =
+      queryCalls === 1
+        ? { choices: [{ message: { content } }] }
+        : {
+            choices: [{ message: { content } }],
+            usage: { prompt_tokens: 120, completion_tokens: 60 },
+          };
+    return {
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify(envelope),
+    } as unknown as Response;
+  });
+}
+
+describe('useFlashChat：对话式查询（切片 36，§7.48）', () => {
+  // fetchBodies 为模块级累积数组（前面远端 describe 已推入请求），每个用例
+  // 自清；fetch mock 还原避免 installQueryFetchMock 泄漏到后续用例。
+  beforeEach(() => {
+    fetchBodies.length = 0;
+  });
+  afterEach(() => {
+    globalScope.fetch = originalFetch;
+  });
+
+  it('查询句+开关开+无 Key：本地行式降级回答，不落库不出卡，history 追加纯文本', async () => {
+    await mountHook();
+    await act(async () => {
+      await hook().send('这周有什么安排');
+    });
+    const texts = assistantTexts();
+    // 无 Key 降级：窗口（今天起 7 天回退）+ 空列表提示 + 降级说明。
+    expect(texts.some((text) => text.includes('未配置 AI Key'))).toBe(true);
+    expect(texts.some((text) => text.includes('窗口内没有安排'))).toBe(true);
+    // 不产卡/不落库/草稿不动（查询轮边界）。
+    expect(hook().messages.every((message) => message.kind !== 'card')).toBe(true);
+    expect(repo.createItem).not.toHaveBeenCalled();
+    expect(hook().draft).toBeNull();
+  });
+
+  it('开关关闭：本地提示、不检索不发远端', async () => {
+    repo.getSettings.mockResolvedValue({
+      ...DEFAULT_APP_SETTINGS,
+      aiScheduleQueryEnabled: false,
+    });
+    await mountHook();
+    await act(async () => {
+      await hook().send('这周有什么安排');
+    });
+    expect(assistantTexts()).toContain('对话式查询已关闭，可在「我的」-设置开启。');
+    expect(repo.listItemsWithTags).not.toHaveBeenCalled();
+    expect(repo.listArchivedItemsWithTags).not.toHaveBeenCalled();
+    expect(fetchBodies).toHaveLength(0);
+  });
+
+  it('远端两段成功：回答 + 用量行（第二段）+ 调试入口（第一段窗口快照）', async () => {
+    // 2026-11-25（周三）09:00 北京时间 = UTC 01:00（检索窗口内可命中）。
+    const retrievalItem = makeBaselineItem({
+      title: '体检',
+      startAt: Date.UTC(2026, 10, 25, 1, 0),
+    });
+    repo.listItemsWithTags.mockResolvedValue([retrievalItem]);
+    SecureStoreClass.mockImplementation(() => ({
+      load: jest.fn(async () => REMOTE_CONFIG),
+    }));
+    repo.getSettings.mockResolvedValue({
+      ...DEFAULT_APP_SETTINGS,
+      showAiUsage: true,
+      showAiResponse: true,
+    });
+    installQueryFetchMock(
+      JSON.stringify({
+        start: { date: '2026-11-23' },
+        end: { date: '2026-11-29' },
+      }),
+      '下周有 1 个安排：周三 09:00 体检。',
+    );
+    await mountHook();
+    await act(async () => {
+      await hook().send('下周有什么安排');
+    });
+    const texts = assistantTexts();
+    expect(texts.some((text) => text.includes('下周有 1 个安排：周三 09:00 体检。'))).toBe(
+      true,
+    );
+    // 用量行（第二段信封 usage 120/60）。debug 入口消息（第一段快照：response
+    // 含第一段信封原文的窗口 date；request 含模型名与 messages 数组）。
+    expect(texts.some((text) => text.includes('token'))).toBe(true);
+    const debugMessages = hook().messages.filter(
+      (message) => message.debugPayload !== undefined,
+    );
+    expect(debugMessages).toHaveLength(1);
+    const debugPayload = debugMessages[0]?.debugPayload;
+    expect(debugPayload?.response).toContain('2026-11-29');
+    expect(debugPayload?.request).toContain('test-model');
+    expect(debugPayload?.draft).toBe('（查询轮无草稿）');
+    // 全域检索确实发生（未归档 ∪ 已归档）。
+    expect(repo.listItemsWithTags).toHaveBeenCalledTimes(1);
+    expect(repo.listArchivedItemsWithTags).toHaveBeenCalledTimes(1);
+  });
+
+  it('编辑窄规则优先：含疑问词但排除词命中 → 不判查询（走草稿编辑）', async () => {
+    // 出卡轮造非 allDay 草稿（明天下午3点开会；allDay 草稿不走窄规则），随后
+    // 编辑句含疑问词「什么」——查询排除词「改到」优先命中
+    //（matchesScheduleQueryIntent=false），仍走编辑窄规则改草稿时间。
+    await mountHook();
+    await act(async () => {
+      await hook().send('明天下午3点开会');
+    });
+    expect(hook().draft).not.toBeNull();
+    await act(async () => {
+      await hook().send('改到明天下午3点，有什么要注意的吗');
+    });
+    const texts = assistantTexts();
+    expect(texts.some((text) => text.startsWith('已改为'))).toBe(true);
+    expect(texts.some((text) => text.includes('窗口内没有安排'))).toBe(false);
+    expect(repo.listItemsWithTags).not.toHaveBeenCalled();
+    expect(repo.createItem).not.toHaveBeenCalled();
+  });
+
+  it('待确认期间输入查询句：待确认取消 + 查询轮正常回答（§7.48 消息流边界）', async () => {
+    // 标准拦截链（复用认真模式 describe 手法）：出卡轮 + content 补充轮拦截。
+    repo.getSettings.mockResolvedValue(CAREFUL_SETTINGS);
+    await mountHook();
+    await act(async () => {
+      await hook().send('明天开会');
+    });
+    await act(async () => {
+      await hook().send('地点在第三会议室');
+    });
+    expect(confirmMessages()).toHaveLength(1);
+    expect(confirmMessages()[0]?.confirmPayload?.resolved).toBe(false);
+    // 查询句取消待确认并正常走查询轮（无 Key 降级）。
+    await act(async () => {
+      await hook().send('这周有什么安排');
+    });
+    expect(confirmMessages()[0]?.confirmPayload?.resolved).toBe(true);
+    expect(assistantTexts().some((text) => text.includes('窗口内没有安排'))).toBe(true);
+    // 查询轮不产卡。
+    expect(hook().messages.every((message) => message.kind !== 'card')).toBe(true);
   });
 });

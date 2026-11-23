@@ -452,6 +452,7 @@ class FakeRepository implements ItemRepository {
       flashDeletedCardDisplay: 'mark', // 切片 30 v15 新列：调度器不触达，stub 仅满足编译
       showAiRequest: false, // 切片 32 v16 新列：调度器不触达，stub 仅满足编译
       showAiResponse: false, // 切片 32 v16 新列：调度器不触达，stub 仅满足编译
+      aiScheduleQueryEnabled: true, // 切片 36 v18 新列：调度器不触达，stub 仅满足编译
       defaultChannels: ['system-notification'],
     };
   }

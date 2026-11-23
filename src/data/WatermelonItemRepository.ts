@@ -42,6 +42,7 @@ import {
   isTagDisplayMode,
   isFlashDeletedCardDisplay,
   parseAiRetryMax,
+  parseAiScheduleQueryEnabled,
   parseChipsIncrements,
   parseDefaultChannels,
   parseDisplayCalendarIds,
@@ -49,6 +50,7 @@ import {
   serializeDefaultChannels,
   serializeDisplayCalendarIds,
   validateAiRetryMax,
+  validateAiScheduleQueryEnabled,
   validateDisplayCalendarIds,
   validateChipsIncrements,
   validateDefaultChannels,
@@ -297,6 +299,11 @@ function toDomainSettings(model: AppSettingsModel): AppSettings {
     showAiResponse: typeof model.showAiResponse === 'boolean'
       ? model.showAiResponse
       : DEFAULT_APP_SETTINGS.showAiResponse,
+    // 切片 36（§7.48，schema v18）：ai_schedule_query_enabled boolean isOptional
+    // 列——既有行回填 null（非可选 boolean 会回填 false 与「默认开」定案冲突，
+    // 切片 30 ai_retry_max 教训同构），parseAiScheduleQueryEnabled 归一
+    // （null/非 boolean → true，不抛错）。
+    aiScheduleQueryEnabled: parseAiScheduleQueryEnabled(model.aiScheduleQueryEnabled),
   };
 }
 
@@ -3125,6 +3132,9 @@ export class WatermelonItemRepository implements ItemRepository {
           //（读层有归一，此处求自描述）。
           record.showAiRequest = DEFAULT_APP_SETTINGS.showAiRequest;
           record.showAiResponse = DEFAULT_APP_SETTINGS.showAiResponse;
+          // 切片 36（schema v18）：补插默认行时写查询分支总开关默认值
+          //（读层有归一，此处求自描述）。
+          record.aiScheduleQueryEnabled = DEFAULT_APP_SETTINGS.aiScheduleQueryEnabled;
         });
         return { ...DEFAULT_APP_SETTINGS };
       }
@@ -3144,6 +3154,8 @@ export class WatermelonItemRepository implements ItemRepository {
    * 切片 27（§7.39）：displayCalendarIds 写路径 validateDisplayCalendarIds 严格校验
    * （仅非空字符串、去重抛错；空数组 = 功能关闭，合法写入 '[]'）；
    * 切片 32（§7.44）：showAiRequest/showAiResponse 同 carefulMode 先例，boolean 直接写；
+   * 切片 36（§7.48）：aiScheduleQueryEnabled 写路径 validateAiScheduleQueryEnabled
+   * 严格校验（非 boolean 抛错；isOptional 列写 boolean 值，读层归一）；
    * 行不存在时以 patch 值（缺省用默认值）建行。
    * 改动小组件显示开关后，调用方需自行触发一次小组件快照刷新
    * （桥不订阅 app_settings；设置页负责）。
@@ -3168,6 +3180,11 @@ export class WatermelonItemRepository implements ItemRepository {
     // 切片 30（§7.41）：aiRetryMax 写路径严格校验（0–5 整数，违反抛错）；
     // flashDeletedCardDisplay 枚举校验（'mark'|'remove' 之外抛错）。
     const aiRetryMax = patch.aiRetryMax !== undefined ? validateAiRetryMax(patch.aiRetryMax) : undefined;
+    // 切片 36（§7.48）：aiScheduleQueryEnabled 写路径严格校验（非 boolean 抛错）。
+    const aiScheduleQueryEnabled =
+      patch.aiScheduleQueryEnabled !== undefined
+        ? validateAiScheduleQueryEnabled(patch.aiScheduleQueryEnabled)
+        : undefined;
     if (patch.flashDeletedCardDisplay !== undefined && !isFlashDeletedCardDisplay(patch.flashDeletedCardDisplay)) {
       throw new Error('updateSettings: invalid flashDeletedCardDisplay');
     }
@@ -3197,6 +3214,8 @@ export class WatermelonItemRepository implements ItemRepository {
             patch.flashDeletedCardDisplay ?? DEFAULT_APP_SETTINGS.flashDeletedCardDisplay;
           record.showAiRequest = patch.showAiRequest ?? DEFAULT_APP_SETTINGS.showAiRequest;
           record.showAiResponse = patch.showAiResponse ?? DEFAULT_APP_SETTINGS.showAiResponse;
+          record.aiScheduleQueryEnabled =
+            aiScheduleQueryEnabled ?? DEFAULT_APP_SETTINGS.aiScheduleQueryEnabled;
         });
         return;
       }
@@ -3242,6 +3261,9 @@ export class WatermelonItemRepository implements ItemRepository {
         }
         if (patch.showAiResponse !== undefined) {
           draft.showAiResponse = patch.showAiResponse;
+        }
+        if (aiScheduleQueryEnabled !== undefined) {
+          draft.aiScheduleQueryEnabled = aiScheduleQueryEnabled;
         }
       });
     });

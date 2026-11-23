@@ -127,6 +127,22 @@ export default function FlashScreen() {
   const currentDraft = chat.draft;
   const hasDraft = currentDraft !== null;
 
+  // 切片 36（AGENTS.md §7.48 / 提案 D7）：输入框占位语三态——预览卡在场沿用
+  // 纠正引导；保存后的最后一张结果卡仍有效（未被删除）且无预览卡时用正向
+  // 说明（切片 34 已使保存后输入=编辑已保存条目，原「将继续新建」类动机
+  // 失效）；其余（初始/查询轮后）用通用录入+查询提示。纯视觉引导，不影响逻辑。
+  const hasLiveCard = chat.messages.some(
+    (message) =>
+      message.kind === 'card' &&
+      message.cardPayload !== undefined &&
+      !chat.deletedItemIds.has(message.cardPayload.itemId),
+  );
+  const inputPlaceholder = hasDraft
+    ? '输入事项，或继续纠正上面的卡片…'
+    : hasLiveCard
+      ? '已保存，继续输入可修改该条目，或直接提问查询日程'
+      : '输入事项，或直接提问查询日程…';
+
   // 切片 23 验收反馈修补（2026-11-15 MuMu）：非倒置 FlatList 不自动跟随新内容——
   // 长历史下追加消息（及预览卡出现压缩列表视口）会把列表尾部裁出屏外，
   // 视觉上像被卡片区"盖住"。
@@ -335,7 +351,7 @@ export default function FlashScreen() {
           style={styles.input}
           value={input}
           onChangeText={setInput}
-          placeholder="输入事项，或继续纠正上面的卡片…"
+          placeholder={inputPlaceholder}
           placeholderTextColor={colors.textMuted}
           multiline
         />

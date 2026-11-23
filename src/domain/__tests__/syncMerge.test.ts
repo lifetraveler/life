@@ -39,6 +39,7 @@ function makeAppSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     flashDeletedCardDisplay: 'mark',
     showAiRequest: false,
     showAiResponse: false,
+    aiScheduleQueryEnabled: true,
     ...overrides,
   };
 }
@@ -644,6 +645,26 @@ describe('appSettings 快照 exportedAt LWW（会话基线）', () => {
     expect(result.appliedAppSettings?.tagDisplayMode).toBe('emoji');
     expect(result.appliedAppSettings?.chipsIncrements).toEqual([15, 45]);
     expect(result.appliedAppSettings?.aiRetryMax).toBe(3);
+  });
+
+  it('aiScheduleQueryEnabled（切片 36）：远端写穿 / 旧快照缺列保留本地', () => {
+    // 远端合法 boolean 写穿（显式关闭传播）
+    const local = makeLocal({ appSettings: makeAppSettings({ aiScheduleQueryEnabled: true }) });
+    const remote = makeRemote({
+      appSettings: makeAppSettings({ aiScheduleQueryEnabled: false }),
+    });
+    const result = mergeSyncSnapshots(local, [remote], [], { settingsBaselineExportedAt: null });
+    expect(result.appliedAppSettings?.aiScheduleQueryEnabled).toBe(false);
+    // 旧设备快照缺列 → 保留本地值（不静默丢字段）
+    const legacyLocal = makeLocal({
+      appSettings: makeAppSettings({ aiScheduleQueryEnabled: false }),
+    });
+    const legacyRemote = makeRemote({ appSettings: { carefulMode: true } });
+    const legacyResult = mergeSyncSnapshots(legacyLocal, [legacyRemote], [], {
+      settingsBaselineExportedAt: null,
+    });
+    expect(legacyResult.appliedAppSettings?.aiScheduleQueryEnabled).toBe(false);
+    expect(legacyResult.appliedAppSettings?.carefulMode).toBe(true);
   });
 });
 

@@ -73,4 +73,13 @@ export default class AppSettingsModel extends Model {
    *（默认 false）。非可选 boolean 同上。
    */
   @field('show_ai_response') showAiResponse!: boolean;
+  /**
+   * 切片 36（schema v18，AGENTS.md §7.48）：AI 日程查询/记忆检索总开关
+   *（默认开，Q4 定案）。isOptional boolean：既有行回填 null（非可选 boolean
+   * 会回填类型零值 false，与「默认开」定案冲突，切片 30 ai_retry_max 教训
+   * 同构），读取层归一（domain/settings.ts parseAiScheduleQueryEnabled：
+   * null/非 boolean → true），写路径校验（validateAiScheduleQueryEnabled
+   * 非 boolean 抛错）。
+   */
+  @field('ai_schedule_query_enabled') aiScheduleQueryEnabled!: boolean | null;
 }
