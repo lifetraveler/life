@@ -56,7 +56,7 @@ describe('buildScheduleRetrievalContext（全域检索组包，切片 36）', ()
     expect(result).toEqual({ context: '（窗口内没有日程条目。）', included: 0, truncated: false });
   });
 
-  it('时段条目窗口相交：行格式「周二 09:00 标题」；窗口外排除', () => {
+  it('时段条目窗口相交：行格式「11-24 周二 09:00 标题」；窗口外排除', () => {
     const inWindow = makeItem({
       title: '体检',
       startAt: at(2026, 11, 24, 9, 0),
@@ -66,14 +66,14 @@ describe('buildScheduleRetrievalContext（全域检索组包，切片 36）', ()
     const result = buildScheduleRetrievalContext([beforeWindow, inWindow, afterWindow], WINDOW, TZ);
     expect(result.truncated).toBe(false);
     expect(result.included).toBe(1);
-    expect(result.context).toBe('周二 09:00 体检');
+    expect(result.context).toBe('11-24 周二 09:00 体检');
   });
 
   it('时段条目按 startAt 升序；瞬时条目（endAt null）端点相交语义', () => {
     const later = makeItem({ title: '晚场', startAt: at(2026, 11, 24, 18, 0) });
     const earlier = makeItem({ title: '早场', startAt: at(2026, 11, 24, 9, 0) });
     const result = buildScheduleRetrievalContext([later, earlier], WINDOW, TZ);
-    expect(result.context).toBe('周二 09:00 早场\n周二 18:00 晚场');
+    expect(result.context).toBe('11-24 周二 09:00 早场\n11-24 周二 18:00 晚场');
 
     // endAt null 视为瞬时点：恰在窗口终点 23:59:59.999 相交
     const edge = makeItem({ title: '窗口末点', startAt: WINDOW.endMs });
@@ -95,7 +95,7 @@ describe('buildScheduleRetrievalContext（全域检索组包，切片 36）', ()
       endAt: dayStart(2026, 11, 27),
     });
     const result = buildScheduleRetrievalContext([allDay], WINDOW, TZ);
-    expect(result.context).toBe('周三 全天 出差');
+    expect(result.context).toBe('11-25 周三 全天 出差');
 
     // 跨窗口首日相交：11-20 至 11-24 排他（尾日 11-23 = 窗口首日）→ 包含
     const overlapStart = makeItem({
@@ -120,7 +120,7 @@ describe('buildScheduleRetrievalContext（全域检索组包，切片 36）', ()
     const untimed = makeItem({ title: '买牛奶' });
     const timed = makeItem({ title: '开会', startAt: at(2026, 11, 24, 9, 0) });
     const result = buildScheduleRetrievalContext([untimed, timed], WINDOW, TZ);
-    expect(result.context).toBe('周二 09:00 开会\n【无时刻待办】\n- 买牛奶');
+    expect(result.context).toBe('11-24 周二 09:00 开会\n【无时刻待办】\n- 买牛奶');
     expect(result.included).toBe(2);
   });
 
@@ -130,7 +130,7 @@ describe('buildScheduleRetrievalContext（全域检索组包，切片 36）', ()
     const withEmoji = makeItem({ title: '带图标', startAt: at(2026, 11, 24, 10, 0), category: HEALTH });
     const result = buildScheduleRetrievalContext([noCategory, nameOnly, withEmoji], WINDOW, TZ);
     expect(result.context).toBe(
-      '周二 08:00 裸条目\n周二 09:00 只有名称（工作）\n周二 10:00 带图标（💊 健康）',
+      '11-24 周二 08:00 裸条目\n11-24 周二 09:00 只有名称（工作）\n11-24 周二 10:00 带图标（💊 健康）',
     );
   });
 
@@ -151,7 +151,7 @@ describe('buildScheduleRetrievalContext（全域检索组包，切片 36）', ()
     // formatStatusSuffix 逻辑覆盖（两分支独立 push），此处以归档+备注验证顺序。
     const result = buildScheduleRetrievalContext([archived, done, both], WINDOW, TZ);
     expect(result.context).toBe(
-      '周二 08:00 归档项[已归档]\n周二 09:00 完成项[已完成]\n周二 10:00 归档且完成[已归档] 备注：x',
+      '11-24 周二 08:00 归档项[已归档]\n11-24 周二 09:00 完成项[已完成]\n11-24 周二 10:00 归档且完成[已归档] 备注：x',
     );
   });
 
@@ -162,7 +162,7 @@ describe('buildScheduleRetrievalContext（全域检索组包，切片 36）', ()
       startAt: at(2026, 11, 24, 8, 0),
     });
     expect(buildScheduleRetrievalContext([short], WINDOW, TZ).context).toBe(
-      '周二 08:00 短备注 备注：第一行 第二行',
+      '11-24 周二 08:00 短备注 备注：第一行 第二行',
     );
 
     const long = makeItem({
@@ -171,7 +171,7 @@ describe('buildScheduleRetrievalContext（全域检索组包，切片 36）', ()
       startAt: at(2026, 11, 24, 9, 0),
     });
     expect(buildScheduleRetrievalContext([long], WINDOW, TZ).context).toBe(
-      `周二 09:00 长备注 备注：${'x'.repeat(80)}…`,
+      `11-24 周二 09:00 长备注 备注：${'x'.repeat(80)}…`,
     );
     const exact = makeItem({
       title: '恰好八十',
@@ -179,7 +179,7 @@ describe('buildScheduleRetrievalContext（全域检索组包，切片 36）', ()
       startAt: at(2026, 11, 24, 10, 0),
     });
     expect(buildScheduleRetrievalContext([exact], WINDOW, TZ).context).toBe(
-      `周二 10:00 恰好八十 备注：${'y'.repeat(80)}`,
+      `11-24 周二 10:00 恰好八十 备注：${'y'.repeat(80)}`,
     );
   });
 
@@ -193,8 +193,8 @@ describe('buildScheduleRetrievalContext（全域检索组包，切片 36）', ()
     const lines = truncated.context.split('\n');
     expect(lines).toHaveLength(51);
     expect(lines[50]).toBe('（日程较多，本次仅显示前 50 条，请在回答末尾提及仅展示前 50 条。）');
-    expect(lines[0]).toBe('周一 00:00 条目1');
-    expect(lines[49]).toBe('周一 00:49 条目50');
+    expect(lines[0]).toBe('11-23 周一 00:00 条目1');
+    expect(lines[49]).toBe('11-23 周一 00:49 条目50');
 
     const exactly = buildScheduleRetrievalContext(many.slice(0, 50), WINDOW, TZ);
     expect(exactly.included).toBe(50);

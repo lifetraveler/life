@@ -54,6 +54,8 @@ import { runFlashTurn } from '../domain/ai/chat';
 import type { FlashTurnResult } from '../domain/ai/chat';
 import { diffDraftChanges } from '../domain/ai/editDiff';
 import type { DraftFieldChanges } from '../domain/ai/editDiff';
+import { matchesScheduleQueryIntent } from '../domain/ai/queryIntent';
+import { runScheduleQueryTurn } from '../domain/ai/scheduleQuery';
 import { serializeDraftForHistory } from '../domain/ai/prompt';
 import { formatAiUsageLine } from '../domain/ai/usage';
 import type { AiUsageSnapshot } from '../domain/ai/usage';
@@ -165,6 +167,19 @@ const CONFIRM_MESSAGE_TEXT = '标题/内容修改需要你确认。';
 
 /** 认真模式放弃修改的追加文本（草稿与 history 均不动）。 */
 const CONFIRM_DISMISS_NOTE = '已放弃本次修改，卡片保持原样。';
+
+/**
+ * 切片 36（AGENTS.md §7.48 / 提案 D5）：查询开关关闭时的本地提示（不发远端，
+ * 无 lastDebug/lastUsage 副作用——真机矩阵 ⑦）。
+ */
+const QUERY_DISABLED_NOTE = '对话式查询已关闭，可在「我的」-设置开启。';
+
+/**
+ * 切片 36（§7.48 / 提案 D2）：查询轮调试弹层的草稿节占位——查询轮不走
+ * parse/wire、无解析草稿；FlashDebugPayload.draft 为必填展示字段，以说明性
+ * 文本占位（弹层直显文本，无 JSON.parse 依赖）。
+ */
+const QUERY_DEBUG_DRAFT_NOTE = '（查询轮无草稿）';
 
 /**
  * 编辑/推迟后刷新卡片提醒快照（切片 32 / §7.44 多计划）：对载荷里**每一条**
@@ -486,6 +501,7 @@ export function useFlashChat() {
     aiRetryMax: number;
     showAiRequest: boolean;
     showAiResponse: boolean;
+    aiScheduleQueryEnabled: boolean;
   }> => {
     try {
       const settings = await itemRepository.getSettings();
@@ -496,6 +512,8 @@ export function useFlashChat() {
         // 切片 32（§7.44）：调试查看器两开关（读层 boolean 守卫已回退默认）。
         showAiRequest: settings.showAiRequest === true,
         showAiResponse: settings.showAiResponse === true,
+        // 切片 36（§7.48）：查询轮总开关（读层归一 null→true 默认开）。
+        aiScheduleQueryEnabled: settings.aiScheduleQueryEnabled === true,
       };
     } catch (error) {
       console.warn('[slice-25/26/30] 本轮设置读取失败，回退默认', error);
@@ -505,6 +523,7 @@ export function useFlashChat() {
         aiRetryMax: DEFAULT_AI_RETRY_MAX,
         showAiRequest: false,
         showAiResponse: false,
+        aiScheduleQueryEnabled: true,
       };
     }
   }, []);
@@ -528,12 +547,14 @@ export function useFlashChat() {
    * 切片 32（AGENTS.md §7.44）：AI 调试入口消息——远端解析轮（成功或失败
    * 降级）且任一调试开关开启时，在 AI 回复/用量行之后追加一条带 debugPayload
    * 的入口消息（弹层点击入口；本地/无 Key 轮 debug 恒 null 不追加）。开关全关
-   * 不采集不展示（现状）。
+   * 不采集不展示（现状）。切片 36（§7.48）：draft 参数改为已序列化字符串
+   * （解析轮传 JSON.stringify(draft)；查询轮无草稿，传 QUERY_DEBUG_DRAFT_NOTE
+   * 占位说明），弹层直显文本、无 JSON.parse 依赖。
    */
   const pushDebugEntry = useCallback(
     (
       debug: FlashTurnResult['debug'],
-      draft: ParsedItemDraft,
+      draftJson: string,
       degraded: boolean,
       turnSettings: { showAiRequest: boolean; showAiResponse: boolean },
     ): void => {
@@ -554,7 +575,7 @@ export function useFlashChat() {
           debugPayload: {
             request: debug.request,
             response: debug.response,
-            draft: JSON.stringify(draft),
+            draft: draftJson,
           },
         },
       ]);
@@ -703,6 +724,60 @@ export function useFlashChat() {
       push('user', input);
       const tzid = getDeviceTzid();
       try {
+        // 切片 36（AGENTS.md §7.48 / 提案 D1）：查询意图预判——send 顶部，
+        // 先于编辑窄规则。两分支词面互斥（查询句无编辑词、编辑句含排除词
+        // 不判查询）；保守词表漏判走录入分支用户重述兜底，误判接受。
+        if (matchesScheduleQueryIntent(input)) {
+          // 本轮生效设置一次读取（开关/用量/重试；读取失败回退默认开）。
+          const turnSettings = await readTurnSettings();
+          if (!turnSettings.aiScheduleQueryEnabled) {
+            // 提案 D5：关闭时本地提示，不发远端（无 lastDebug/lastUsage 副作用，
+            // 真机矩阵 ⑦）。查询轮不落卡/不落库/不播种 history（§7.48 边界）。
+            push('assistant', QUERY_DISABLED_NOTE);
+            return;
+          }
+          // 每次发送前重读配置：与录入路径同理由（设置页可能改过 Key）。
+          if (storeRef.current === null) {
+            storeRef.current = new SecureAiConfigStore();
+          }
+          configRef.current = await storeRef.current.load();
+          // 提案 D3：全域检索——未归档 ∪ 已归档全量读取（Repository 零新方法）。
+          const [activeItems, archivedItems] = await Promise.all([
+            itemRepository.listItemsWithTags(),
+            itemRepository.listArchivedItemsWithTags(),
+          ]);
+          const queryResult = await runScheduleQueryTurn({
+            config: configRef.current,
+            now: Date.now(),
+            tzid,
+            question: input,
+            items: [...activeItems, ...archivedItems],
+            // 切片 30（§7.41）重试同款：即时提示直出 UI，轮结束 finally 清空。
+            aiRetryMax: turnSettings.aiRetryMax,
+            onRetry: (attempt, maxRetries) => {
+              setRetryNotice(`AI 服务异常，正在重试（${attempt}/${maxRetries}）…`);
+            },
+          });
+          // 查询轮消息流：纯文本回答 + 用量行（第二段 usage，show_ai_usage）
+          // + 调试入口（第一段窗口轮快照，矩阵 #2；degraded 文案复用）。
+          push('assistant', queryResult.answer);
+          pushUsageLine(queryResult.usage, turnSettings.showAiUsage);
+          pushDebugEntry(
+            queryResult.debug,
+            QUERY_DEBUG_DRAFT_NOTE,
+            queryResult.degraded,
+            turnSettings,
+          );
+          // §7.48「history append 照常」：查询轮 user+assistant 纯文本进
+          // history（assistant 非 JSON 条目被 buildHistoryBriefing 跳过，切片
+          // 33/34 编辑语义不受影响；不播种草稿 JSON）。不产卡/不落库。
+          historyRef.current = [
+            ...historyRef.current,
+            { role: 'user', text: input },
+            { role: 'assistant', text: queryResult.answer },
+          ];
+          return;
+        }
         // 切片 22 阶段 3 注记（用户 2026-11-15 确认折叠）：「修改成X点」编辑
         // 窄规则——仅降级层语义；配置 AI Key 的远端解析不经过本规则。
         if (draftRef.current !== null) {
@@ -779,7 +854,7 @@ export function useFlashChat() {
           // 恒 null，不展示）。切片 32（§7.44）：调试入口消息随后（远端澄清
           // 轮同样可查看请求/响应）。
           pushUsageLine(result.usage, turnSettings.showAiUsage);
-          pushDebugEntry(result.debug, result.draft, result.degraded, turnSettings);
+          pushDebugEntry(result.debug, JSON.stringify(result.draft), result.degraded, turnSettings);
           return;
         }
         setDraft(result.draft);
@@ -787,7 +862,7 @@ export function useFlashChat() {
         // 切片 26（§7.38）：远端解析轮在 AI 回复消息尾追加一行用量摘要。
         // 切片 32（§7.44）：调试入口消息随后（降级轮 degraded 文案区分）。
         pushUsageLine(result.usage, turnSettings.showAiUsage);
-        pushDebugEntry(result.debug, result.draft, result.degraded, turnSettings);
+        pushDebugEntry(result.debug, JSON.stringify(result.draft), result.degraded, turnSettings);
       } catch (error) {
         console.warn('[slice-15] 解析失败', error);
         push(

@@ -168,6 +168,10 @@ export default function SettingsPage() {
   const [showAiRequestError, setShowAiRequestError] = useState<string | null>(null);
   const [showAiResponse, setShowAiResponse] = useState<boolean | null>(null);
   const [showAiResponseError, setShowAiResponseError] = useState<string | null>(null);
+  // 切片 36（AGENTS.md §7.48）：对话式查询总开关（app_settings schema v18，
+  // ai_schedule_query_enabled 默认开）。与上述开关共用互斥键 settingsSavingKey。
+  const [aiScheduleQueryEnabled, setAiScheduleQueryEnabled] = useState<boolean | null>(null);
+  const [aiScheduleQueryError, setAiScheduleQueryError] = useState<string | null>(null);
   // 切片 30 阶段 1（AGENTS.md §7.41）：AI 重试档位与已删除卡显示配置
   // （app_settings schema v15）。与上述开关共用互斥键 settingsSavingKey。
   const [aiRetryMax, setAiRetryMax] = useState<number | null>(null);
@@ -202,6 +206,9 @@ export default function SettingsPage() {
             //（读层已防御归一，旧数据回退 false）。
             setShowAiRequest(settings.showAiRequest === true);
             setShowAiResponse(settings.showAiResponse === true);
+            // 切片 36（§7.48）：对话式查询开关随同一次 getSettings 读取
+            //（读层已防御归一，旧数据回退 true 默认开）。
+            setAiScheduleQueryEnabled(settings.aiScheduleQueryEnabled === true);
             // 切片 30 阶段 1（§7.41）：重试档位/已删除卡显示随同一次 getSettings 读取
             //（读层已防御归一，旧数据回退 3 / 'mark'）。
             setAiRetryMax(settings.aiRetryMax);
@@ -358,6 +365,38 @@ export default function SettingsPage() {
       }
     },
     [showAiRequest, showAiResponse, settingsSavingKey],
+  );
+
+  /**
+   * 切片 36（AGENTS.md §7.48）：对话式查询开关切换。与认真模式同模式：
+   * 乐观更新 → updateSettings({ aiScheduleQueryEnabled }) → 失败回滚；即时生效
+   * （闪电录入每轮 send 顶部经 getSettings 重读）且写入 app_settings 持久层，
+   * 重启保持。关闭时查询轮本地提示不发远端。
+   */
+  const handleAiScheduleQueryChange = useCallback(
+    async (value: boolean): Promise<void> => {
+      if (
+        aiScheduleQueryEnabled === null ||
+        settingsSavingKey !== null ||
+        aiScheduleQueryEnabled === value
+      ) {
+        return;
+      }
+      const previous = aiScheduleQueryEnabled;
+      setAiScheduleQueryEnabled(value);
+      setSettingsSavingKey('aiScheduleQueryEnabled');
+      try {
+        await itemRepository.updateSettings({ aiScheduleQueryEnabled: value });
+        setAiScheduleQueryError(null);
+      } catch (error) {
+        console.warn('[slice-36] 对话式查询开关保存失败', error);
+        setAiScheduleQueryEnabled(previous);
+        setAiScheduleQueryError('保存失败，请重试');
+      } finally {
+        setSettingsSavingKey(null);
+      }
+    },
+    [aiScheduleQueryEnabled, settingsSavingKey],
   );
 
   /**
@@ -595,6 +634,27 @@ export default function SettingsPage() {
         </View>
         {carefulError !== null ? (
           <Text style={styles.errorHint}>{carefulError}</Text>
+        ) : null}
+        {/* 切片 36（AGENTS.md §7.48）：对话式查询总开关。读取失败保持 null
+            （行仍渲染、Switch 关着——防御态与默认开语义冲突时以防御为先），
+            保存互斥走 settingsSavingKey。关闭时查询轮本地提示不发远端。 */}
+        <View style={styles.widgetToggleRow}>
+          <View style={styles.widgetToggleText}>
+            <Text style={styles.radioLabel}>对话式查询</Text>
+            <Text style={styles.widgetToggleHint}>
+              闪电录入中可直接提问日程（如「这周有什么安排」），检索含已归档条目。
+            </Text>
+          </View>
+          <Switch
+            value={aiScheduleQueryEnabled === true}
+            onValueChange={(value) => {
+              void handleAiScheduleQueryChange(value);
+            }}
+            disabled={aiScheduleQueryEnabled === null || settingsSavingKey !== null}
+          />
+        </View>
+        {aiScheduleQueryError !== null ? (
+          <Text style={styles.errorHint}>{aiScheduleQueryError}</Text>
         ) : null}
         {/* 切片 26 阶段 2（AGENTS.md §7.38）：AI 用量展示开关。showAiUsage 读取
             失败保持 null（行仍渲染、Switch 关着），保存互斥走 settingsSavingKey。 */}

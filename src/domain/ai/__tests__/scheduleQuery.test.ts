@@ -22,7 +22,7 @@ const STAGE1_ENVELOPE = JSON.stringify({
   choices: [{ message: { role: 'assistant', content: STAGE1_WINDOW_JSON } }],
   usage: { prompt_tokens: 10, completion_tokens: 5 },
 });
-const STAGE2_ANSWER = '11月24日至26日共有 1 个安排：周二 09:00 体检。';
+const STAGE2_ANSWER = '11月24日至26日共有 1 个安排：11-24 周二 09:00 体检。';
 const STAGE2_ENVELOPE = JSON.stringify({
   choices: [{ message: { role: 'assistant', content: STAGE2_ANSWER } }],
   usage: { prompt_tokens: 20, completion_tokens: 8 },
@@ -134,7 +134,7 @@ describe('runScheduleQueryTurn（查询轮编排，切片 36）', () => {
     const body2 = parseBody(calls[1]);
     expect(body2.messages[0].content).toContain('任务：基于下方给出的窗口内日程数据');
     expect(body2.messages[1].content).toContain('查询窗口：2026-11-24 至 2026-11-26');
-    expect(body2.messages[1].content).toContain('周二 09:00 体检（💊 健康）');
+    expect(body2.messages[1].content).toContain('11-24 周二 09:00 体检（💊 健康）');
     expect(body2.messages[1].content).toContain('用户问题：未来几天有什么安排');
 
     expect(result.degraded).toBe(false);
@@ -215,7 +215,7 @@ describe('runScheduleQueryTurn（查询轮编排，切片 36）', () => {
     expect(result.degraded).toBe(true);
     expect(result.windowText).toBe('2026-11-24 至 2026-11-26');
     expect(result.answer).toBe(
-      '2026-11-24 至 2026-11-26日程：\n周二 09:00 体检（💊 健康）\n\nAI 摘要生成失败（服务异常），已用本地日程列表回答。',
+      '2026-11-24 至 2026-11-26日程：\n11-24 周二 09:00 体检（💊 健康）\n\nAI 摘要生成失败（服务异常），已用本地日程列表回答。',
     );
     expect(result.usage).toBeNull();
     expect(result.degradedNotice).toBe('AI 摘要生成失败（服务异常），已用本地日程列表回答。');
@@ -243,7 +243,7 @@ describe('runScheduleQueryTurn（查询轮编排，切片 36）', () => {
     expect(result.degraded).toBe(true);
     expect(result.degradedNotice).toBe('未配置 AI Key，已用本地日程列表回答。');
     expect(result.windowText).toBe('2026-11-23 至 2026-11-29');
-    expect(result.answer).toContain('周二 09:00 体检');
+    expect(result.answer).toContain('11-24 周二 09:00 体检');
     expect(result.usage).toBeNull();
     expect(result.debug).toBeNull();
 

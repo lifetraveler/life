@@ -134,7 +134,11 @@ function formatTimedRow(item: ItemWithRelations, tzid: string): string {
   const parts = getZonedParts(item.startAt ?? 0, tzid);
   const weekday = WEEKDAY_LABELS[parts.weekday - 1];
   const timeLabel = item.allDay ? '全天' : `${pad2(parts.hour)}:${pad2(parts.minute)}`;
-  return `${weekday} ${timeLabel} ${item.title}${formatCategorySuffix(item)}${formatStatusSuffix(
+  // 行格式含绝对日期（MM-DD 周X HH:mm）：窗口跨周时「周三」不足以定位是哪
+  // 一周的周三，模型据「本周」窗口起始日推算会错位（真机矩阵 3 实证：12-02
+  // 周三被推为 11-25）。日期经 getZonedParts 民用日拆解，非本地时区拼接。
+  const dateLabel = `${pad2(parts.month)}-${pad2(parts.day)}`;
+  return `${dateLabel} ${weekday} ${timeLabel} ${item.title}${formatCategorySuffix(item)}${formatStatusSuffix(
     item,
   )}${formatContentSuffix(item)}`;
 }
