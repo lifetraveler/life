@@ -29,17 +29,17 @@ afterAll(() => {
 });
 
 describe('schema v19（切片 37 阶段 1）', () => {
-  it('SCHEMA_VERSION = 19 且 migrations 链 maxVersion = 19（切片 37 追加 v19 后例行更新）', () => {
-    expect(SCHEMA_VERSION).toBe(19);
-    expect(schema.version).toBe(19);
-    expect(migrations.maxVersion).toBe(19);
+  it('SCHEMA_VERSION = 19 且 migrations 链 maxVersion = 19（切片 38 追加 v20 后例行更新）', () => {
+    expect(SCHEMA_VERSION).toBe(20);
+    expect(schema.version).toBe(20);
+    expect(migrations.maxVersion).toBe(20);
     expect(migrations.minVersion).toBe(1);
   });
 
-  it('migration 链 toVersion 从 2 连续递增到 19，无跳号（v2–v18 已发布 step 未回改）', () => {
+  it('migration 链 toVersion 从 2 连续递增到 20，无跳号（v2–v19 已发布 step 未回改）', () => {
     const versions = migrations.sortedMigrations.map((entry) => entry.toVersion);
     expect(versions).toEqual([
-      2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+      2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
     ]);
   });
 

@@ -1,6 +1,6 @@
 # AGENTS.md — 项目契约与 AI 协作规则
 
-版本：v0.43（v0.40 历史条款精简为冻结要点+指针，原文存档 docs/agents-history.md）
+版本：v0.44（v0.40 历史条款精简为冻结要点+指针，原文存档 docs/agents-history.md）
 
 ## 1. 项目概览
 
@@ -466,6 +466,15 @@ AGENTS.md       本文件
 - **边界**：AI 转写与 AI 拆解留二期候选；灵感归档/计划侧反查/灵感搜索不做；冻结区三目录零改动；app_settings 零迁移；无新设置开关；APK bump 0.37.0/versionCode 37（§5 版本号策略）。
 - **真机落地披露（2026-11-24，closeout §五）**：expo-audio 1.1.1 Android `Property("currentTime")` 返回 recorder.startTime（epoch ms，库缺陷 expo/expo#39646+修复 PR #40239 未进 SDK 54 补丁线）——录音计时与 durationMs 落库改本地 wall-clock 累计（recordStartRef，sparks.tsx 弃读该属性；SDK 55 升级 L13 时回归）；sparkItems 快照恢复为 pair 语义 upsert（LokiJS batch 两遍法先 create 后 update/destroy，同批 destroy+create 同 id 撞 Duplicate key——SQLite 无此问题）；附件远端 URL 分段拼装（buildWebdavAttachmentDirUrl/buildWebdavAttachmentUrl，buildWebdavUrl 整段编码会把 dir/name 变 %2F）；新依赖经 `npx expo install` 对齐（npm 直装跨大版本拖入重复原生包+缺 peer，expo-doctor 失败）。
 
+### 7.50 闪电对话持久化（v0.44，切片 38）
+
+- **范围（冻结，四问定案 2026-11-25）**：F4 对话持久化两档全做——a) 跨重启：schema v20 新表 flash_chat_messages + 发送落库 + 启动恢复；b) 跨重装：数据快照追加可选块 chatMessages（切片 37 可选块双向兼容模式同构，随 31/35 WebDAV 链路上云）。提案 docs/proposals/slice-38-chat-persistence.md。
+- **粒度（Q2）**：全量 'text' 消息（用户输入/助手回复/查询轮/澄清轮）+ 'card' 结果卡（含 cardPayload，已删除联动对恢复卡继续生效）；'confirm'/'debug' 瞬态交互态排除；上限最近 200 条滚动裁剪（persist 裁剪/快照组包/恢复上限三处对齐）。
+- **恢复与播种（Q3）**：启动恢复=seq 升序原序平铺（id=seq 延续 nextIdRef=maxSeq+1；非最后 card 自动「历史」角标，切片 29 规则零改动）；**末卡播种**——最后一条带 seed_json 的 card 恢复进 historyRef（assistant 单条，「改一下刚才那个」跨重启可用）；「每存一张=新对话」语义不破坏（恢复仅末卡单条，下次保存照常重置；本地编辑回写瞬态由末卡 seed 兜底）。
+- **隐私（Q4）**：无开关默认开——对话内容进 DB 并随数据快照上云，与 items 全量明文同级别知情（切片 31/35 延续）；零 app_settings 迁移零设置面。
+- **数据面**：schema v20 flash_chat_messages（seq isIndexed/role/text/kind 'text'|'card'/card_payload_json?/seed_json?/created_at）；ChatMessageRepository 端口+实现（replaceTail 全量 upsert by seq：新 insert/已有覆盖/裁剪 seq<maxSeq-199；listOrdered(200)）；persist 接线 useFlashChat useEffect([messages])（cardPayload parse 失败降级 text 不炸列表）；数据快照 kind:'data' version 1 不变+可选块 chatMessages（isChatMessageEntry 守卫；恢复=upsert by seq 命中覆盖/未命中创建/本地独有保留；无文件 IO 单事务）。repository.md 注记节（新端口成对）。
+- **边界**：sync 快照不含聊天块（多设备对话同步留候选）；不做对话编辑/删除 UI/分页/搜索/多会话/加密；AI 域零改动（queryIntent/queryPrompt/queryGuard/retrieval/scheduleQuery 不触碰）；已删除卡联动对恢复卡自动生效（messagesRef 恢复后切片 30 useFocusEffect 批量查询零改动）；冻结区三目录零改动；无新依赖；APK bump 0.38.0/versionCode 38（§5 版本号策略）。
+
 ## 8. 当前切片
 
 - **已完成**：切片 1–37 全部收尾合并（main @ 见 git log；schema v19，版本 0.37.0/versionCode 37）。
@@ -474,8 +483,7 @@ AGENTS.md       本文件
   WebDAV（e0e6fee→2e1a85c→d3fee74，schema v17，jest 104/1559）；切片 36 AI 日程查询/记忆检索
   （8a21db0→8ce958b，merge a630447，schema v18，jest 110/1619，真机矩阵 10/10）；切片 37 Spark
   灵感火花（a68cc86→c6dc0d1，schema v19，jest 119/1707，真机矩阵 12/12，APK 0.37.0/v37）。
-- **当前切片**：无（切片 37 已完成收尾合并；下一片候选=闪电对话持久化 F4/时间解析消歧 F5/
-  系统日历写回/变更 B/theme_mode/F3 闹钟可见性，见 `tasks/backlog.md`）。
+- **当前切片**：切片 38 闪电对话持久化已立项（2026-11-25，用户选定路线+四问定案：两档全做（跨重启 schema v20 flash_chat_messages + 跨重装数据快照可选块 chatMessages）/ 全量文本+结果卡粒度（confirm/debug 瞬态排除、200 条滚动）/ 平铺恢复+末卡播种（「改一下刚才那个」跨重启可用，切片 29 角标规则零改动）/ 无开关默认开（与 items 全量明文上云同级别知情）；提案 `docs/proposals/slice-38-chat-persistence.md`；分支 `task/slice-38` 从 main `f92997c` 切出；提案+卡+AGENTS v0.44 随阶段 1 提交；AI 域零改动；sync 快照不含聊天块；APK bump 0.38.0/v38；下一片候选=时间解析消歧 F5/F3 闹钟可见性/theme_mode/系统日历写回/变更 B/切片 25 候选③④，见 `tasks/backlog.md`）。
 - **未完成项以 `tasks/backlog.md` 为准**（2026-11-16 起的惯例）：候选排序、遗留 L1–L13（L5 已随
   切片 32 关闭）、手验项 U1–U4、契约化已知限制均记录在 backlog，本节不再罗列候选清单。每切片
   closeout 同步更新 backlog.md（划掉完成项并注明关闭切片号）并保持本节精简。

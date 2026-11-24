@@ -137,6 +137,12 @@ export interface FlashChatMessage {
    * 调试弹层，三节显隐由当下设置（showAiRequest/showAiResponse）决定。
    */
   debugPayload?: FlashDebugPayload;
+  /**
+   * 切片 38（§7.50）：保存链播种串（serializeDraftForHistory 产物）挂结果卡
+   * 消息上，随消息持久化（seed_json 列）；启动恢复时末卡播种回填 historyRef
+   * （「改一下刚才那个」跨重启可用）。仅 kind='card' 且保存链播过种的行非空。
+   */
+  seedJson?: string;
 }
 
 export interface ConfirmSaveResult {

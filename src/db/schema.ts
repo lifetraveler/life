@@ -27,8 +27,10 @@ import { appSchema, tableSchema } from '@nozbe/watermelondb';
  * （AGENTS.md §7.48 AI 日程查询/记忆检索——查询分支总开关，默认开）。
  * v19（切片 37 阶段 1）：新增 sparks / spark_attachments / spark_items 三表
  * （AGENTS.md §7.49 Spark 灵感火花，docs/proposals/slice-37-spark-inspiration.md D2）。
+ * v20（切片 38 阶段 1）：新增 flash_chat_messages 表
+ * （AGENTS.md §7.50 闪电对话持久化，docs/proposals/slice-38-chat-persistence.md D1）。
  */
-export const SCHEMA_VERSION = 19;
+export const SCHEMA_VERSION = 20;
 
 export const schema = appSchema({
   version: SCHEMA_VERSION,
@@ -300,6 +302,34 @@ export const schema = appSchema({
       columns: [
         { name: 'spark_id', type: 'string', isIndexed: true },
         { name: 'item_id', type: 'string', isIndexed: true },
+        { name: 'created_at', type: 'number' },
+      ],
+    }),
+    // v20（切片 38 阶段 1，AGENTS.md §7.50，docs/proposals/slice-38-chat-persistence.md
+    // D1）：flash_chat_messages——闪电录入对话持久化表（跨重启恢复 + 数据快照可选块
+    // chatMessages，跨重装恢复）。
+    // - seq 业务序号（isIndexed）：内存消息 id 即 seq（启动恢复按 seq 升序平铺、
+    //   id=seq 延续、nextIdRef=maxSeq+1）。非主键——WatermelonDB 行 id 自动生成，
+    //   seq 仅作排序与 upsert 业务键（唯一性由写路径保证，不建 SQLite 唯一索引）。
+    // - role 仅 'user' | 'assistant'；kind 仅 'text' | 'card'（写路径守卫，枚举外
+    //   抛错；schema 层不建 CHECK，与 reminders.frequency 等先例一致）。
+    //   confirm / debug 瞬态交互态不落库（Q2 定案）：'confirm' 不进 kind 枚举，
+    //   调试入口消息（挂 debugPayload 的 text 消息）在 persist 过滤层排除。
+    // - card_payload_json：kind='card' 的 FlashCardPayload 序列化串（text 行恒
+    //   null）；恢复 parse 失败降级为 text 消息展示（不炸列表）。
+    // - seed_json：保存链播种的 serializeDraftForHistory 产物（末卡播种恢复
+    //   historyRef，Q3「改一下刚才那个」跨重启可用）；仅 card 行可非 null。
+    // - created_at：行创建时刻（WatermelonDB @readonly @date 自动写）；排序只认
+    //   seq，created_at 不参与会话语义（数据快照恢复经 _raw 保真写入）。
+    tableSchema({
+      name: 'flash_chat_messages',
+      columns: [
+        { name: 'seq', type: 'number', isIndexed: true },
+        { name: 'role', type: 'string' },
+        { name: 'text', type: 'string' },
+        { name: 'kind', type: 'string' },
+        { name: 'card_payload_json', type: 'string', isOptional: true },
+        { name: 'seed_json', type: 'string', isOptional: true },
         { name: 'created_at', type: 'number' },
       ],
     }),

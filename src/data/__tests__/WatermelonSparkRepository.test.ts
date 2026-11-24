@@ -22,6 +22,7 @@ import SyncTombstoneModel from '../../db/models/SyncTombstoneModel';
 import SparkModel from '../../db/models/SparkModel';
 import SparkAttachmentModel from '../../db/models/SparkAttachmentModel';
 import SparkItemModel from '../../db/models/SparkItemModel';
+import ChatMessageModel from '../../db/models/ChatMessageModel';
 import { schema } from '../../db/schema';
 import { WatermelonItemRepository } from '../WatermelonItemRepository';
 import { WatermelonSparkRepository } from '../WatermelonSparkRepository';
@@ -107,6 +108,7 @@ function makeHarness(): {
       SparkModel,
       SparkAttachmentModel,
       SparkItemModel,
+      ChatMessageModel,
     ],
   });
   const io = makeStubIo();

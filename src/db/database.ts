@@ -6,6 +6,7 @@ import SQLiteAdapter from '@nozbe/watermelondb/adapters/sqlite';
 import AppSettingsModel from './models/AppSettingsModel';
 import CategoryModel from './models/CategoryModel';
 import ChannelPresetModel from './models/ChannelPresetModel';
+import ChatMessageModel from './models/ChatMessageModel';
 import ItemModel from './models/ItemModel';
 import ItemTagModel from './models/ItemTagModel';
 import ReminderModel from './models/ReminderModel';
@@ -43,6 +44,8 @@ export const database = new Database({
     SparkModel,
     SparkAttachmentModel,
     SparkItemModel,
+    // 切片 38（AGENTS.md §7.50）：闪电对话持久化 model 注册（schema v20）。
+    ChatMessageModel,
   ],
 });
 
