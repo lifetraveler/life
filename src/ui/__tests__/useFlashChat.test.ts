@@ -25,8 +25,9 @@
 import { StrictMode, createElement } from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 
-import { itemRepository } from '../../data';
+import { itemRepository, chatMessageRepository } from '../../data';
 import type { ItemRepository } from '../../data';
+import type { PersistedChatMessage } from '../../data/ChatMessageRepository';
 import { SecureAiConfigStore } from '../../data/SecureAiConfigStore';
 import type { AiConfig } from '../../domain/ai/configStore';
 import type { RemoteDraftWire } from '../../domain/ai/openAiCompatible';
@@ -47,6 +48,12 @@ jest.mock('expo-localization', () => ({
 }));
 
 jest.mock('../../data', () => ({
+  // 切片 38（§7.50）：聊天持久化仓库默认空表/无写——恢复用例按行覆写。
+  CHAT_MESSAGE_PERSIST_LIMIT: 200,
+  chatMessageRepository: {
+    listOrdered: jest.fn(async () => []),
+    replaceTail: jest.fn(async () => undefined),
+  },
   itemRepository: {
     getCategories: jest.fn(),
     getSettings: jest.fn(),
@@ -85,6 +92,12 @@ const CATEGORIES: Category[] = [
 
 // 模块 mock 后的 itemRepository 仍是仓库接口类型；测试内以 jest.Mocked 驱动。
 const repo = itemRepository as unknown as jest.Mocked<ItemRepository>;
+
+// 切片 38（§7.50）：聊天持久化仓库 mock（默认空表/无写；恢复用例覆写）。
+const chatRepo = chatMessageRepository as unknown as {
+  listOrdered: jest.Mock;
+  replaceTail: jest.Mock;
+};
 
 // ---------------------------------------------------------------------------
 // 切片 25 阶段 2（AGENTS.md §7.37）：认真模式确认测试共用件。
@@ -300,6 +313,9 @@ beforeEach(() => {
   }));
   repo.deleteReminder.mockResolvedValue(undefined);
   repo.removeTagFromItem.mockResolvedValue(undefined);
+  // 切片 38（§7.50）：聊天持久化仓库默认空表/无写（恢复用例覆写）。
+  chatRepo.listOrdered.mockResolvedValue([]);
+  chatRepo.replaceTail.mockResolvedValue(undefined);
   // 切片 36（§7.48）：查询分支全域检索默认空库（远端用例覆写）。
   repo.listItemsWithTags.mockResolvedValue([]);
   repo.listArchivedItemsWithTags.mockResolvedValue([]);
@@ -1381,5 +1397,180 @@ describe('useFlashChat：对话式查询（切片 36，§7.48）', () => {
     expect(assistantTexts().some((text) => text.includes('窗口内没有安排'))).toBe(true);
     // 查询轮不产卡。
     expect(hook().messages.every((message) => message.kind !== 'card')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 切片 38（§7.50）：闪电对话持久化接线
+// 启动恢复（seq 平铺/id 延续/末卡播种）与 persist 接线（confirm/debug 过滤、
+// 失败不阻断）。仓库已模块 mock（chatRepo），行形状=PersistedChatMessage。
+// ---------------------------------------------------------------------------
+
+const RESTORED_CARD_PAYLOAD = {
+  itemId: 'item-restored',
+  title: '晨间跑步',
+  content: '沿江路线',
+  type: 'task',
+  startAt: 1764000000000,
+  endAt: null,
+  allDay: false,
+  category: { id: 'work', name: '工作', color: '#336699', emoji: null },
+  reminders: [],
+} as const;
+
+const RESTORED_SEED_JSON = JSON.stringify({
+  title: '晨间跑步',
+  content: '沿江路线',
+  start: { date: '2026-11-25', time: '07:00' },
+});
+
+function makeChatRow(
+  overrides: Partial<PersistedChatMessage> & Pick<PersistedChatMessage, 'seq'>,
+): PersistedChatMessage {
+  return {
+    role: 'user',
+    text: `历史消息 ${overrides.seq}`,
+    kind: 'text',
+    cardPayloadJson: null,
+    seedJson: null,
+    ...overrides,
+  };
+}
+
+describe('useFlashChat：闪电对话持久化接线（切片 38，§7.50）', () => {
+  afterEach(() => {
+    globalScope.fetch = originalFetch;
+  });
+
+  it('启动恢复：seq 平铺 + id 延续（新消息 id=maxSeq+1）', async () => {
+    chatRepo.listOrdered.mockResolvedValue([
+      makeChatRow({ seq: 1 }),
+      makeChatRow({
+        seq: 2,
+        role: 'assistant',
+        kind: 'card',
+        text: '已保存《晨间跑步》',
+        cardPayloadJson: JSON.stringify(RESTORED_CARD_PAYLOAD),
+        seedJson: RESTORED_SEED_JSON,
+      }),
+      makeChatRow({ seq: 3, text: '收到' }),
+    ]);
+    await mountHook();
+
+    expect(hook().messages.map((message) => message.id)).toEqual([1, 2, 3]);
+    expect(hook().messages[1]).toMatchObject({
+      role: 'assistant',
+      kind: 'card',
+      text: '已保存《晨间跑步》',
+      cardPayload: { itemId: 'item-restored', title: '晨间跑步' },
+    });
+    // 恢复后新轮次 id 延续（不与恢复消息撞 id）。
+    await act(async () => {
+      await hook().send('明天提醒我喝水');
+    });
+    const newIds = hook()
+      .messages.filter((message) => message.id > 3)
+      .map((message) => message.id);
+    expect(newIds[0]).toBe(4);
+    const allIds = hook().messages.map((message) => message.id);
+    expect(new Set(allIds).size).toBe(allIds.length);
+  });
+
+  it('启动恢复失败：按空对话启动，send 仍可用（id 从 1 起）', async () => {
+    chatRepo.listOrdered.mockRejectedValue(new Error('db down'));
+    await mountHook();
+
+    expect(hook().messages).toHaveLength(0);
+    await act(async () => {
+      await hook().send('明天提醒我喝水');
+    });
+    expect(hook().messages[0]).toMatchObject({ id: 1, role: 'user' });
+    expect(assistantTexts().length).toBeGreaterThan(0);
+  });
+
+  it('persist 接线：replaceTail 收到过滤后的全量映射（confirm 排除、cardPayload 往返）', async () => {
+    repo.getSettings.mockResolvedValue(CAREFUL_SETTINGS);
+    await mountHook();
+    await act(async () => {
+      await hook().send('明天上午十点项目周会');
+    });
+    await act(async () => {
+      await hook().send('会议地点在第三会议室');
+    });
+    await act(async () => {
+      hook().applyConfirm(confirmMessages()[0]?.confirmPayload?.confirmId ?? -1);
+    });
+    await act(async () => {
+      await hook().send('再补充一句');
+    });
+    // 保存链出卡（kind:'card' 消息仅由确认保存产生，切片 22 §7.25）。
+    await act(async () => {
+      await hook().confirmSave();
+    });
+
+    expect(chatRepo.replaceTail).toHaveBeenCalled();
+    const lastArg = chatRepo.replaceTail.mock.calls.at(-1)?.[0] as
+      | PersistedChatMessage[]
+      | undefined;
+    expect(lastArg).toBeDefined();
+    // confirm 瞬态交互态不落库（终态 confirm 计数=两轮拦截）。
+    const confirmCount = hook().messages.filter(
+      (message) => message.kind === 'confirm',
+    ).length;
+    expect(lastArg?.length).toBe(hook().messages.length - confirmCount);
+    const cardRow = lastArg?.find((message) => message.kind === 'card');
+    expect(cardRow).toBeDefined();
+    expect(JSON.parse(cardRow?.cardPayloadJson ?? '{}')).toMatchObject({
+      title: '项目周会',
+    });
+  });
+
+  it('persist 失败：warn 不阻断对话（消息状态不受影响）', async () => {
+    chatRepo.replaceTail.mockRejectedValue(new Error('write fail'));
+    await mountHook();
+    await act(async () => {
+      await hook().send('明天提醒我喝水');
+    });
+
+    expect(hook().messages.length).toBeGreaterThan(1);
+    expect(hook().messages[0]).toMatchObject({ role: 'user' });
+    expect(assistantTexts().length).toBeGreaterThan(0);
+  });
+
+  it('恢复行 payload 损坏：降级为 text 消息，末卡 seed 播种仍进远端 history', async () => {
+    fetchBodies.length = 0;
+    SecureStoreClass.mockImplementation(() => ({
+      load: jest.fn(async () => REMOTE_CONFIG),
+    }));
+    chatRepo.listOrdered.mockResolvedValue([
+      makeChatRow({
+        seq: 1,
+        role: 'assistant',
+        kind: 'card',
+        text: '已保存《晨间跑步》',
+        cardPayloadJson: 'not-json{',
+        seedJson: RESTORED_SEED_JSON,
+      }),
+    ]);
+    installFetchMock([makeWire({ title: '改后标题' })]);
+    await mountHook();
+
+    // payload 损坏 → kind 降级 text（不炸列表）；seedText 不受影响。
+    expect(hook().messages[0]).toMatchObject({ kind: 'text', text: '已保存《晨间跑步》' });
+    expect(hook().messages[0]?.cardPayload).toBeUndefined();
+    await act(async () => {
+      await hook().send('改一下刚才那个');
+    });
+
+    // 末卡播种：恢复出的 historyRef=[assistant seedJson] 单条进远端请求。
+    expect(fetchBodies).toHaveLength(1);
+    const messages = fetchBodies[0]?.messages ?? [];
+    expect(messages[0]?.role).toBe('system');
+    expect(
+      messages.some(
+        (message) =>
+          message.role === 'assistant' && message.content.includes('晨间跑步'),
+      ),
+    ).toBe(true);
   });
 });
