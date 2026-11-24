@@ -32,6 +32,10 @@ import { APP_SETTINGS_ROW_ID, DEFAULT_APP_SETTINGS } from '../domain/settings';
  * - v14：app_settings 新增 display_calendar_ids_json（切片 27 阶段 1，AGENTS.md §7.39）
  * - v18：app_settings 新增 ai_schedule_query_enabled（切片 36 阶段 1，AGENTS.md §7.48
  *        AI 日程查询/记忆检索——查询分支总开关，默认开）
+ * - v19：新增 sparks / spark_attachments / spark_items 三表（切片 37 阶段 1，
+ *        AGENTS.md §7.49，docs/proposals/slice-37-spark-inspiration.md D2）
+ * - v20：新增 flash_chat_messages 表（切片 38 阶段 1，AGENTS.md §7.50，
+ *        docs/proposals/slice-38-chat-persistence.md D1）
  *
  * 规则（AGENTS.md §4.6）：已发布的 migration step 不得修改，只能在末尾追加；
  * 新增表必须在 migration 中显式创建，不得依赖“删库重装”。
@@ -472,6 +476,29 @@ export default schemaMigrations({
           columns: [
             { name: 'spark_id', type: 'string', isIndexed: true },
             { name: 'item_id', type: 'string', isIndexed: true },
+            { name: 'created_at', type: 'number' },
+          ],
+        }),
+      ],
+    },
+    {
+      // 切片 38 阶段 1（AGENTS.md §7.50 闪电对话持久化，
+      // docs/proposals/slice-38-chat-persistence.md D1）：v20 新增
+      // flash_chat_messages 表；v2–v19 step 保持原样，不得修改。
+      // - 单条 createTable，零 unsafeExecuteSql、零 UPDATE：全新表无既有行回填
+      //   问题（v17 sync_tombstones / v19 sparks createTable 先例）；
+      // - 列定义与 schema.ts 的 tableSchema 严格一致（漂移会被模式不匹配检测抛错）。
+      toVersion: 20,
+      steps: [
+        createTable({
+          name: 'flash_chat_messages',
+          columns: [
+            { name: 'seq', type: 'number', isIndexed: true },
+            { name: 'role', type: 'string' },
+            { name: 'text', type: 'string' },
+            { name: 'kind', type: 'string' },
+            { name: 'card_payload_json', type: 'string', isOptional: true },
+            { name: 'seed_json', type: 'string', isOptional: true },
             { name: 'created_at', type: 'number' },
           ],
         }),

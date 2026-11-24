@@ -28,6 +28,8 @@ import {
   toDataSnapshotSparkAttachment,
   toDataSnapshotSparkItem,
   toDataSnapshotTag,
+  isDataSnapshotChatMessageEntry,
+  toDataSnapshotChatMessage,
   type DataSnapshot,
 } from '../dataSnapshot';
 import type { Spark, SparkAttachment, SparkItemLink } from '../spark';
@@ -419,6 +421,66 @@ describe('Spark 可选三块：组包映射（领域对象 → 快照条目）',
   it('toDataSnapshotSparkItem：id + sparkId/itemId + createdAt 投影', () => {
     expect(toDataSnapshotSparkItem({ id: 'l1', sparkId: 's1', itemId: 'i1', createdAt: 444 })).toEqual({
       id: 'l1', sparkId: 's1', itemId: 'i1', createdAt: 444,
+    });
+  });
+});
+
+describe('聊天可选块（切片 38 §7.50 D3）：条目有效性谓词', () => {
+  function makeChatEntry(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      seq: 1,
+      role: 'user',
+      text: '明天八点叫我',
+      kind: 'text',
+      cardPayloadJson: null,
+      seedJson: null,
+      createdAt: 1700000000000,
+      ...overrides,
+    };
+  }
+
+  it('isDataSnapshotChatMessageEntry：合法 text/card 条目通过', () => {
+    expect(isDataSnapshotChatMessageEntry(makeChatEntry())).toBe(true);
+    expect(
+      isDataSnapshotChatMessageEntry(
+        makeChatEntry({ seq: 2, role: 'assistant', kind: 'card', cardPayloadJson: '{}', seedJson: '{}' }),
+      ),
+    ).toBe(true);
+  });
+
+  it('isDataSnapshotChatMessageEntry：seq 非正整数/role/kind 枚举外/text 非串拒绝', () => {
+    expect(isDataSnapshotChatMessageEntry(makeChatEntry({ seq: 0 }))).toBe(false);
+    expect(isDataSnapshotChatMessageEntry(makeChatEntry({ seq: 1.5 }))).toBe(false);
+    expect(isDataSnapshotChatMessageEntry(makeChatEntry({ seq: '1' }))).toBe(false);
+    expect(isDataSnapshotChatMessageEntry(makeChatEntry({ role: 'system' }))).toBe(false);
+    expect(isDataSnapshotChatMessageEntry(makeChatEntry({ kind: 'confirm' }))).toBe(false);
+    expect(isDataSnapshotChatMessageEntry(makeChatEntry({ kind: 'debug' }))).toBe(false);
+    expect(isDataSnapshotChatMessageEntry(makeChatEntry({ text: 1 }))).toBe(false);
+  });
+
+  it('isDataSnapshotChatMessageEntry：JSON 列 string|null 之外类型与 createdAt 非有限数拒绝', () => {
+    expect(isDataSnapshotChatMessageEntry(makeChatEntry({ cardPayloadJson: 1 }))).toBe(false);
+    expect(isDataSnapshotChatMessageEntry(makeChatEntry({ seedJson: {} }))).toBe(false);
+    expect(isDataSnapshotChatMessageEntry(makeChatEntry({ createdAt: 'x' }))).toBe(false);
+    expect(isDataSnapshotChatMessageEntry(makeChatEntry({ createdAt: NaN }))).toBe(false);
+    expect(isDataSnapshotChatMessageEntry(null)).toBe(false);
+    expect(isDataSnapshotChatMessageEntry([1])).toBe(false);
+  });
+
+  it('toDataSnapshotChatMessage：结构化内联入参 + createdAt 补齐投影', () => {
+    expect(
+      toDataSnapshotChatMessage(
+        { seq: 3, role: 'assistant', text: '已保存', kind: 'card', cardPayloadJson: '{}', seedJson: null },
+        1700000001000,
+      ),
+    ).toEqual({
+      seq: 3,
+      role: 'assistant',
+      text: '已保存',
+      kind: 'card',
+      cardPayloadJson: '{}',
+      seedJson: null,
+      createdAt: 1700000001000,
     });
   });
 });

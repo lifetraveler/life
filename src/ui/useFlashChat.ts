@@ -42,8 +42,9 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { itemRepository } from '../data';
+import { itemRepository, chatMessageRepository, CHAT_MESSAGE_PERSIST_LIMIT } from '../data';
 import { SecureAiConfigStore } from '../data/SecureAiConfigStore';
+import { toPersistedChatMessages, fromPersistedChatRows } from './chatPersistence';
 import {
   matchesEditIntent,
   parseEditTimeRequest,
@@ -137,6 +138,12 @@ export interface FlashChatMessage {
    * 调试弹层，三节显隐由当下设置（showAiRequest/showAiResponse）决定。
    */
   debugPayload?: FlashDebugPayload;
+  /**
+   * 切片 38（§7.50）：保存链播种串（serializeDraftForHistory 产物）挂结果卡
+   * 消息上，随消息持久化（seed_json 列）；启动恢复时末卡播种回填 historyRef
+   * （「改一下刚才那个」跨重启可用）。仅 kind='card' 且保存链播过种的行非空。
+   */
+  seedJson?: string;
 }
 
 export interface ConfirmSaveResult {
@@ -253,6 +260,11 @@ export function useFlashChat() {
   const categoriesRef = useRef<Category[]>([]);
   // 切片 22 阶段 3：消息镜像（postponeCard/编辑窄规则同步定位目标卡片，免异步竞态）。
   const messagesRef = useRef<FlashChatMessage[]>([]);
+  // 切片 38（§7.50）：启动恢复竞态闸——send 在恢复 promise 未决时等待其完成；
+  // persist effect 以 restoredRef 跳过恢复前的首跑（防止恢复结果覆盖落库历史）。
+  const restoredRef = useRef(false);
+  const hydrationRef = useRef<Promise<void> | null>(null);
+  const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     if (storeRef.current === null) {
@@ -298,15 +310,26 @@ export function useFlashChat() {
     setMessages((prev) => [...prev, { id, role, text, kind: 'text' }]);
   }, []);
 
-  /** 追加结果卡片消息（切片 22 阶段 1，AGENTS.md §7.34）。 */
-  const pushCard = useCallback((text: string, cardPayload: FlashCardPayload): void => {
-    const id = nextIdRef.current;
-    nextIdRef.current += 1;
-    setMessages((prev) => [
-      ...prev,
-      { id, role: 'assistant', text, kind: 'card', cardPayload },
-    ]);
-  }, []);
+  /** 追加结果卡片消息（切片 22 阶段 1，AGENTS.md §7.34）。切片 38：可选 seedJson
+   * 随卡携带（保存链播种串），持久化行承载末卡播种（恢复时回灌 historyRef）。 */
+  const pushCard = useCallback(
+    (text: string, cardPayload: FlashCardPayload, seedJson?: string): void => {
+      const id = nextIdRef.current;
+      nextIdRef.current += 1;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id,
+          role: 'assistant',
+          text,
+          kind: 'card',
+          cardPayload,
+          ...(seedJson !== undefined ? { seedJson } : {}),
+        },
+      ]);
+    },
+    [],
+  );
 
   /** 原地刷新指定条目的结果卡片快照（阶段 3：推迟/编辑后时间与提醒联动可见）。 */
   const updateCard = useCallback(
@@ -680,6 +703,58 @@ export function useFlashChat() {
    * 捕获（切片 25 阶段 2 已把 push()/pushCard() 一并改为该模式）——updater 内
    * 读 nextIdRef.current 在 React 18 并发重放下会让相邻消息撞 id（真机已复现）。
    */
+  // 切片 38（§7.50）阶段 2：启动恢复——seq 升序平铺（id=seq，nextIdRef=maxSeq+1
+  // 延续）、末卡 seed_json 播种进 historyRef（「改一下刚才那个」跨重启可用；
+  // 「每存一张=新对话」语义不破坏：恢复仅末卡单条，下次保存照常重置）。
+  // 读取失败按空对话启动（warn 不阻断），restoredRef 照常置位放行 persist。
+  useEffect(() => {
+    if (hydrationRef.current !== null) return;
+    const promise = chatMessageRepository
+      .listOrdered(CHAT_MESSAGE_PERSIST_LIMIT)
+      .then((rows) => {
+        const restored = fromPersistedChatRows(rows);
+        nextIdRef.current =
+          restored.messages.length > 0
+            ? restored.messages[restored.messages.length - 1].id + 1
+            : 1;
+        if (restored.messages.length > 0) {
+          setMessages(restored.messages);
+        }
+        if (restored.seedText !== null) {
+          historyRef.current = [{ role: 'assistant', text: restored.seedText }];
+        }
+      })
+      .catch((error: unknown) => {
+        console.warn('[slice-38] 聊天恢复失败，按空对话启动', error);
+      })
+      .finally(() => {
+        restoredRef.current = true;
+        setHydrated(true);
+      });
+    hydrationRef.current = promise;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 挂载一次；refs/setState 稳定
+  }, []);
+
+  // 依赖 hydrated 触发（本 effect 声明序在 messagesRef 同步 effect 之后，触发时
+  // messagesRef 已随本轮 commit 更新）——恢复出的结果卡与切片 30 的已删除卡
+  // 联动（mark/remove）对接；reconcileDeletedCards 实现零改动。
+  useEffect(() => {
+    if (!hydrated) return;
+    reconcileDeletedCards();
+  }, [hydrated, reconcileDeletedCards]);
+
+  // persist 接线（§7.50 D2）：消息列表每次变更全量 replaceTail（upsert by seq；
+  // 输入缺行=删除——remove 模式移除的卡与滚动裁剪自然生效）。restoredRef 闸门
+  // 跳过恢复前首跑。fire-and-forget：失败仅 warn 不阻断对话（下次变更重写）。
+  useEffect(() => {
+    if (!restoredRef.current) return;
+    chatMessageRepository
+      .replaceTail(toPersistedChatMessages(messages))
+      .catch((error: unknown) => {
+        console.warn('[slice-38] 聊天持久化失败', error);
+      });
+  }, [messages]);
+
   const pushConfirm = useCallback(
     (
       previousDraft: ParsedItemDraft,
@@ -714,6 +789,11 @@ export function useFlashChat() {
     async (raw: string): Promise<void> => {
       const input = raw.trim();
       if (input.length === 0 || busy) return;
+      // 切片 38（§7.50）：启动恢复未决时先等恢复完成（新轮次早于恢复会先写库，
+      // 随后的恢复 setMessages 会覆盖新消息；id 延续同样依赖恢复后的 nextIdRef）。
+      if (hydrationRef.current !== null) {
+        await hydrationRef.current;
+      }
       // 切片 25 阶段 2（§7.37）：待确认期间任何新输入取消待确认状态（作废
       // pendingDraft 与缓冲 history），按普通轮处理——包括编辑窄规则与正常解析。
       cancelPendingConfirm();
@@ -1113,9 +1193,8 @@ export function useFlashChat() {
       // created.id（覆盖降级场景草稿里可能残留的陈旧 targetItemId，摘要块
       // 解析 itemId 优先）、update 传基线 id（基线连续）。下一轮摘要块渲染
       // 「关联条目 id」行，模型据此回填 wire 的 targetItemId 走 update 落库链。
-      historyRef.current = [
-        { role: 'assistant', text: serializeDraftForHistory(current, tzid, seedItemId) },
-      ];
+      const seedJson = serializeDraftForHistory(current, tzid, seedItemId);
+      historyRef.current = [{ role: 'assistant', text: seedJson }];
       // 切片 22 阶段 1（AGENTS.md §7.34）：保存成功后的 AI 回复改为结果卡片消息；
       // 提醒未自动落库的说明仍追加纯文本消息，Alert 提示行为不变。
       // 切片 34：update 措辞「已更新《title》」（提案 D4-e）。
@@ -1137,6 +1216,7 @@ export function useFlashChat() {
       pushCard(
         message,
         buildFlashCardPayload(savedItem, plan.timePatch, cardReminders, cardCategories),
+        seedJson,
       );
       // 切片 32（§7.44）：提醒披露从单条改多条——域层 reminderNotices（每条
       // 一消息，顺序保留）+ 执行链创建失败披露；ConfirmSaveResult.notice 聚合

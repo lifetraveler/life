@@ -68,6 +68,7 @@ import {
 import {
   dataSnapshotExportedAt,
   isDataSnapshotChannelPresetEntry,
+  isDataSnapshotChatMessageEntry,
   isDataSnapshotItemEntry,
   isDataSnapshotItemTagEntry,
   isDataSnapshotReminderEntry,
@@ -77,6 +78,7 @@ import {
   isDataSnapshotTagEntry,
   isDataSnapshotWire,
   toDataSnapshotChannelPreset,
+  toDataSnapshotChatMessage,
   toDataSnapshotItem,
   toDataSnapshotSpark,
   toDataSnapshotSparkAttachment,
@@ -84,10 +86,12 @@ import {
   type DataSnapshot,
   type DataSnapshotApplyResult,
   type DataSnapshotChannelPreset,
+  type DataSnapshotChatMessage,
   type DataSnapshotReminder,
   type DataSnapshotTag,
 } from '../domain/dataSnapshot';
 import { normalizeSparkNullableText, SPARK_ATTACHMENT_MAX_BYTES } from '../domain/spark';
+import { CHAT_MESSAGE_PERSIST_LIMIT } from './ChatMessageRepository';
 import type { SparkAttachmentIo } from './SparkRepository';
 import {
   DEFAULT_REMINDER_CHANNEL,
@@ -113,6 +117,7 @@ import SyncTombstoneModel from '../db/models/SyncTombstoneModel';
 import TagModel from '../db/models/TagModel';
 import SparkAttachmentModel from '../db/models/SparkAttachmentModel';
 import SparkItemModel from '../db/models/SparkItemModel';
+import ChatMessageModel from '../db/models/ChatMessageModel';
 import SparkModel from '../db/models/SparkModel';
 import { seedPresetData } from '../db/seed';
 import { parseIcs } from '../domain/ics/parseIcs';
@@ -163,6 +168,8 @@ const SYNC_TOMBSTONES_TABLE = 'sync_tombstones';
 const SPARKS_TABLE = 'sparks';
 const SPARK_ATTACHMENTS_TABLE = 'spark_attachments';
 const SPARK_ITEMS_TABLE = 'spark_items';
+// 切片 38 阶段 1（AGENTS.md §7.50，schema v20）：闪电对话持久化表。
+const FLASH_CHAT_MESSAGES_TABLE = 'flash_chat_messages';
 
 /** repository.md v0.8：导入超过 500 条时分批写入，每批 100 条。 */
 const IMPORT_BATCH_SIZE = 100;
@@ -1302,11 +1309,11 @@ export class WatermelonItemRepository implements ItemRepository {
    * 含 archived/done）全字段 id 保真 + tags（含 id 供 join）+ reminders（v10 语义
    * 列全量；调度态两列与 deprecated 两列不进快照）+ channelPresets + itemTags join
    * 全量（item_tags 直查，不经领域层）+ 切片 37 可选三块（§7.49 D5：sparks/
-   * sparkAttachments/sparkItems 全量，version/kind 不变）。外层
-   * {version:1, kind:'data', exportedAt}。
+   * sparkAttachments/sparkItems 全量）+ 切片 38 可选聊天块（§7.50 D3：chatMessages
+   * 最近 200 条 seq 升序，version/kind 不变）。外层 {version:1, kind:'data', exportedAt}。
    */
   async createDataSnapshot(): Promise<DataSnapshot> {
-    const [activeItems, archivedItems, reminders, tags, channelPresets, joinModels, sparkModels, sparkAttachmentModels, sparkJoinModels] =
+    const [activeItems, archivedItems, reminders, tags, channelPresets, joinModels, sparkModels, sparkAttachmentModels, sparkJoinModels, chatModels] =
       await Promise.all([
         this.listItemsWithTags(),
         this.listArchivedItemsWithTags(),
@@ -1317,6 +1324,13 @@ export class WatermelonItemRepository implements ItemRepository {
         this.db.get<SparkModel>(SPARKS_TABLE).query().fetch(),
         this.db.get<SparkAttachmentModel>(SPARK_ATTACHMENTS_TABLE).query().fetch(),
         this.db.get<SparkItemModel>(SPARK_ITEMS_TABLE).query().fetch(),
+        // 切片 38：聊天块组包=seq 升序读全表后取末尾 CHAT_MESSAGE_PERSIST_LIMIT 条
+        // （persist 裁剪/快照组包/恢复上限三处对齐；直查表不经 chatMessageRepository
+        // —— 本类自有 db 访问，切片 37 spark 三表直查同构）。
+        this.db
+          .get<ChatMessageModel>(FLASH_CHAT_MESSAGES_TABLE)
+          .query(Q.sortBy('seq', Q.asc))
+          .fetch(),
       ]);
     return {
       version: 1,
@@ -1379,14 +1393,32 @@ export class WatermelonItemRepository implements ItemRepository {
           createdAt: model.createdAt.getTime(),
         }),
       ),
+      // —— 切片 38：可选聊天块组包（新快照恒携带键，可为空数组；最近 200 条）——
+      chatMessages: chatModels
+        .slice(Math.max(chatModels.length - CHAT_MESSAGE_PERSIST_LIMIT, 0))
+        .map((model) =>
+          toDataSnapshotChatMessage(
+            {
+              seq: model.seq,
+              role: model.role,
+              text: model.text,
+              kind: model.kind,
+              cardPayloadJson: model.cardPayloadJson,
+              seedJson: model.seedJson,
+            },
+            model.createdAt.getTime(),
+          ),
+        ),
     };
   }
 
   /**
    * 增量覆盖恢复（§7.43 D3 冻结语义，切片 28 两遍法照抄）：整包守卫不过抛错不进
-   * 事务 → ensureSeeded → 单 db.write（事务内全量读六表 → operations 同步收集 →
-   * 单次 db.batch）→ 返回 {applied, skipped}。逐块语义见 ItemRepository.applyDataSnapshot
-   * 文档注释。恢复成功后的 reminderScheduler.reconcile() 由调用方显式执行。
+   * 事务 → ensureSeeded → 单 db.write（事务内全量读相关表 → operations 同步收集 →
+   * 单次 db.batch）→ 返回 {applied, skipped}。切片 37 可选三块 + 切片 38 可选聊天块
+   * （upsert by seq：命中覆盖/未命中创建 `chat-<seq>` 行 id/本地独有保留，缺块跳过）。
+   * 逐块语义见 ItemRepository.applyDataSnapshot 文档注释。恢复成功后的
+   * reminderScheduler.reconcile() 由调用方显式执行。
    */
   async applyDataSnapshot(snapshot: DataSnapshot): Promise<DataSnapshotApplyResult> {
     if (!isDataSnapshotWire(snapshot)) {
@@ -1431,6 +1463,13 @@ export class WatermelonItemRepository implements ItemRepository {
         .fetch();
       const sparkAttachmentById = new Map(sparkAttachmentModels.map((model) => [model.id, model]));
       const sparkJoinModels = await this.db.get<SparkItemModel>(SPARK_ITEMS_TABLE).query().fetch();
+      // 切片 38：聊天表全量读（可选块；行数有界——persist replaceTail 滚动裁剪
+      // 至 ≤200 行，快照恢复残留行亦随 persist 收敛）。
+      const chatModels = await this.db
+        .get<ChatMessageModel>(FLASH_CHAT_MESSAGES_TABLE)
+        .query()
+        .fetch();
+      const chatBySeq = new Map(chatModels.map((model) => [model.seq, model]));
 
       const operations: Model[] = [];
 
@@ -1965,6 +2004,72 @@ export class WatermelonItemRepository implements ItemRepository {
             }),
           );
           applied += 1;
+        }
+      }
+
+      // —— chatMessages（切片 38 §7.50 D3 可选块）：upsert by seq——命中覆盖 /
+      // 未命中创建 / 本地独有保留（与六块+spark 块的 id 命中语义同构，业务键为
+      // seq 而非行 id）；快照内重复 seq first-wins 计 skipped；形状不符
+      // （isDataSnapshotChatMessageEntry）计 skipped；无文件 IO。
+      // 上限：组包侧已裁剪至最近 CHAT_MESSAGE_PERSIST_LIMIT 条，恢复侧不二次
+      // 裁剪（快照外本地独有行保留，行数由 persist replaceTail 滚动裁剪收敛）。
+      if (snapshot.chatMessages !== undefined) {
+        const seenChatSeqs = new Set<number>();
+        for (const entry of snapshot.chatMessages) {
+          if (!isDataSnapshotChatMessageEntry(entry)) {
+            skipped += 1;
+            continue;
+          }
+          if (seenChatSeqs.has(entry.seq)) {
+            skipped += 1;
+            continue;
+          }
+          seenChatSeqs.add(entry.seq);
+          const existing = chatBySeq.get(entry.seq);
+          if (existing) {
+            const nextCardPayloadJson = entry.cardPayloadJson ?? null;
+            const nextSeedJson = entry.seedJson ?? null;
+            if (
+              existing.text !== entry.text ||
+              existing.kind !== entry.kind ||
+              existing.role !== entry.role ||
+              existing.cardPayloadJson !== nextCardPayloadJson ||
+              existing.seedJson !== nextSeedJson
+            ) {
+              operations.push(
+                existing.prepareUpdate((draft) => {
+                  draft.role = entry.role;
+                  draft.text = entry.text;
+                  draft.kind = entry.kind;
+                  draft.cardPayloadJson = nextCardPayloadJson;
+                  draft.seedJson = nextSeedJson;
+                }),
+              );
+              applied += 1;
+            }
+            // 命中且五字段无变化：幂等不写不计（applied=实际写入计数，v0.35 口径）。
+          } else {
+            // 未命中创建：行 id 无语义（业务键 seq），取确定性派生 id `chat-<seq>`
+            // （seq 唯一 → 行 id 唯一；后续同 seq 恢复走命中覆盖路径）；created_at
+            // 经 _raw 保真（prepareCreateFromDirtyRaw，spark 恢复同构）。
+            operations.push(
+              this.db
+                .get<ChatMessageModel>(FLASH_CHAT_MESSAGES_TABLE)
+                .prepareCreateFromDirtyRaw({
+                  id: `chat-${entry.seq}`,
+                  _status: 'created',
+                  _changed: '',
+                  seq: entry.seq,
+                  role: entry.role,
+                  text: entry.text,
+                  kind: entry.kind,
+                  card_payload_json: entry.cardPayloadJson,
+                  seed_json: entry.seedJson,
+                  created_at: entry.createdAt,
+                }),
+            );
+            applied += 1;
+          }
         }
       }
 

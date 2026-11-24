@@ -24,6 +24,7 @@ import SyncTombstoneModel from '../../db/models/SyncTombstoneModel';
 import SparkModel from '../../db/models/SparkModel';
 import SparkAttachmentModel from '../../db/models/SparkAttachmentModel';
 import SparkItemModel from '../../db/models/SparkItemModel';
+import ChatMessageModel from '../../db/models/ChatMessageModel';
 import { WatermelonItemRepository } from '../WatermelonItemRepository';
 import { WatermelonSparkRepository } from '../WatermelonSparkRepository';
 import type { SparkAttachmentIo } from '../SparkRepository';
@@ -92,6 +93,7 @@ const MODEL_CLASSES = [
   SparkModel,
   SparkAttachmentModel,
   SparkItemModel,
+  ChatMessageModel,
 ];
 
 type Harness = {

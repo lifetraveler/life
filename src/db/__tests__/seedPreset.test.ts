@@ -97,14 +97,14 @@ function findMigrationToVersion(
 }
 
 describe('schema 迁移结构（结构/字符串断言）', () => {
-  it('SCHEMA_VERSION === 19，migrations 无缺口且 maxVersion === 19（切片 37 追加 v19 后例行更新）', () => {
-    expect(SCHEMA_VERSION).toBe(19);
+  it('SCHEMA_VERSION === 20，migrations 无缺口且 maxVersion === 20（切片 38 追加 v20 后例行更新）', () => {
+    expect(SCHEMA_VERSION).toBe(20);
     expect(migrations.validated).toBe(true);
-    expect(migrations.maxVersion).toBe(19);
+    expect(migrations.maxVersion).toBe(20);
     // 最早 step 是 toVersion 2（v1 初始库无需迁移），minVersion = 2 - 1 = 1
     expect(migrations.minVersion).toBe(1);
     expect(migrations.sortedMigrations.map((migration) => migration.toVersion)).toEqual([
-      2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+      2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
     ]);
   });
 

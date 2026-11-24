@@ -415,6 +415,8 @@ export interface ItemRepository {
    * 切片 37（v0.43，§7.49 D5）：追加可选三块 sparks/sparkAttachments/sparkItems
    * （全量组包，新快照恒携带键可空数组）；version/kind 不变，旧 App 读新快照忽略
    * 未知键（isDataSnapshotWire 只查必需键）双向兼容。
+   * 切片 38（v0.44，§7.50 D3）：追加可选块 chatMessages（最近
+   * CHAT_MESSAGE_PERSIST_LIMIT 条 seq 升序全量组包，新快照恒携带键可空数组）。
    */
   createDataSnapshot(): Promise<DataSnapshot>;
   /**
@@ -449,6 +451,11 @@ export interface ItemRepository {
    * uri——结果记入 DataSnapshotApplyResult.sparkAttachmentFiles {restored, failed}
    * （失败仅计数，行保留快照 uri 可后补）；未注入 IO 恒 {restored:0, failed:0}，
    * 旧格式快照（三键删除）该字段缺省。
+   * 切片 38（v0.44，§7.50 D3）可选块 chatMessages：缺块=该域跳过（旧格式快照
+   * 兼容）。upsert by seq（业务键，非行 id）——命中覆盖 role/text/kind/
+   * card_payload_json/seed_json 五字段（created_at 不动）/未命中创建（确定性
+   * 行 id `chat-<seq>`、seq/created_at 经 _raw 保真）/本地独有保留；快照内重复
+   * seq first-wins、形状不符（isDataSnapshotChatMessageEntry）计 skipped。
    * 返回 applied（items/tags/reminders/channelPresets 每个实际写入条目计 1 +
    * 每个新建 join 计 1，删除不计）/skipped（形状不符 + 深层校验失败（weekdaysJson/
    * onceCivilJson 可解析、channelsJson 非空合法渠道数组且 expo≤1、channelConfigsJson

@@ -25,6 +25,7 @@ import ChannelPresetModel from '../../db/models/ChannelPresetModel';
 import SparkModel from '../../db/models/SparkModel';
 import SparkAttachmentModel from '../../db/models/SparkAttachmentModel';
 import SparkItemModel from '../../db/models/SparkItemModel';
+import ChatMessageModel from '../../db/models/ChatMessageModel';
 import { schema } from '../../db/schema';
 import { WatermelonItemRepository } from '../WatermelonItemRepository';
 import type { ItemRepository } from '../ItemRepository';
@@ -86,6 +87,7 @@ function makeRepository(): {
       SparkModel,
       SparkAttachmentModel,
       SparkItemModel,
+      ChatMessageModel,
     ],
   });
   return { repo: new WatermelonItemRepository(database, () => 'UTC'), adapter };

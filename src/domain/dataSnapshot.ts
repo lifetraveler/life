@@ -137,9 +137,27 @@ export interface DataSnapshotSparkItem {
 }
 
 /**
- * 数据备份快照（§7.43 D1 六块 + §7.49 D5 可选三块）。
- * sparks/sparkAttachments/sparkItems 为切片 37 追加的可选块：缺块=恢复时跳过该域
- * （旧 App 读新快照忽略未知键，isDataSnapshotWire 只查必需键，双向兼容）。
+ * 快照内单条闪电对话消息（切片 38 §7.50 D3 可选块 chatMessages；seq 即内存消息
+ * id，恢复按 seq upsert——命中覆盖/未命中创建/本地独有保留）。role/kind 枚举外
+ * 条目计 skipped；card_payload_json/seed_json 为序列化串（内容可解析性不在条目
+ * 谓词层校验——payload 坏串在 UI 恢复层降级 text 展示，不阻断快照恢复）。
+ */
+export interface DataSnapshotChatMessage {
+  /** 业务序号=内存消息 id（升序即会话顺序；唯一性由恢复 upsert 与 persist 保证）。 */
+  seq: number;
+  role: 'user' | 'assistant';
+  text: string;
+  kind: 'text' | 'card';
+  cardPayloadJson: string | null;
+  seedJson: string | null;
+  createdAt: number;
+}
+
+/**
+ * 数据备份快照（§7.43 D1 六块 + §7.49 D5 可选三块 + §7.50 D3 可选聊天块）。
+ * sparks/sparkAttachments/sparkItems 为切片 37 追加的可选块，chatMessages 为
+ * 切片 38 追加的可选块：缺块=恢复时跳过该域（旧 App 读新快照忽略未知键，
+ * isDataSnapshotWire 只查必需键，双向兼容）。
  */
 export interface DataSnapshot {
   version: 1;
@@ -154,6 +172,7 @@ export interface DataSnapshot {
   sparks?: DataSnapshotSpark[];
   sparkAttachments?: DataSnapshotSparkAttachment[];
   sparkItems?: DataSnapshotSparkItem[];
+  chatMessages?: DataSnapshotChatMessage[];
 }
 
 /** 恢复结果计数（ConfigSnapshotApplyResult 同构形状）。 */
@@ -161,7 +180,8 @@ export interface DataSnapshotApplyResult {
   /**
    * 已应用条目数：items/tags/reminders/channelPresets 每个实际写入（覆盖或创建）
    * 条目计 1；itemTags 每个新建 join 计 1（删除的旧 join 不计）；切片 37 可选三块
-   * 同口径（sparkAttachments/sparkItems 每个实际写入或重建行计 1）。
+   * 同口径（sparkAttachments/sparkItems 每个实际写入或重建行计 1）；切片 38 聊天块
+   * 同口径（chatMessages 每个实际写入行计 1，命中且字段无变化不计）。
    */
   applied: number;
   /**
@@ -356,6 +376,26 @@ export function isDataSnapshotSparkItemEntry(value: unknown): value is DataSnaps
   return true;
 }
 
+const CHAT_MESSAGE_ROLES: readonly string[] = ['user', 'assistant'];
+const CHAT_MESSAGE_KINDS: readonly string[] = ['text', 'card'];
+
+/**
+ * 条目有效性——chatMessages（切片 38 §7.50 D3）：seq 正整数 + role/kind 枚举 +
+ * text 串 + cardPayloadJson/seedJson string|null + createdAt 有限数（payload/
+ * seed JSON 内容可解析性不在条目谓词层校验，见 DataSnapshotChatMessage 注释）。
+ */
+export function isDataSnapshotChatMessageEntry(value: unknown): value is DataSnapshotChatMessage {
+  if (!isRecord(value)) return false;
+  if (!isIntInRange(value.seq, 1, Number.MAX_SAFE_INTEGER)) return false;
+  if (!CHAT_MESSAGE_ROLES.includes(value.role as string)) return false;
+  if (typeof value.text !== 'string') return false;
+  if (!CHAT_MESSAGE_KINDS.includes(value.kind as string)) return false;
+  if (!isNullableString(value.cardPayloadJson)) return false;
+  if (!isNullableString(value.seedJson)) return false;
+  if (!isFiniteNumber(value.createdAt)) return false;
+  return true;
+}
+
 /**
  * 快照 → 存储 JSON（无缩进，提案 §7 体积优先：数据快照 items 多时体积大，
  * 与配置快照的 2 空格缩进口径刻意不同——快照非人读，15s 超时兜底披露）。
@@ -506,6 +546,27 @@ export function toDataSnapshotSparkItem(link: SparkItemLink & { id: string }): D
     sparkId: link.sparkId,
     itemId: link.itemId,
     createdAt: link.createdAt,
+  };
+}
+
+/**
+ * 闪电对话消息 → 快照条目组装（切片 38 §7.50 D3；Repository.createDataSnapshot
+ * 消费）。入参为结构化内联形状（与 ChatMessageRepository.PersistedChatMessage
+ * 结构兼容，dataSnapshot.ts 不反向依赖 data/ 层）；createdAt 由仓库层从 DB 行
+ * 读取补齐（端口形状不含行时间戳，恢复 _raw 保真需要）。
+ */
+export function toDataSnapshotChatMessage(
+  message: Omit<DataSnapshotChatMessage, 'createdAt'>,
+  createdAt: number,
+): DataSnapshotChatMessage {
+  return {
+    seq: message.seq,
+    role: message.role,
+    text: message.text,
+    kind: message.kind,
+    cardPayloadJson: message.cardPayloadJson,
+    seedJson: message.seedJson,
+    createdAt,
   };
 }
 

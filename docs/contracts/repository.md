@@ -598,3 +598,66 @@ SystemImportResult：
   'dir/name' 编成 %2F，附件 URL 必须分段拼装（lesson）。
 - 配套 base64 字节级编解码：src/domain/webdav/base64.ts encodeBytesToBase64 /
   decodeBase64ToBytes（附件文件经字符串通道读写；encodeBase64Utf8 文本编码不变）。
+
+## 闪电对话持久化接口（v0.44，切片 38 阶段 1 落地）
+
+### flash_chat_messages 表（schema v20，AGENTS.md §7.50 D1/D2）
+
+- 列：`seq`（number，isIndexed——业务序号=内存消息 id，升序即会话顺序；**非主键**，
+  行 id 由 WatermelonDB 自动生成，seq 仅作排序与 upsert 业务键，不建 SQLite 唯一
+  索引）/ `role`（'user'|'assistant'）/ `text`（string）/ `kind`（'text'|'card'）/
+  `card_payload_json`（string|null，kind='card' 的 FlashCardPayload 序列化串，text
+  行恒 null）/ `seed_json`（string|null，保存链播种的 serializeDraftForHistory
+  产物，仅 card 行可非 null）/ `created_at`（number，@readonly @date 自动写；
+  排序只认 seq，created_at 不参与会话语义）。
+- role/kind 枚举约束由 Repository 写路径守卫 + 读路径防御保证（schema 层不建
+  CHECK，reminders.frequency/spark_attachments.kind 先例）；model 字段按联合类型
+  声明（SparkAttachmentModel.kind 先例）。confirm / debug 瞬态交互态不落库（Q2
+  定案）：'confirm' 不进 kind 枚举，调试入口消息（挂 debugPayload 的 text 消息）
+  在 persist 过滤层排除（src/ui/chatPersistence.toPersistedChatMessages）。
+- migration：v20 单条 createTable，零 unsafeExecuteSql、零 UPDATE（全新表无存量
+  回填，v17/v19 先例）；v2–v19 step 不动。
+
+### ChatMessageRepository 独立端口（契约外显式扩展，ItemRepository/SparkRepository 分层同构）
+
+- `ChatMessageRepository`（src/data/ChatMessageRepository.ts）+ 实现
+  `WatermelonChatMessageRepository`（src/data/WatermelonChatMessageRepository.ts，
+  构造注入 Database，无附加注入端口）；模块级单例 chatMessageRepository 在
+  src/data/index.ts 装配。数据形状 `PersistedChatMessage {seq, role, text, kind,
+  cardPayloadJson, seedJson}`（UI 层 FlashChatMessage ↔ 本形状经
+  src/ui/chatPersistence.ts 映射）；上限常量 `CHAT_MESSAGE_PERSIST_LIMIT = 200`
+  （persist 裁剪 / 快照组包 / 恢复上限三处对齐）。
+- `replaceTail(messages)`（全量 upsert by seq）：空输入 no-op（不写不删——保护
+  启动恢复竞态窗口：persist effect 首跑在恢复完成前触发时内存为空，不得据此清库）；
+  输入按 seq 升序取最后 200 条为 kept；新 seq insert（行 id/created_at 自动生成）/
+  已有 seq 覆盖（role/text/kind/card_payload_json/seed_json 五字段写穿，字段无
+  变化跳过 prepareUpdate——applied 不适用本端口，无计数返回）/未入选 kept 的既有行
+  prepareDestroyPermanently（严格覆盖任务卡「裁剪 seq<maxSeq-199」并连带 remove
+  模式等已从内存移除的行——persist 输入恒为当前完整消息列表）；输入 seq 重复抛错；
+  role/kind/正整数 seq 写路径守卫抛错；单 db.write 两遍法单次 batch。
+- `listOrdered(limit)`：seq 升序读后取末尾 limit 条（=最近 limit 条）；limit 非正
+  整数抛错；读路径 role/kind 非法枚举行抛错不静默（toDomainAttachment 先例）。
+
+### 数据快照可选块 chatMessages（createDataSnapshot / applyDataSnapshot，§7.50 D3）
+
+- 快照条目形状 `DataSnapshotChatMessage {seq, role, text, kind, cardPayloadJson,
+  seedJson, createdAt}`（src/domain/dataSnapshot.ts；toDataSnapshotChatMessage 组
+  装入参为结构化内联形状，dataSnapshot.ts 不反向依赖 data/ 层）；条目谓词
+  isDataSnapshotChatMessageEntry（seq 正整数 + role/kind 枚举 + text 串 + 两个
+  JSON 列 string|null + createdAt 有限数；payload/seed JSON 内容可解析性不在条目
+  谓词层校验——payload 坏串在 UI 恢复层降级 text 展示，不阻断快照恢复）。
+- createDataSnapshot 追加可选块 chatMessages（seq 升序直查 flash_chat_messages 后
+  取末尾 CHAT_MESSAGE_PERSIST_LIMIT 条，不经 chatMessageRepository——本类自有 db
+  访问，切片 37 spark 三表直查同构；新快照恒携带键可为空数组）。
+- applyDataSnapshot（块存在才处理，缺块跳过）：upsert by seq——命中覆盖
+  role/text/kind/card_payload_json/seed_json 五字段（created_at 不动，命中且字段
+  无变化幂等不写不计）/未命中创建（确定性行 id `chat-<seq>`——行 id 无语义、
+  seq 唯一→行 id 唯一；seq/created_at 经 _raw 保真）/本地独有保留；快照内重复
+  seq first-wins 计 skipped、形状不符计 skipped；无文件 IO；applied=实际写入行数
+  （v0.35 口径）。恢复侧不二次裁剪（组包侧已裁剪 200；快照外本地独有行保留，
+  行数由 persist replaceTail 滚动裁剪收敛）。
+- 边界（冻结）：sync 快照不含聊天块（§7.47 快照形状零改动，多设备对话同步留
+  候选）；不做对话编辑/删除 UI/分页/搜索/多会话/加密；AI 域零改动
+  （queryIntent/queryPrompt/queryGuard/retrieval/scheduleQuery 不触碰）；
+  无新依赖；app_settings 零迁移（无开关默认开，隐私知情同 items 全量明文上云
+  级别）。
