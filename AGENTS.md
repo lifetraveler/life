@@ -477,13 +477,15 @@ AGENTS.md       本文件
 
 ## 8. 当前切片
 
-- **已完成**：切片 1–37 全部收尾合并（main @ 见 git log；schema v19，版本 0.37.0/versionCode 37）。
+- **已完成**：切片 1–38 全部收尾合并（main @ 见 git log；schema v20，版本 0.38.0/versionCode 38）。
   v0.41 起本节不再逐片罗列提交链与验收终态——一律以对应 `tasks/slice-NN-closeout.md` 为准
-  （v0.40 的逐片明细原文存档 `docs/agents-history.md` §8）。最近三片速览：切片 35 双向同步
-  WebDAV（e0e6fee→2e1a85c→d3fee74，schema v17，jest 104/1559）；切片 36 AI 日程查询/记忆检索
+  （v0.40 的逐片明细原文存档 `docs/agents-history.md` §8）。最近三片速览：切片 36 AI 日程查询/记忆检索
   （8a21db0→8ce958b，merge a630447，schema v18，jest 110/1619，真机矩阵 10/10）；切片 37 Spark
-  灵感火花（a68cc86→c6dc0d1，schema v19，jest 119/1707，真机矩阵 12/12，APK 0.37.0/v37）。
-- **当前切片**：切片 38 闪电对话持久化已立项（2026-11-25，用户选定路线+四问定案：两档全做（跨重启 schema v20 flash_chat_messages + 跨重装数据快照可选块 chatMessages）/ 全量文本+结果卡粒度（confirm/debug 瞬态排除、200 条滚动）/ 平铺恢复+末卡播种（「改一下刚才那个」跨重启可用，切片 29 角标规则零改动）/ 无开关默认开（与 items 全量明文上云同级别知情）；提案 `docs/proposals/slice-38-chat-persistence.md`；分支 `task/slice-38` 从 main `f92997c` 切出；提案+卡+AGENTS v0.44 随阶段 1 提交；AI 域零改动；sync 快照不含聊天块；APK bump 0.38.0/v38；下一片候选=时间解析消歧 F5/F3 闹钟可见性/theme_mode/系统日历写回/变更 B/切片 25 候选③④，见 `tasks/backlog.md`）。
+  灵感火花（a68cc86→c6dc0d1，schema v19，jest 119/1707，真机矩阵 12/12，APK 0.37.0/v37）；
+  切片 38 闪电对话持久化（20ae3d9→28e4ef2→收尾提交，schema v20，jest 123/1750，真机矩阵 10/10，APK 0.38.0/v38）。
+- **当前切片**：切片 38 闪电对话持久化已完成（2026-11-25 收尾合并；跨重启 schema v20 flash_chat_messages +
+  跨重装数据快照可选块 chatMessages；末卡播种跨重启编辑；closeout 见 `tasks/slice-38-closeout.md`）；
+  无进行中切片，下一片候选=时间解析消歧 F5/F3 闹钟可见性/theme_mode/系统日历写回/变更 B/切片 25 候选③④，见 `tasks/backlog.md`。
 - **未完成项以 `tasks/backlog.md` 为准**（2026-11-16 起的惯例）：候选排序、遗留 L1–L13（L5 已随
   切片 32 关闭）、手验项 U1–U4、契约化已知限制均记录在 backlog，本节不再罗列候选清单。每切片
   closeout 同步更新 backlog.md（划掉完成项并注明关闭切片号）并保持本节精简。
