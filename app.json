@@ -13,7 +13,11 @@
     },
     "android": {
       "package": "com.vibecoding.life",
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#4C7A5C"
+      }
     },
     "plugins": [
       "expo-router",
@@ -77,6 +81,7 @@
         }
       ],
       "expo-asset"
-    ]
+    ],
+    "icon": "./assets/icon.png"
   }
 }
