@@ -16,7 +16,7 @@
       "edgeToEdgeEnabled": true,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#4C7A5C"
+        "backgroundColor": "#131822"
       }
     },
     "plugins": [
